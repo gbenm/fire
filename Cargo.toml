@@ -2,6 +2,11 @@
 name = "fire-cli"
 version = "0.1.0"
 edition = "2021"
+description = "command managet"
+license-file = "LICENSE"
+documentation = "https://docs.rs/fire-cli"
+homepage = "https://github.com/gbenm/fire"
+repository = "https://github.com/gbenm/fire"
 
 [[bin]]
 name = "fire"
