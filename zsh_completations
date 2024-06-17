@@ -1,0 +1,15 @@
+#compdef fire-cli
+
+_fire_completations() {
+  echo "local subcmds=('c:description' 'test:$1' 'pwd:$(pwd)')"
+}
+
+_fire_cli() {
+  local current_command="${(ps: :)${words}}"
+  eval $(_fire_completations "$current_command")
+
+  _describe 'command' subcmds
+}
+
+_fire_cli "$@"
+
