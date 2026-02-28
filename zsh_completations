@@ -1,15 +1,24 @@
-#compdef fire-cli
-
-_fire_completations() {
-  echo "local subcmds=('c:description' 'test:$1' 'pwd:$(pwd)')"
-}
+#compdef fire
 
 _fire_cli() {
-  local current_command="${(ps: :)${words}}"
-  eval $(_fire_completations "$current_command")
+  local -a lines
+  local -a entries
+  local line value note
 
-  _describe 'command' subcmds
+  lines=("${(@f)$(fire __complete -- "${words[@]}")}")
+  (( ${#lines[@]} == 0 )) && return 1
+
+  for line in "${lines[@]}"; do
+    if [[ "$line" == *$'\t'* ]]; then
+      value="${line%%$'\t'*}"
+      note="${line#*$'\t'}"
+      entries+=("$value:$note")
+    else
+      entries+=("$line:")
+    fi
+  done
+
+  _describe 'fire commands' entries
 }
 
-_fire_cli "$@"
-
+compdef _fire_cli fire

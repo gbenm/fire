@@ -17,3 +17,4 @@ path = "src/main.rs"
 [dependencies]
 dirs = "5.0.1"
 serde_yaml = "0.9.34"
+serde = { version = "1.0", features = ["derive"] }

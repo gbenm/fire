@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fire-cli.dev/schemas/fire.schema.json",
+  "title": "Fire Config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "dir": {
+      "type": "string",
+      "description": "Project working directory. Defaults to '.'."
+    },
+    "env_file": {
+      "type": "string",
+      "description": "Environment file path loaded before command execution. Defaults to '.env'."
+    },
+    "namespace": {
+      "$ref": "#/$defs/namespace"
+    },
+    "runtimes": {
+      "type": "object",
+      "description": "Runtime definitions keyed by alias (for example: deno, py).",
+      "additionalProperties": {
+        "$ref": "#/$defs/runtime"
+      }
+    },
+    "include": {
+      "type": "array",
+      "description": "List of additional Fire config files to merge/include.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "x-arg-config": {
+      "description": "Reusable argument placeholder behavior, usually consumed via YAML anchors.",
+      "$ref": "#/$defs/argConfig"
+    },
+    "commands": {
+      "type": "object",
+      "description": "Command definitions keyed by command name. The top-level command name `cli` is reserved and cannot be defined (validation error example: 'Property cli is not allowed.').",
+      "minProperties": 1,
+      "properties": {
+        "cli": {
+          "description": "Reserved command name. `commands.cli` is not allowed at the top level because `cli` is used internally by Fire.",
+          "not": {}
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/commandEntry"
+      }
+    }
+  },
+  "required": [
+    "commands"
+  ],
+  "$defs": {
+    "namespace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional namespace UUID."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable namespace label."
+        },
+        "alias": {
+          "type": "string",
+          "description": "Short namespace alias."
+        }
+      },
+      "required": [
+        "description",
+        "alias"
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sdk": {
+          "type": "string",
+          "description": "Runtime SDK identifier used in runtime expressions (for example: deno, python)."
+        },
+        "runner": {
+          "type": "string",
+          "description": "Default runner command used to execute runtime logic."
+        },
+        "check": {
+          "type": "string",
+          "description": "Health-check command to verify runtime availability."
+        },
+        "fallback_runner": {
+          "type": "string",
+          "description": "Fallback runner command used when `check` fails."
+        },
+        "paths": {
+          "type": "array",
+          "description": "Glob patterns where runtime scripts/functions are discovered.",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "sdk"
+      ]
+    },
+    "argConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "placeholder": {
+          "type": "string",
+          "description": "Placeholder template for positional args. Example: '{{n}}', '$n'."
+        },
+        "on_unused_args": {
+          "type": "string",
+          "description": "Behavior when extra args are passed and not consumed by placeholders.",
+          "enum": [
+            "ignore",
+            "warn",
+            "error"
+          ]
+        }
+      }
+    },
+    "stringOrStringArray": {
+      "description": "A single command string or a sequence of command strings.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "commandEntry": {
+      "description": "Command shorthand string or full command object.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/commandSpec"
+        }
+      ]
+    },
+    "commandSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "<<": {
+          "description": "YAML merge key used to reuse anchored blocks."
+        },
+        "dir": {
+          "type": "string",
+          "description": "Command-specific working directory. Overrides top-level `dir`."
+        },
+        "env_file": {
+          "type": "string",
+          "description": "Command-specific environment file. Overrides top-level `env_file`."
+        },
+        "check": {
+          "type": "string",
+          "description": "Pre-check command; can be paired with `fallback_runner`."
+        },
+        "runner": {
+          "type": "string",
+          "description": "Command runner prefix (for example to run inside a container shell)."
+        },
+        "fallback_runner": {
+          "type": "string",
+          "description": "Runner used if `check` fails."
+        },
+        "before": {
+          "type": "string",
+          "description": "Command executed before the main action."
+        },
+        "description": {
+          "type": "string",
+          "description": "Short user-facing description shown in listings and completion."
+        },
+        "delegate": {
+          "type": "string",
+          "description": "Built-in delegate used to generate dynamic subcommands (for example: npm-run)."
+        },
+        "placeholder": {
+          "type": "string",
+          "description": "Placeholder template for this command (same semantics as `x-arg-config.placeholder`)."
+        },
+        "on_unused_args": {
+          "type": "string",
+          "description": "Behavior for unused args at this command level.",
+          "enum": [
+            "ignore",
+            "warn",
+            "error"
+          ]
+        },
+        "exec": {
+          "$ref": "#/$defs/stringOrStringArray",
+          "description": "Shell command(s) to execute. If an array is provided, commands run in order."
+        },
+        "eval": {
+          "type": "string",
+          "description": "Runtime expression to evaluate (for example: py:func(\"{1}\"))."
+        },
+        "compute": {
+          "type": "object",
+          "description": "Computed variables map (name -> runtime expression), evaluated before execution.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "macros": {
+          "type": "object",
+          "description": "Macro substitutions map used in `exec` and nested command strings.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "commands": {
+          "type": "object",
+          "description": "Nested subcommands keyed by subcommand name.",
+          "additionalProperties": {
+            "$ref": "#/$defs/commandEntry"
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "exec"
+          ]
+        },
+        {
+          "required": [
+            "eval"
+          ]
+        },
+        {
+          "required": [
+            "delegate"
+          ]
+        },
+        {
+          "required": [
+            "commands"
+          ]
+        }
+      ]
+    }
+  }
+}
