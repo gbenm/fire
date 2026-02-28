@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=./schemas/fire.schema.json
+dir: . # default working directory
+
+env_file: .env # default env file
+
+namespace:
+  id: 51170376-ea38-4317-ba49-4e63dfc8a571 # optional
+  description: Pumpkat
+  alias: pk
+
+runtimes:
+  deno:
+    sdk: deno
+    runner: deno
+    check: deno --version
+    fallback_runner: docker run --rm -it denoland/deno:latest /bin/bash
+    paths:
+      - scripts/*.ts
+      - scripts/helpers/*.ts
+  py:
+    sdk: python
+    paths:
+      - scripts/*.py
+      - scripts/helpers/*.py
+
+include:
+  - common.fire.yml
+  - database.fire.yml
+
+x-arg-config: &arg-config
+  # Use {n} to represent the argument index: {{n}} -> {1}, {2}, ... ; #{n} -> #1, #2, ...
+  # The ...<placeholder> and [<placeholder>] forms must stay literal; they expand to arrays (string[]).
+  # Examples: ${n} -> ...${n} or [${n}]; {{n}} -> ...{{n}} or [{{n}}].
+  placeholder: "{{n}}" # replace ${n} with the index; you can also use $1, $2, $3, ...
+  on_unused_args: ignore # default is error; ignore skips, warn logs, error fails
+
+# Example: running `fire hello other args` executes `echo hello world other args...`
+commands:
+  hello: echo hello world
+
+  double:
+    commands:
+      hello:
+        description: "say twice"
+        exec:
+          - echo hello world
+          - echo again
+      world:
+        description: "say world twice"
+        exec:
+          - echo world
+          - echo world
+
+  npm:
+    dir: . # default (relative to project root)
+    check: npm -v # if this fails, fallback_runner will be used
+    fallback_runner: docker run --rm -it node:lts-alpine /bin/bash # fallback
+    exec: npm
+
+  run:
+    description: |
+      y si agrego descripción a este?
+      vamos
+    exec: npm run --key ${SECRET_KEY:-default_value}
+
+  run2:
+    before: docker compose ps -q front | grep -q . || docker compose up -d front
+    exec: compose exec front npm run
+
+  run3:
+    runner: docker compose exec front /bin/bash # equivalent to run inside the container
+    env_file: .env.front # override the env file for this command
+    exec: # multiple commands run in sequence; the last one receives the args
+      - npm run build
+      - npm run start
+
+  # fire run5 -> npm run
+  # fire run5 build -> npm run clean && npm run build
+  # fire run5 other -> npm run other
+  run5:
+    exec: npm run # if it matches subcommands, it will be ignored
+    commands:
+      build: npm run clean && npm run build
+      start: fire build && npm run start
+
+  up:
+    <<: *arg-config
+    compute:
+      arg1: deno:makeHash("{1}", "sha3-256")
+    description: "<name> <job>"
+    exec: echo "Hello {1}, your job is {2}"
+
+  computed:
+    <<: *arg-config
+    eval: py:sayHello("{1}", "{2}", ...{{n}})
+
+  vars:
+    compute:
+      arg1: deno:getServiceNameById("{1}")
+    macros:
+      "{{front}}": docker compose exec front
+      "{{dynamic}}": docker compose exec {{1}}
+    exec: "{{front}} npm run"
+    commands:
+      npm-version: "{{front}} npm -v"
+      node-version: "{{front}} node -v"
+      hello: "{{dynamic}} echo Hello"
+      hey:
+        exec: npm run # if it matches subcommands, it will be ignored
+        commands:
+          build: npm run clean && npm run build
+          hey:
+            description: "say hey!!!"
+            exec: npm run
+          start: fire build && npm run start
+
+  web:
+    delegate: npm-run # built-in delegate that uses package.json scripts for autocompletion
