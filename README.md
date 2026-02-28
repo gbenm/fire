@@ -18,6 +18,11 @@ If the same command name appears more than once, the last loaded definition wins
 Example:
 
 ```yaml
+group: backend
+namespace:
+  prefix: ex
+  description: Example
+
 commands:
   run:
     description: Run npm scripts
@@ -32,6 +37,48 @@ commands:
 ```
 
 `exec` and `run` are both supported and treated as executable command actions.
+
+Default namespace behavior:
+- If `namespace.prefix` is omitted in a file, Fire inherits it from another file in the same directory that defines it.
+- If no file in that directory defines `namespace.prefix`, the file remains outside namespace scope.
+
+## Command Resolution Rules
+
+Fire resolves commands by file scope:
+
+1. No `namespace.prefix`, no `group`:
+- `fire <command>` (local direct command)
+- `fire <implicit-namespace> <command>` (namespace path)
+
+2. With `namespace.prefix`, no global `group`:
+- `fire <namespace> <command>`
+
+3. With global `group`, no `namespace`:
+- `fire <group> <command>`
+
+4. With `namespace` and global `group`:
+- `fire <namespace> <group> <command>`
+
+Root completion priority (`fire <TAB>`) is:
+1. Root-local commands
+2. Global namespaces
+3. Global groups without namespace
+4. Global direct commands
+
+## Global Installation
+
+`fire cli` is a reserved internal command.
+
+Install the current directory globally:
+
+```bash
+fire cli install
+```
+
+Behavior:
+- Stores only the absolute directory path (no command cache, no file copy).
+- Avoids duplicates if the path is already installed.
+- On each run, Fire dynamically reads installed directories and loads fire files from each directory root (non-recursive).
 
 ## `config.fire.yaml` Validation in VS Code
 The schema is available at [`schemas/fire.schema.json`](./schemas/fire.schema.json).
@@ -100,6 +147,18 @@ Example:
   - `npm run start --host 0.0.0.0`
 
 `cli` is reserved for internal CLI management and cannot be overridden by user commands.
+
+## Help Suffix
+
+Append `:h` to any resolved command path to show help without execution:
+
+- `fire run :h`
+- `fire ex backend api :h`
+
+It prints:
+- Command path
+- Command `description` (if any)
+- Subcommands and their descriptions (if any)
 
 ## Run
 ```bash

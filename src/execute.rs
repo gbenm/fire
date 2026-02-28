@@ -6,13 +6,20 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     let Some(commands_to_run) = resolved.command.execution_commands() else {
         eprintln!("[fire] Command path has no executable action.");
         if let Some(subcommands) = resolved.command.subcommands() {
-            eprintln!("[fire] Available subcommands:");
+            eprintln!("Commands:");
+            let width = subcommands
+                .keys()
+                .map(|name| name.len())
+                .max()
+                .unwrap_or(0)
+                .max(1);
             for (name, entry) in subcommands {
                 let description = entry.description().unwrap_or_default();
                 if description.is_empty() {
-                    eprintln!("  - {name}");
+                    eprintln!("  {name}");
                 } else {
-                    eprintln!("  - {name}\t{description}");
+                    let short = description.lines().next().unwrap_or("").trim();
+                    eprintln!("  {:width$}  {}", name, short, width = width);
                 }
             }
         }

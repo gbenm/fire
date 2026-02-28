@@ -5,8 +5,10 @@ env_file: .env # default env file
 
 namespace:
   id: 51170376-ea38-4317-ba49-4e63dfc8a571 # optional
-  description: Pumpkat
-  alias: pk
+  description: Example
+  prefix: ex
+
+group: backend
 
 runtimes:
   deno:
@@ -56,6 +58,9 @@ commands:
     check: npm -v # if this fails, fallback_runner will be used
     fallback_runner: docker run --rm -it node:lts-alpine /bin/bash # fallback
     exec: npm
+
+  docker-node:
+    exec: docker run --rm -it node:lts-alpine sh
 
   run:
     description: |

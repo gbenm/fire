@@ -16,6 +16,10 @@
     "namespace": {
       "$ref": "#/$defs/namespace"
     },
+    "group": {
+      "type": "string",
+      "description": "Optional file-level group used as a command prefix for all commands in this file."
+    },
     "runtimes": {
       "type": "object",
       "description": "Runtime definitions keyed by alias (for example: deno, py).",
@@ -66,14 +70,14 @@
           "type": "string",
           "description": "Human-readable namespace label."
         },
-        "alias": {
+        "prefix": {
           "type": "string",
-          "description": "Short namespace alias."
+          "description": "Namespace prefix used in CLI paths."
         }
       },
       "required": [
-        "description",
-        "alias"
+        "prefix",
+        "description"
       ]
     },
     "runtime": {

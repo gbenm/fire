@@ -4,12 +4,14 @@ mod completion;
 mod config;
 mod execute;
 mod help;
+mod registry;
 mod resolve;
 
 use completion::{completion_suggestions, render_values_only, render_with_descriptions};
-use config::{load_config, FireConfig};
+use config::load_config;
 use execute::execute_resolved_command;
-use help::print_command_help;
+use help::{print_command_help, print_root_help, print_scope_help};
+use registry::{install_directory, InstallResult};
 use resolve::resolve_command;
 
 pub fn setup_cli() {
@@ -42,50 +44,82 @@ pub fn setup_cli() {
 
     let command_args = &args[1..];
 
-    if command_args.is_empty() {
-        print_available_commands(&config);
+    if command_args.first().map(String::as_str) == Some("cli") {
+        handle_cli_command(command_args);
         return;
     }
 
-    if command_args[0] == "cli" {
-        eprintln!("[fire] `cli` command is reserved for Fire CLI management.");
+    if command_args.is_empty() {
+        print_root_help(&config);
         return;
     }
 
     if let Some(help_target) = extract_help_target(command_args) {
         if help_target.is_empty() {
-            print_available_commands(&config);
+            print_root_help(&config);
             return;
         }
 
-        let Some(resolved) = resolve_command(&config.commands, help_target) else {
-            eprintln!("[fire] Unknown command: {}", help_target[0]);
-            print_available_commands(&config);
-            process::exit(1);
-        };
+        if let Some(resolved) = resolve_command(&config, help_target) {
+            let command_path = &help_target[..resolved.consumed];
+            print_command_help(command_path, resolved.command);
+            return;
+        }
 
-        let command_path = &help_target[..resolved.consumed];
-        print_command_help(command_path, resolved.command);
+        if print_scope_help(&config, help_target) {
+            return;
+        }
+
+        eprintln!("[fire] Unknown command: {}", help_target[0]);
+        print_root_help(&config);
+        process::exit(1);
+    }
+
+    if let Some(resolved) = resolve_command(&config, command_args) {
+        let command_path = &command_args[..resolved.consumed];
+        if resolved.command.execution_commands().is_none() {
+            print_command_help(command_path, resolved.command);
+            return;
+        }
+        execute_resolved_command(resolved);
+    }
+
+    if print_scope_help(&config, command_args) {
         return;
     }
 
-    let Some(resolved) = resolve_command(&config.commands, command_args) else {
-        eprintln!("[fire] Unknown command: {}", command_args[0]);
-        print_available_commands(&config);
-        process::exit(1);
-    };
-
-    execute_resolved_command(resolved);
+    eprintln!("[fire] Unknown command: {}", command_args[0]);
+    print_root_help(&config);
+    process::exit(1);
 }
 
-fn print_available_commands(config: &FireConfig) {
-    println!("Fire CLI - available commands:");
-    for (name, entry) in &config.commands {
-        let description = entry.description().unwrap_or_default().trim();
-        if description.is_empty() {
-            println!("  - {name}");
-        } else {
-            println!("  - {name}\t{description}");
+fn handle_cli_command(command_args: &[String]) {
+    match command_args {
+        [cli, install] if cli == "cli" && install == "install" => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            match install_directory(&cwd) {
+                Ok(InstallResult::Added) => {
+                    println!("Installed directory: {}", cwd.display());
+                }
+                Ok(InstallResult::AlreadyInstalled) => {
+                    println!("Directory already installed: {}", cwd.display());
+                }
+                Err(err) => {
+                    eprintln!("[fire] Failed to install directory: {err}");
+                    process::exit(1);
+                }
+            }
+        }
+        [cli] if cli == "cli" => {
+            println!("Fire CLI Management");
+            println!("Commands:");
+            println!("  install  Register the current directory for global command loading");
+        }
+        _ => {
+            eprintln!("[fire] Unknown cli command");
+            eprintln!("Usage:");
+            eprintln!("  fire cli install");
+            process::exit(1);
         }
     }
 }
