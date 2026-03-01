@@ -614,6 +614,8 @@ fn non_empty(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::config::{FileConfig, FileScope, SourceKind};
 
@@ -632,6 +634,7 @@ mod tests {
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
                     scope: FileScope::Root,
                     commands: commands(
                         r#"
@@ -647,6 +650,7 @@ commands:
                 },
                 FileConfig {
                     source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
                     scope: FileScope::Namespace {
                         namespace: "ex".to_string(),
                         namespace_description: "example namespace".to_string(),
@@ -662,6 +666,7 @@ commands:
                 },
                 FileConfig {
                     source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
                     scope: FileScope::Group {
                         group: "backend".to_string(),
                     },
@@ -676,6 +681,7 @@ commands:
                 },
                 FileConfig {
                     source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
                     scope: FileScope::Root,
                     commands: commands(
                         r#"
@@ -688,6 +694,7 @@ commands:
                 },
                 FileConfig {
                     source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
                     scope: FileScope::NamespaceGroup {
                         namespace: "ex".to_string(),
                         namespace_description: String::new(),
@@ -756,6 +763,7 @@ commands:
         let config = LoadedConfig {
             files: vec![FileConfig {
                 source: SourceKind::Local,
+                project_dir: PathBuf::from("."),
                 scope: FileScope::NamespaceGroup {
                     namespace: "ex".to_string(),
                     namespace_description: String::new(),

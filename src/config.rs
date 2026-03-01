@@ -22,6 +22,7 @@ pub(crate) enum SourceKind {
 #[derive(Debug, Clone)]
 pub(crate) struct FileConfig {
     pub(crate) source: SourceKind,
+    pub(crate) project_dir: PathBuf,
     pub(crate) scope: FileScope,
     pub(crate) commands: BTreeMap<String, CommandEntry>,
 }
@@ -54,6 +55,14 @@ pub(crate) enum CommandEntry {
 pub(crate) struct CommandSpec {
     #[serde(default)]
     pub(crate) description: String,
+    #[serde(default)]
+    pub(crate) dir: String,
+    #[serde(default)]
+    pub(crate) check: String,
+    #[serde(default)]
+    pub(crate) runner: String,
+    #[serde(default)]
+    pub(crate) fallback_runner: String,
     #[serde(default)]
     pub(crate) exec: Option<CommandAction>,
     #[serde(default)]
@@ -118,6 +127,13 @@ impl CommandEntry {
         match self {
             CommandEntry::Shorthand(_) => None,
             CommandEntry::Spec(spec) => Some(&spec.commands),
+        }
+    }
+
+    pub(crate) fn spec(&self) -> Option<&CommandSpec> {
+        match self {
+            CommandEntry::Shorthand(_) => None,
+            CommandEntry::Spec(spec) => Some(spec),
         }
     }
 }
@@ -189,10 +205,17 @@ fn load_directory_file_configs(
     let include_paths = discover_config_files_from_dirs(&include_dirs);
     let include_raw = parse_raw_files(&include_paths);
 
-    let mut files = to_file_configs(&root_raw, source, default_namespace.as_deref(), None);
+    let mut files = to_file_configs(
+        &root_raw,
+        source,
+        base_dir,
+        default_namespace.as_deref(),
+        None,
+    );
     files.extend(to_file_configs(
         &include_raw,
         source,
+        base_dir,
         default_namespace.as_deref(),
         explicit_namespace.as_ref(),
     ));
@@ -225,6 +248,7 @@ fn parse_raw_files(paths: &[PathBuf]) -> Vec<FireFileRaw> {
 fn to_file_configs(
     raw_files: &[FireFileRaw],
     source: SourceKind,
+    project_dir: &Path,
     default_namespace_prefix: Option<&str>,
     forced_namespace: Option<&NamespaceScope>,
 ) -> Vec<FileConfig> {
@@ -232,6 +256,7 @@ fn to_file_configs(
         .iter()
         .map(|raw| FileConfig {
             source,
+            project_dir: project_dir.to_path_buf(),
             scope: scope_from_raw(raw, default_namespace_prefix, forced_namespace),
             commands: raw.commands.clone(),
         })

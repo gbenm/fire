@@ -305,7 +305,7 @@ fn non_empty(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, path::PathBuf};
 
     use crate::config::{CommandEntry, FileConfig, FileScope, LoadedConfig, SourceKind};
 
@@ -326,6 +326,7 @@ mod tests {
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
                     scope: FileScope::Root,
                     commands: parse_commands(
                         r#"
@@ -338,6 +339,7 @@ commands:
                 },
                 FileConfig {
                     source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
                     scope: FileScope::Namespace {
                         namespace: "ex".to_string(),
                         namespace_description: "Example".to_string(),
@@ -353,6 +355,7 @@ commands:
                 },
                 FileConfig {
                     source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
                     scope: FileScope::NamespaceGroup {
                         namespace: "ex".to_string(),
                         namespace_description: "Example".to_string(),

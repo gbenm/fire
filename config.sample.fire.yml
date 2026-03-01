@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=./schemas/fire.schema.json
-dir: . # default working directory
+dir: . # default working directory "."
 
 env_file: .env # default env file
 
@@ -117,6 +117,28 @@ commands:
             description: "say hey!!!"
             exec: npm run
           start: fire build && npm run start
+
+  fallback:
+    check: exit -1
+    fallback_runner: docker run --rm -it -v .:/mount alpine sh
+    exec:
+      - cd mount
+      - pwd
+      - ls
+      - cat README.md
+
+  alpine:
+    runner: docker compose exec linux sh
+    exec:
+      - echo "This is running inside the alpine container!"
+      - pwd
+
+  container:
+    runner: docker run --rm -it -v .:/mount alpine sh
+    exec:
+      - cd /mount
+      - pwd
+      - ls
 
   web:
     delegate: npm-run # built-in delegate that uses package.json scripts for autocompletion

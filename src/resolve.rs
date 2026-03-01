@@ -1,7 +1,11 @@
+use std::path::Path;
+
 use crate::config::{CommandEntry, FileScope, LoadedConfig};
 
 pub(crate) struct ResolvedCommand<'a> {
+    pub(crate) project_dir: &'a Path,
     pub(crate) command: &'a CommandEntry,
+    pub(crate) command_chain: Vec<&'a CommandEntry>,
     pub(crate) consumed: usize,
     pub(crate) remaining_args: &'a [String],
 }
@@ -20,6 +24,7 @@ pub(crate) fn resolve_command<'a>(
 
             let mut consumed = base_consumed;
             let mut current = command_entry;
+            let mut chain = vec![command_entry];
 
             while consumed < args.len() {
                 let Some(subcommands) = current.subcommands() else {
@@ -27,6 +32,7 @@ pub(crate) fn resolve_command<'a>(
                 };
                 if let Some(next) = subcommands.get(&args[consumed]) {
                     current = next;
+                    chain.push(current);
                     consumed += 1;
                     continue;
                 }
@@ -34,7 +40,9 @@ pub(crate) fn resolve_command<'a>(
             }
 
             let candidate = ResolvedCommand {
+                project_dir: &file.project_dir,
                 command: current,
+                command_chain: chain,
                 consumed,
                 remaining_args: &args[consumed..],
             };
@@ -117,7 +125,7 @@ fn better_than(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, path::PathBuf};
 
     use crate::config::{CommandEntry, FileConfig, FileScope, LoadedConfig, SourceKind};
 
@@ -145,6 +153,7 @@ commands:
         let config = LoadedConfig {
             files: vec![FileConfig {
                 source: SourceKind::Local,
+                project_dir: PathBuf::from("."),
                 scope: FileScope::Root,
                 commands: parse_commands(yaml),
             }],
@@ -167,6 +176,7 @@ commands:
         let config = LoadedConfig {
             files: vec![FileConfig {
                 source: SourceKind::Global,
+                project_dir: PathBuf::from("."),
                 scope: FileScope::NamespaceGroup {
                     namespace: "ex".to_string(),
                     namespace_description: String::new(),
@@ -198,6 +208,7 @@ commands:
         let config = LoadedConfig {
             files: vec![FileConfig {
                 source: SourceKind::Global,
+                project_dir: PathBuf::from("."),
                 scope: FileScope::NamespaceGroup {
                     namespace: "ex".to_string(),
                     namespace_description: String::new(),
