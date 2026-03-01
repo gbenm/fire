@@ -61,11 +61,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "id": {
-          "type": "string",
-          "format": "uuid",
-          "description": "Optional namespace UUID."
-        },
         "description": {
           "type": "string",
           "description": "Human-readable namespace label."

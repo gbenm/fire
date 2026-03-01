@@ -4,7 +4,6 @@ dir: . # default working directory "."
 env_file: .env # default env file
 
 namespace:
-  id: 51170376-ea38-4317-ba49-4e63dfc8a571 # optional
   description: Example
   prefix: ex
 
