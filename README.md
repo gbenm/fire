@@ -2,6 +2,15 @@
 
 A CLI with dynamic completion powered by external configuration.
 
+## Installation
+
+Install with Homebrew using the `gbenm/labs` tap:
+
+```bash
+brew tap gbenm/labs
+brew install fire
+```
+
 ## Command Configuration
 Fire loads YAML files from the current directory with these patterns:
 - `fire.yaml`
