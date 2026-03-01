@@ -9,10 +9,6 @@
       "type": "string",
       "description": "Project working directory. Defaults to '.'."
     },
-    "env_file": {
-      "type": "string",
-      "description": "Environment file path loaded before command execution. Defaults to '.env'."
-    },
     "namespace": {
       "$ref": "#/$defs/namespace"
     },
@@ -167,10 +163,6 @@
         "dir": {
           "type": "string",
           "description": "Command-specific working directory. Overrides top-level `dir`."
-        },
-        "env_file": {
-          "type": "string",
-          "description": "Command-specific environment file. Overrides top-level `env_file`."
         },
         "check": {
           "type": "string",
