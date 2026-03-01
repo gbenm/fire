@@ -2,6 +2,15 @@
 
 A CLI with dynamic completion powered by external configuration.
 
+## Installation
+
+Install with Homebrew using the `gbenm/labs` tap:
+
+```bash
+brew tap gbenm/labs
+brew install fire
+```
+
 ## Command Configuration
 Fire loads YAML files from the current directory with these patterns:
 - `fire.yaml`
@@ -15,9 +24,20 @@ Files are merged in this order:
 
 If the same command name appears more than once, the last loaded definition wins.
 
+Optional local include directories:
+- Define `include` in a root fire file to extend local loading into specific subdirectories.
+- Paths must be relative to the current directory (`samples/`, `tools/`), and Fire only scans each included directory root (non-recursive).
+- Included files follow the same scope rules (`namespace`, `group`, commands). If a root file defines `namespace.prefix`, included files inherit that namespace.
+- In globally installed directories, `include` is also honored using the installed directory as base path.
+
 Example:
 
 ```yaml
+group: backend
+namespace:
+  prefix: ex
+  description: Example
+
 commands:
   run:
     description: Run npm scripts
@@ -32,6 +52,60 @@ commands:
 ```
 
 `exec` and `run` are both supported and treated as executable command actions.
+
+Default namespace behavior:
+- If `namespace.prefix` is omitted in a file, Fire inherits it from another file in the same directory that defines it.
+- If no file in that directory defines `namespace.prefix`, the file remains outside namespace scope.
+
+## Command Resolution Rules
+
+Fire resolves commands by file scope:
+
+1. No `namespace.prefix`, no `group`:
+- `fire <command>` (local direct command)
+- `fire <implicit-namespace> <command>` (namespace path)
+
+2. With `namespace.prefix`, no global `group`:
+- `fire <namespace> <command>`
+
+3. With global `group`, no `namespace`:
+- `fire <group> <command>`
+
+4. With `namespace` and global `group`:
+- `fire <namespace> <group> <command>`
+
+Root completion priority (`fire <TAB>`) is:
+1. Root-local commands
+2. Global namespaces
+3. Global groups without namespace
+4. Global direct commands
+
+## Global Installation
+
+`fire cli` is a reserved internal command.
+
+Install the current directory globally:
+
+```bash
+fire cli install
+```
+
+Create a minimal config with an interactive wizard:
+
+```bash
+fire cli init
+```
+
+Install shell completions (standard user locations for zsh and bash):
+
+```bash
+fire cli completion install
+```
+
+Behavior:
+- Stores only the absolute directory path (no command cache, no file copy).
+- Avoids duplicates if the path is already installed.
+- On each run, Fire dynamically reads installed directories and loads fire files from each directory root (non-recursive).
 
 ## `config.fire.yaml` Validation in VS Code
 The schema is available at [`schemas/fire.schema.json`](./schemas/fire.schema.json).
@@ -68,27 +142,32 @@ Expected validation error (example in VS Code): `Property cli is not allowed.`
 
 Why: `cli` is reserved for internal CLI behavior and cannot be overridden as a user command at the root `commands` level.
 
-## Autocomplete Without External Scripts
+## Autocomplete
 Fire supports two completion modes:
 
 - Rich zsh completion (value + description)
 - Bash-compatible command completion (`complete -C`)
 
-### zsh
-```zsh
-source ./zsh_completations
+Install both shell scripts:
+
+```bash
+fire cli completion install
 ```
 
-### bash
+Install only one shell:
+
 ```bash
-complete -o nospace -C fire fire
+fire cli completion install zsh
+fire cli completion install bash
 ```
+
+The installer writes completion scripts to user-level standard locations and updates `~/.zshrc` / `~/.bashrc` with managed blocks.
 
 For `complete -C`, the shell invokes `fire` in completion mode using `COMP_LINE` / `COMP_POINT`.
 
 Completion output includes command name and `description` when present (`name<TAB>description`) in the `__complete` protocol, which is consumed by the zsh completion script.
 
-Note: `complete -C` only uses completion values; descriptions are a zsh-native feature through `zsh_completations`.
+Note: `complete -C` only uses completion values; descriptions are shown through the installed zsh completion function.
 
 ## Execution Rules
 - `fire <command>` executes `exec` (or `run`) of the resolved command.
@@ -100,6 +179,18 @@ Example:
   - `npm run start --host 0.0.0.0`
 
 `cli` is reserved for internal CLI management and cannot be overridden by user commands.
+
+## Help Suffix
+
+Append `:h` to any resolved command path to show help without execution:
+
+- `fire run :h`
+- `fire ex backend api :h`
+
+It prints:
+- Command path
+- Command `description` (if any)
+- Subcommands and their descriptions (if any)
 
 ## Run
 ```bash

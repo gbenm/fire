@@ -1,0 +1,6 @@
+services:
+  linux:
+    image: alpine:3.19
+    container_name: fire-alpine-svc
+    command: ["tail", "-f", "/dev/null"]
+    restart: unless-stopped

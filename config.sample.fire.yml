@@ -1,12 +1,13 @@
 # yaml-language-server: $schema=./schemas/fire.schema.json
-dir: . # default working directory
+dir: . # default working directory "."
 
 env_file: .env # default env file
 
 namespace:
-  id: 51170376-ea38-4317-ba49-4e63dfc8a571 # optional
-  description: Pumpkat
-  alias: pk
+  description: Example
+  prefix: ex
+
+group: backend
 
 runtimes:
   deno:
@@ -24,8 +25,7 @@ runtimes:
       - scripts/helpers/*.py
 
 include:
-  - common.fire.yml
-  - database.fire.yml
+  - samples/
 
 x-arg-config: &arg-config
   # Use {n} to represent the argument index: {{n}} -> {1}, {2}, ... ; #{n} -> #1, #2, ...
@@ -56,6 +56,9 @@ commands:
     check: npm -v # if this fails, fallback_runner will be used
     fallback_runner: docker run --rm -it node:lts-alpine /bin/bash # fallback
     exec: npm
+
+  docker-node:
+    exec: docker run --rm -it node:lts-alpine sh
 
   run:
     description: |
@@ -113,6 +116,40 @@ commands:
             description: "say hey!!!"
             exec: npm run
           start: fire build && npm run start
+
+  fallback:
+    check: exit -1
+    before: echo "ignore me please"
+    fallback_runner: docker run --rm -it -v .:/mount alpine sh
+    exec:
+      - cd mount
+      - pwd
+      - ls
+      - cat README.md
+
+  alpine:
+    runner: docker compose exec linux sh
+    before: docker compose ps -q linux | grep -q . || docker compose up -d linux
+    exec:
+      - echo "This is running inside the alpine container!"
+      - pwd
+
+  container:
+    runner: docker run --rm -it -v .:/mount alpine sh
+    exec:
+      - cd /mount
+      - pwd
+      - ls
+
+  template:
+    macros:
+      "CMD": docker compose exec linux
+    <<: *arg-config
+    exec:
+      - "CMD echo Hello {1}, are you from {2}?"
+      - "CMD echo {2} is a beautiful place!"
+      - "CMD echo and who else is with you? ...{{n}}"
+      - "CMD echo and who else is with you? [{{n}}]"
 
   web:
     delegate: npm-run # built-in delegate that uses package.json scripts for autocompletion
