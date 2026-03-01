@@ -693,6 +693,7 @@ mod tests {
                     source: SourceKind::Local,
                     project_dir: PathBuf::from("."),
                     scope: FileScope::Root,
+                    runtimes: BTreeMap::new(),
                     commands: commands(
                         r#"
 commands:
@@ -712,6 +713,7 @@ commands:
                         namespace: "ex".to_string(),
                         namespace_description: "example namespace".to_string(),
                     },
+                    runtimes: BTreeMap::new(),
                     commands: commands(
                         r#"
 commands:
@@ -727,6 +729,7 @@ commands:
                     scope: FileScope::Group {
                         group: "backend".to_string(),
                     },
+                    runtimes: BTreeMap::new(),
                     commands: commands(
                         r#"
 commands:
@@ -740,6 +743,7 @@ commands:
                     source: SourceKind::Global,
                     project_dir: PathBuf::from("."),
                     scope: FileScope::Root,
+                    runtimes: BTreeMap::new(),
                     commands: commands(
                         r#"
 commands:
@@ -757,6 +761,7 @@ commands:
                         namespace_description: String::new(),
                         group: "ops".to_string(),
                     },
+                    runtimes: BTreeMap::new(),
                     commands: commands(
                         r#"
 commands:
@@ -826,6 +831,7 @@ commands:
                     namespace_description: String::new(),
                     group: "ops".to_string(),
                 },
+                runtimes: BTreeMap::new(),
                 commands: commands(
                     r#"
 commands:

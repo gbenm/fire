@@ -10,19 +10,28 @@ namespace:
 group: backend
 
 runtimes:
-  deno:
+  ts:
     sdk: deno
     runner: deno
     check: deno --version
-    fallback_runner: docker run --rm -it denoland/deno:latest /bin/bash
+    fallback_runner: docker run --rm -it denoland/deno:latest
     paths:
       - scripts/*.ts
       - scripts/helpers/*.ts
+
+  js:
+    sdk: node
+    runner: node
+    check: node -v
+    fallback_runner: docker run --rm -it node:lts-alpine
+    paths:
+      - scripts/*.mjs
+
   py:
     sdk: python
+    runner: python3.13
     paths:
       - scripts/*.py
-      - scripts/helpers/*.py
 
 include:
   - samples/
@@ -89,7 +98,7 @@ commands:
   up:
     <<: *arg-config
     compute:
-      arg1: deno:makeHash("{1}", "sha3-256")
+      arg1: ts:makeHash("{1}", "sha256")
     description: "<name> <job>"
     exec: echo "Hello {1}, your job is {2}"
 
@@ -97,9 +106,17 @@ commands:
     <<: *arg-config
     eval: py:sayHello("{1}", "{2}", ...{{n}})
 
+  computed2:
+    <<: *arg-config
+    eval: ts:makeHash("{1}", "sha256")
+
+  computed3:
+    <<: *arg-config
+    eval: js:getCurrentTimestamp()
+
   vars:
     compute:
-      arg1: deno:getServiceNameById("{1}")
+      arg1: ts:getServiceNameById("{1}")
     macros:
       "{{front}}": docker compose exec front
       "{{dynamic}}": docker compose exec {{1}}

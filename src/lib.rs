@@ -78,7 +78,7 @@ pub fn setup_cli() {
 
     if let Some(resolved) = resolve_command(&config, command_args) {
         let command_path = &command_args[..resolved.consumed];
-        if resolved.command.execution_commands().is_none() {
+        if !resolved.command.is_runnable() {
             print_command_help(command_path, resolved.command);
             return;
         }

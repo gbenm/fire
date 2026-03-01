@@ -328,6 +328,7 @@ mod tests {
                     source: SourceKind::Local,
                     project_dir: PathBuf::from("."),
                     scope: FileScope::Root,
+                    runtimes: BTreeMap::new(),
                     commands: parse_commands(
                         r#"
 commands:
@@ -344,6 +345,7 @@ commands:
                         namespace: "ex".to_string(),
                         namespace_description: "Example".to_string(),
                     },
+                    runtimes: BTreeMap::new(),
                     commands: parse_commands(
                         r#"
 commands:
@@ -361,6 +363,7 @@ commands:
                         namespace_description: "Example".to_string(),
                         group: "backend".to_string(),
                     },
+                    runtimes: BTreeMap::new(),
                     commands: parse_commands(
                         r#"
 commands:

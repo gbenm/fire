@@ -24,6 +24,7 @@ pub(crate) struct FileConfig {
     pub(crate) source: SourceKind,
     pub(crate) project_dir: PathBuf,
     pub(crate) scope: FileScope,
+    pub(crate) runtimes: BTreeMap<String, RuntimeConfig>,
     pub(crate) commands: BTreeMap<String, CommandEntry>,
 }
 
@@ -76,7 +77,23 @@ pub(crate) struct CommandSpec {
     #[serde(default)]
     pub(crate) run: Option<CommandAction>,
     #[serde(default)]
+    pub(crate) eval: Option<CommandAction>,
+    #[serde(default)]
     pub(crate) commands: BTreeMap<String, CommandEntry>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub(crate) struct RuntimeConfig {
+    #[serde(default)]
+    pub(crate) sdk: String,
+    #[serde(default)]
+    pub(crate) runner: String,
+    #[serde(default)]
+    pub(crate) check: String,
+    #[serde(default)]
+    pub(crate) fallback_runner: String,
+    #[serde(default)]
+    pub(crate) paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -94,6 +111,8 @@ struct FireFileRaw {
     namespace: Option<NamespaceRaw>,
     #[serde(default)]
     include: Vec<String>,
+    #[serde(default)]
+    runtimes: BTreeMap<String, RuntimeConfig>,
     #[serde(default)]
     commands: BTreeMap<String, CommandEntry>,
 }
@@ -131,10 +150,26 @@ impl CommandEntry {
         }
     }
 
+    pub(crate) fn is_runnable(&self) -> bool {
+        match self {
+            CommandEntry::Shorthand(_) => true,
+            CommandEntry::Spec(spec) => {
+                spec.exec.is_some() || spec.run.is_some() || spec.eval.is_some()
+            }
+        }
+    }
+
     pub(crate) fn subcommands(&self) -> Option<&BTreeMap<String, CommandEntry>> {
         match self {
             CommandEntry::Shorthand(_) => None,
             CommandEntry::Spec(spec) => Some(&spec.commands),
+        }
+    }
+
+    pub(crate) fn evaluation_expressions(&self) -> Option<Vec<String>> {
+        match self {
+            CommandEntry::Shorthand(_) => None,
+            CommandEntry::Spec(spec) => spec.eval.as_ref().map(CommandAction::as_vec),
         }
     }
 
@@ -266,6 +301,7 @@ fn to_file_configs(
             source,
             project_dir: project_dir.to_path_buf(),
             scope: scope_from_raw(raw, default_namespace_prefix, forced_namespace),
+            runtimes: raw.runtimes.clone(),
             commands: raw.commands.clone(),
         })
         .collect()
@@ -502,12 +538,14 @@ mod tests {
                     description: String::new(),
                 }),
                 include: Vec::new(),
+                runtimes: BTreeMap::new(),
                 commands: BTreeMap::new(),
             },
             FireFileRaw {
                 group: String::new(),
                 namespace: None,
                 include: Vec::new(),
+                runtimes: BTreeMap::new(),
                 commands: BTreeMap::new(),
             },
         ];
@@ -532,6 +570,7 @@ mod tests {
                 description: "Custom".to_string(),
             }),
             include: Vec::new(),
+            runtimes: BTreeMap::new(),
             commands: BTreeMap::new(),
         };
         let forced = NamespaceScope {
@@ -673,5 +712,20 @@ commands:
         assert!(has_test);
 
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn eval_only_command_is_runnable() {
+        let command = CommandEntry::Spec(CommandSpec {
+            eval: Some(CommandAction::Single("py:sayHello()".to_string())),
+            ..CommandSpec::default()
+        });
+        assert!(command.is_runnable());
+    }
+
+    #[test]
+    fn command_without_exec_run_or_eval_is_not_runnable() {
+        let command = CommandEntry::Spec(CommandSpec::default());
+        assert!(!command.is_runnable());
     }
 }

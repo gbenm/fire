@@ -1,9 +1,10 @@
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
-use crate::config::{CommandEntry, FileScope, LoadedConfig};
+use crate::config::{CommandEntry, FileScope, LoadedConfig, RuntimeConfig};
 
 pub(crate) struct ResolvedCommand<'a> {
     pub(crate) project_dir: &'a Path,
+    pub(crate) runtimes: &'a BTreeMap<String, RuntimeConfig>,
     pub(crate) command: &'a CommandEntry,
     pub(crate) command_chain: Vec<&'a CommandEntry>,
     pub(crate) consumed: usize,
@@ -41,6 +42,7 @@ pub(crate) fn resolve_command<'a>(
 
             let candidate = ResolvedCommand {
                 project_dir: &file.project_dir,
+                runtimes: &file.runtimes,
                 command: current,
                 command_chain: chain,
                 consumed,
@@ -155,6 +157,7 @@ commands:
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
                 scope: FileScope::Root,
+                runtimes: BTreeMap::new(),
                 commands: parse_commands(yaml),
             }],
         };
@@ -182,6 +185,7 @@ commands:
                     namespace_description: String::new(),
                     group: "backend".to_string(),
                 },
+                runtimes: BTreeMap::new(),
                 commands: parse_commands(yaml),
             }],
         };
@@ -214,6 +218,7 @@ commands:
                     namespace_description: String::new(),
                     group: "backend".to_string(),
                 },
+                runtimes: BTreeMap::new(),
                 commands: parse_commands(yaml),
             }],
         };

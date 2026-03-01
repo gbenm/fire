@@ -1,14 +1,25 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::Write,
+    fs,
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process,
-    process::{Command, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    thread,
+    time::Duration,
 };
 
+use crate::config::RuntimeConfig;
 use crate::resolve::ResolvedCommand;
 
 pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
+    let context = build_execution_context(&resolved);
+    ensure_working_directory(&context.dir);
+
+    if let Some(raw_evals) = resolved.command.evaluation_expressions() {
+        run_evals_with_runtime(&resolved, &context, &raw_evals);
+    }
+
     let Some(raw_commands_to_run) = resolved.command.execution_commands() else {
         eprintln!("[fire] Command path has no executable action.");
         if let Some(subcommands) = resolved.command.subcommands() {
@@ -32,9 +43,6 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
         process::exit(1);
     };
 
-    let context = build_execution_context(&resolved);
-    ensure_working_directory(&context.dir);
-
     let mut ignored_stats = RenderStats::default();
     let rendered_check = context.check.as_deref().map(|value| {
         render_runtime_string(
@@ -42,6 +50,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
             &context,
             resolved.remaining_args,
             false,
+            RenderMode::Shell,
             &mut ignored_stats,
         )
     });
@@ -51,6 +60,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
             &context,
             resolved.remaining_args,
             false,
+            RenderMode::Shell,
             &mut ignored_stats,
         )
     });
@@ -60,6 +70,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
             &context,
             resolved.remaining_args,
             false,
+            RenderMode::Shell,
             &mut ignored_stats,
         )
     });
@@ -78,6 +89,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
                 &context,
                 resolved.remaining_args,
                 false,
+                RenderMode::Shell,
                 &mut ignored_stats,
             );
             let status = run_shell_command(&rendered_before, &context.dir);
@@ -97,6 +109,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
                 &context,
                 resolved.remaining_args,
                 true,
+                RenderMode::Shell,
                 &mut render_stats,
             )
         })
@@ -123,6 +136,658 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     }
 
     process::exit(exit_code);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeSdk {
+    Node,
+    Deno,
+    Python,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeDefinition {
+    sdk: RuntimeSdk,
+    runner: String,
+    check: Option<String>,
+    fallback_runner: Option<String>,
+    paths: Vec<String>,
+}
+
+struct RuntimeEngine {
+    session: RuntimeSession,
+    next_id: usize,
+}
+
+struct RuntimeSession {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+struct RuntimeRequest<'a> {
+    op: &'a str,
+    id: String,
+    path: Option<&'a str>,
+    code: Option<&'a str>,
+}
+
+fn run_evals_with_runtime(
+    resolved: &ResolvedCommand<'_>,
+    context: &ExecutionContext,
+    raw_evals: &[String],
+) -> ! {
+    let mut render_stats = RenderStats::default();
+    let mut parsed = Vec::new();
+
+    for raw_eval in raw_evals {
+        let rendered = render_runtime_string(
+            raw_eval,
+            context,
+            resolved.remaining_args,
+            true,
+            RenderMode::Eval,
+            &mut render_stats,
+        );
+        let (runtime_key, code) = split_runtime_eval(&rendered);
+        parsed.push((runtime_key.to_string(), code.to_string()));
+    }
+
+    enforce_unused_args_policy(context, resolved.remaining_args, &render_stats);
+
+    let mut engines: BTreeMap<String, RuntimeEngine> = BTreeMap::new();
+    for (runtime_key, code) in &parsed {
+        if !engines.contains_key(runtime_key) {
+            let runtime_config = resolved.runtimes.get(runtime_key).unwrap_or_else(|| {
+                eprintln!("[fire] Runtime `{runtime_key}` is not defined in `runtimes`.");
+                process::exit(1);
+            });
+            let runtime = resolve_runtime_definition(runtime_key, runtime_config);
+            let mut ignored_stats = RenderStats::default();
+            let rendered_check = runtime.check.as_deref().map(|value| {
+                render_runtime_string(
+                    value,
+                    context,
+                    resolved.remaining_args,
+                    false,
+                    RenderMode::Shell,
+                    &mut ignored_stats,
+                )
+            });
+            let rendered_runner = render_runtime_string(
+                &runtime.runner,
+                context,
+                resolved.remaining_args,
+                false,
+                RenderMode::Shell,
+                &mut ignored_stats,
+            );
+            let rendered_fallback = runtime.fallback_runner.as_deref().map(|value| {
+                render_runtime_string(
+                    value,
+                    context,
+                    resolved.remaining_args,
+                    false,
+                    RenderMode::Shell,
+                    &mut ignored_stats,
+                )
+            });
+
+            let selected = select_runner_mode(
+                &context.dir,
+                rendered_check.as_deref(),
+                Some(rendered_runner.as_str()),
+                rendered_fallback.as_deref(),
+            );
+
+            let runtime_runner = match selected {
+                RunnerMode::Runner(value) | RunnerMode::Fallback(value) => value,
+                RunnerMode::Direct => {
+                    eprintln!("[fire] Runtime `{runtime_key}` has no valid runner.");
+                    process::exit(1);
+                }
+            };
+
+            let normalized_runner = normalize_runner_for_piped_stdin(&runtime_runner);
+            let launch = format!(
+                "{} {}",
+                normalized_runner,
+                runtime_bootstrap_invocation(&runtime.sdk)
+            );
+            let mut engine = RuntimeEngine::start(&launch, &context.dir);
+
+            let library_paths = resolve_runtime_library_paths(&context.dir, &runtime.paths);
+            for path in &library_paths {
+                engine.load(path);
+            }
+
+            engines.insert(runtime_key.clone(), engine);
+        }
+
+        let engine = engines.get_mut(runtime_key).unwrap_or_else(|| {
+            eprintln!("[fire] Runtime engine `{runtime_key}` not available.");
+            process::exit(1);
+        });
+        engine.eval(code);
+    }
+
+    for (_, mut engine) in engines {
+        engine.close();
+    }
+
+    process::exit(0);
+}
+
+impl RuntimeEngine {
+    fn start(command: &str, dir: &Path) -> Self {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|err| {
+                eprintln!("[fire] Failed to start runtime runner `{command}`: {err}");
+                process::exit(1);
+            });
+
+        let stdin = child.stdin.take().unwrap_or_else(|| {
+            eprintln!("[fire] Runtime runner has no stdin.");
+            process::exit(1);
+        });
+        let stdout = child.stdout.take().unwrap_or_else(|| {
+            eprintln!("[fire] Runtime runner has no stdout.");
+            process::exit(1);
+        });
+
+        Self {
+            session: RuntimeSession {
+                child,
+                stdin,
+                stdout: BufReader::new(stdout),
+            },
+            next_id: 1,
+        }
+    }
+
+    fn load(&mut self, path: &Path) {
+        let path_str = path.to_string_lossy().to_string();
+        let id = self.next_request_id();
+        let request = RuntimeRequest {
+            op: "load",
+            id: id.clone(),
+            path: Some(path_str.as_str()),
+            code: None,
+        };
+        if let Err(err) = run_runtime_request(&mut self.session, &request) {
+            eprintln!(
+                "[fire] Failed to load runtime library `{}`: {err}",
+                path.display()
+            );
+            self.close();
+            process::exit(1);
+        }
+    }
+
+    fn eval(&mut self, code: &str) {
+        let id = self.next_request_id();
+        let request = RuntimeRequest {
+            op: "eval",
+            id: id.clone(),
+            path: None,
+            code: Some(code),
+        };
+
+        match run_runtime_request(&mut self.session, &request) {
+            Ok(output_lines) => {
+                for line in output_lines {
+                    println!("{line}");
+                }
+            }
+            Err(err) => {
+                eprintln!("[fire] Runtime eval failed: {err}");
+                self.close();
+                process::exit(1);
+            }
+        }
+    }
+
+    fn close(&mut self) {
+        let id = self.next_request_id();
+        let request = RuntimeRequest {
+            op: "exit",
+            id,
+            path: None,
+            code: None,
+        };
+        let _ = run_runtime_request(&mut self.session, &request);
+        for _ in 0..20 {
+            match self.session.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => thread::sleep(Duration::from_millis(25)),
+                Err(_) => break,
+            }
+        }
+        let _ = self.session.child.kill();
+        let _ = self.session.child.wait();
+    }
+
+    fn next_request_id(&mut self) -> String {
+        let current = self.next_id;
+        self.next_id += 1;
+        current.to_string()
+    }
+}
+
+fn run_runtime_request(
+    session: &mut RuntimeSession,
+    request: &RuntimeRequest<'_>,
+) -> Result<Vec<String>, String> {
+    let payload = format_runtime_request_json(request);
+    writeln!(session.stdin, "{payload}").map_err(|err| format!("Cannot write request: {err}"))?;
+    session
+        .stdin
+        .flush()
+        .map_err(|err| format!("Cannot flush request: {err}"))?;
+
+    let done_marker = format!("__FIRE_DONE__{}", request.id);
+    let error_prefix = format!("__FIRE_ERROR__{}:", request.id);
+    let mut output = Vec::new();
+
+    loop {
+        let mut line = String::new();
+        let bytes = session
+            .stdout
+            .read_line(&mut line)
+            .map_err(|err| format!("Cannot read runtime output: {err}"))?;
+        if bytes == 0 {
+            return Err("Runtime process closed unexpectedly.".to_string());
+        }
+
+        let line = line.trim_end_matches(['\r', '\n']).to_string();
+        if line == done_marker {
+            break;
+        }
+        if let Some(rest) = line.strip_prefix(&error_prefix) {
+            return Err(rest.to_string());
+        }
+        output.push(line);
+    }
+
+    Ok(output)
+}
+
+fn format_runtime_request_json(request: &RuntimeRequest<'_>) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("\"op\":{}", json_quote(request.op)));
+    parts.push(format!("\"id\":{}", json_quote(&request.id)));
+    if let Some(path) = request.path {
+        parts.push(format!("\"path\":{}", json_quote(path)));
+    }
+    if let Some(code) = request.code {
+        parts.push(format!("\"code\":{}", json_quote(code)));
+    }
+    format!("{{{}}}", parts.join(","))
+}
+
+fn resolve_runtime_definition(key: &str, config: &RuntimeConfig) -> RuntimeDefinition {
+    let sdk = parse_runtime_sdk(&config.sdk);
+    let runner = non_empty(&config.runner)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| default_runtime_runner(&sdk).to_string());
+    let check = non_empty(&config.check).map(ToOwned::to_owned);
+    let fallback_runner = non_empty(&config.fallback_runner).map(ToOwned::to_owned);
+
+    if runner.trim().is_empty() {
+        eprintln!("[fire] Runtime `{key}` has an invalid runner.");
+        process::exit(1);
+    }
+
+    RuntimeDefinition {
+        sdk,
+        runner,
+        check,
+        fallback_runner,
+        paths: config.paths.clone(),
+    }
+}
+
+fn parse_runtime_sdk(value: &str) -> RuntimeSdk {
+    match value.trim() {
+        "node" => RuntimeSdk::Node,
+        "deno" => RuntimeSdk::Deno,
+        "python" => RuntimeSdk::Python,
+        other => {
+            eprintln!(
+                "[fire] Unsupported runtime sdk `{other}`. Supported values: node, deno, python."
+            );
+            process::exit(1);
+        }
+    }
+}
+
+fn default_runtime_runner(sdk: &RuntimeSdk) -> &'static str {
+    match sdk {
+        RuntimeSdk::Node => "node",
+        RuntimeSdk::Deno => "deno",
+        RuntimeSdk::Python => "python",
+    }
+}
+
+fn split_runtime_eval(value: &str) -> (&str, &str) {
+    let Some(index) = value.find(':') else {
+        eprintln!("[fire] Invalid eval expression `{value}`. Expected format `<runtime>:<code>`.");
+        process::exit(1);
+    };
+
+    let runtime = value[..index].trim();
+    let code = value[index + 1..].trim();
+    if runtime.is_empty() || code.is_empty() {
+        eprintln!("[fire] Invalid eval expression `{value}`. Runtime key and code are required.");
+        process::exit(1);
+    }
+    (runtime, code)
+}
+
+fn runtime_bootstrap_invocation(sdk: &RuntimeSdk) -> String {
+    match sdk {
+        RuntimeSdk::Python => {
+            format!("-u -c {}", shell_escape(python_runtime_bootstrap_script()))
+        }
+        RuntimeSdk::Node => format!("-e {}", shell_escape(node_runtime_bootstrap_script())),
+        RuntimeSdk::Deno => format!("eval {}", shell_escape(deno_runtime_bootstrap_script())),
+    }
+}
+
+fn resolve_runtime_library_paths(base_dir: &Path, patterns: &[String]) -> Vec<PathBuf> {
+    let mut files = BTreeSet::new();
+    for pattern in patterns {
+        let pattern = pattern.trim();
+        if pattern.is_empty() {
+            continue;
+        }
+
+        for path in expand_runtime_pattern(base_dir, pattern) {
+            if path.is_file() {
+                files.insert(path);
+            }
+        }
+    }
+
+    files.into_iter().collect()
+}
+
+fn expand_runtime_pattern(base_dir: &Path, pattern: &str) -> Vec<PathBuf> {
+    let full = if Path::new(pattern).is_absolute() {
+        PathBuf::from(pattern)
+    } else {
+        base_dir.join(pattern)
+    };
+
+    let pattern_text = full.to_string_lossy();
+    if !pattern_text.contains('*') {
+        return if full.exists() {
+            vec![full]
+        } else {
+            Vec::new()
+        };
+    }
+
+    let parent = full.parent().unwrap_or_else(|| Path::new("."));
+    let file_pattern = full
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+
+    if parent.to_string_lossy().contains('*') {
+        eprintln!(
+            "[fire] Unsupported runtime path pattern `{pattern}`. Wildcards are only supported in the file name."
+        );
+        process::exit(1);
+    }
+
+    let entries = fs::read_dir(parent).unwrap_or_else(|err| {
+        eprintln!(
+            "[fire] Failed to read runtime path directory `{}`: {err}",
+            parent.display()
+        );
+        process::exit(1);
+    });
+
+    let mut matches = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if wildcard_match(name, file_pattern) {
+            matches.push(path);
+        }
+    }
+    matches.sort();
+    matches
+}
+
+fn wildcard_match(value: &str, pattern: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+
+    let mut cursor = 0usize;
+    let mut first = true;
+    let parts = pattern.split('*').collect::<Vec<_>>();
+    for (index, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+
+        if first && !pattern.starts_with('*') {
+            if !value[cursor..].starts_with(part) {
+                return false;
+            }
+            cursor += part.len();
+            first = false;
+            continue;
+        }
+
+        if index + 1 == parts.len() && !pattern.ends_with('*') {
+            return value[cursor..].ends_with(part);
+        }
+
+        let Some(found) = value[cursor..].find(part) else {
+            return false;
+        };
+        cursor += found + part.len();
+        first = false;
+    }
+
+    if !pattern.ends_with('*') {
+        if let Some(last) = parts.last() {
+            return value.ends_with(last);
+        }
+    }
+
+    true
+}
+
+fn enforce_unused_args_policy(
+    context: &ExecutionContext,
+    remaining_args: &[String],
+    stats: &RenderStats,
+) {
+    if remaining_args.is_empty() {
+        return;
+    }
+
+    let placeholder_configured = context.placeholder.is_some();
+    let policy_configured = context.on_unused_args.is_some();
+    if !placeholder_configured && !policy_configured && !stats.had_placeholders {
+        return;
+    }
+
+    let unused_args = remaining_args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arg)| {
+            if stats.used_arg_indexes.contains(&index) {
+                None
+            } else {
+                Some(arg.clone())
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mode = context.on_unused_args.unwrap_or(UnusedArgsMode::Error);
+    match mode {
+        UnusedArgsMode::Ignore => {}
+        UnusedArgsMode::Warn => {
+            if !unused_args.is_empty() {
+                eprintln!(
+                    "[fire] Warning: unused args ignored: {}",
+                    join_shell_args(&unused_args)
+                );
+            }
+        }
+        UnusedArgsMode::Error => {
+            if !unused_args.is_empty() {
+                eprintln!(
+                    "[fire] Unused args are not allowed: {}",
+                    join_shell_args(&unused_args)
+                );
+                process::exit(1);
+            }
+        }
+    }
+}
+
+fn python_runtime_bootstrap_script() -> &'static str {
+    r#"import json, sys
+ctx = globals()
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
+        continue
+    msg = json.loads(raw)
+    rid = str(msg.get("id", "0"))
+    try:
+        op = msg.get("op")
+        if op == "load":
+            with open(msg["path"], "r", encoding="utf-8") as handle:
+                exec(handle.read(), ctx)
+            print(f"__FIRE_DONE__{rid}", flush=True)
+        elif op == "eval":
+            code = msg["code"]
+            try:
+                value = eval(code, ctx)
+            except SyntaxError:
+                exec(code, ctx)
+                value = None
+            if value is not None:
+                print(value, flush=True)
+            print(f"__FIRE_DONE__{rid}", flush=True)
+        elif op == "exit":
+            print(f"__FIRE_DONE__{rid}", flush=True)
+            break
+    except Exception as err:
+        print(f"__FIRE_ERROR__{rid}:{err}", flush=True)
+        print(f"__FIRE_DONE__{rid}", flush=True)"#
+}
+
+fn node_runtime_bootstrap_script() -> &'static str {
+    r#"const readline = require("node:readline");
+const { pathToFileURL } = require("node:url");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const done = (id) => process.stdout.write(`__FIRE_DONE__${id}\n`);
+rl.on("line", async (line) => {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  let msg;
+  try {
+    msg = JSON.parse(trimmed);
+  } catch (err) {
+    return;
+  }
+  const id = String(msg.id ?? "0");
+  try {
+    if (msg.op === "load") {
+      const mod = await import(pathToFileURL(msg.path).href);
+      Object.assign(globalThis, mod);
+      done(id);
+      return;
+    }
+    if (msg.op === "eval") {
+      const value = await eval(msg.code);
+      if (value !== undefined) {
+        process.stdout.write(String(value) + "\n");
+      }
+      done(id);
+      return;
+    }
+    if (msg.op === "exit") {
+      done(id);
+      process.exit(0);
+    }
+  } catch (err) {
+    process.stdout.write(`__FIRE_ERROR__${id}:${err && err.message ? err.message : String(err)}\n`);
+    done(id);
+  }
+});"#
+}
+
+fn deno_runtime_bootstrap_script() -> &'static str {
+    r#"const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+let buffer = "";
+const writeLine = async (value) => {
+  await Deno.stdout.write(encoder.encode(value + "\n"));
+};
+const done = async (id) => writeLine(`__FIRE_DONE__${id}`);
+const toFileUrl = (path) => new URL(`file://${path.startsWith("/") ? path : "/" + path}`).href;
+const handle = async (line) => {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  let msg;
+  try {
+    msg = JSON.parse(trimmed);
+  } catch (_) {
+    return;
+  }
+  const id = String(msg.id ?? "0");
+  try {
+    if (msg.op === "load") {
+      const mod = await import(toFileUrl(msg.path));
+      Object.assign(globalThis, mod);
+      await done(id);
+      return;
+    }
+    if (msg.op === "eval") {
+      const value = await eval(msg.code);
+      if (value !== undefined) {
+        await writeLine(String(value));
+      }
+      await done(id);
+      return;
+    }
+    if (msg.op === "exit") {
+      await done(id);
+      Deno.exit(0);
+    }
+  } catch (err) {
+    await writeLine(`__FIRE_ERROR__${id}:${err && err.message ? err.message : String(err)}`);
+    await done(id);
+  }
+};
+for await (const chunk of Deno.stdin.readable) {
+  buffer += decoder.decode(chunk, { stream: true });
+  let idx = buffer.indexOf("\n");
+  while (idx >= 0) {
+    const line = buffer.slice(0, idx);
+    buffer = buffer.slice(idx + 1);
+    await handle(line);
+    idx = buffer.indexOf("\n");
+  }
+}"#
 }
 
 fn should_execute_before(mode: &RunnerMode) -> bool {
@@ -159,6 +824,12 @@ enum UnusedArgsMode {
 struct RenderStats {
     used_arg_indexes: BTreeSet<usize>,
     had_placeholders: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderMode {
+    Shell,
+    Eval,
 }
 
 fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
@@ -275,19 +946,31 @@ fn render_runtime_string(
     context: &ExecutionContext,
     remaining_args: &[String],
     track_usage: bool,
+    mode: RenderMode,
     stats: &mut RenderStats,
 ) -> String {
     let with_macros = apply_macros(value, &context.macros);
 
     let mut output = with_macros;
-    for template in placeholder_templates(context.placeholder.as_deref()) {
-        output =
-            replace_placeholder_template(&output, &template, remaining_args, track_usage, stats);
-        output = replace_array_placeholder_literal_forms(
+    let templates = placeholder_templates(context.placeholder.as_deref());
+    for template in &templates {
+        output = replace_placeholder_template(
             &output,
-            &template,
+            template,
             remaining_args,
             track_usage,
+            mode,
+            stats,
+        );
+    }
+
+    for template in &templates {
+        output = replace_array_placeholder_literal_forms(
+            &output,
+            template,
+            remaining_args,
+            track_usage,
+            mode,
             stats,
         );
     }
@@ -349,6 +1032,7 @@ fn replace_placeholder_template(
     template: &str,
     remaining_args: &[String],
     track_usage: bool,
+    mode: RenderMode,
     stats: &mut RenderStats,
 ) -> String {
     let Some(index_marker) = template.find('n') else {
@@ -417,7 +1101,7 @@ fn replace_placeholder_template(
                     if track_usage {
                         stats.used_arg_indexes.insert(index);
                     }
-                    output.push_str(&shell_escape(value));
+                    output.push_str(&format_placeholder_value(value, mode));
                 }
             }
 
@@ -440,7 +1124,7 @@ fn replace_placeholder_template(
                 if track_usage {
                     stats.used_arg_indexes.insert(index);
                 }
-                output.push_str(&shell_escape(value));
+                output.push_str(&format_placeholder_value(value, mode));
             }
         }
 
@@ -455,6 +1139,7 @@ fn replace_array_placeholder_literal_forms(
     template: &str,
     remaining_args: &[String],
     track_usage: bool,
+    mode: RenderMode,
     stats: &mut RenderStats,
 ) -> String {
     let mut output = input.to_string();
@@ -463,6 +1148,8 @@ fn replace_array_placeholder_literal_forms(
         &format!("...{template}"),
         remaining_args,
         track_usage,
+        mode,
+        ArrayLiteralKind::Spread,
         stats,
     );
     output = replace_array_literal_token(
@@ -470,6 +1157,8 @@ fn replace_array_placeholder_literal_forms(
         &format!("[{template}]"),
         remaining_args,
         track_usage,
+        mode,
+        ArrayLiteralKind::Bracket,
         stats,
     );
     output
@@ -480,36 +1169,93 @@ fn replace_array_literal_token(
     token: &str,
     remaining_args: &[String],
     track_usage: bool,
+    mode: RenderMode,
+    kind: ArrayLiteralKind,
     stats: &mut RenderStats,
 ) -> String {
     if token.is_empty() || !input.contains(token) {
         return input.to_string();
     }
 
-    let start_index = first_unused_arg_index(&stats.used_arg_indexes, remaining_args.len());
-    let replacement = if start_index >= remaining_args.len() {
+    let unused = remaining_args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| {
+            if stats.used_arg_indexes.contains(&index) {
+                None
+            } else {
+                Some((index, value))
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let replacement = if unused.is_empty() {
         String::new()
     } else {
-        let args = &remaining_args[start_index..];
+        let args = unused
+            .iter()
+            .map(|(_, value)| (*value).clone())
+            .collect::<Vec<_>>();
         if track_usage {
             stats.had_placeholders = true;
-            for index in start_index..remaining_args.len() {
-                stats.used_arg_indexes.insert(index);
+            for (index, _) in &unused {
+                stats.used_arg_indexes.insert(*index);
             }
         }
-        join_shell_args(args)
+        format_array_literal(&args, mode, kind)
     };
 
     input.replace(token, &replacement)
 }
 
-fn first_unused_arg_index(used_indexes: &BTreeSet<usize>, total_args: usize) -> usize {
-    for index in 0..total_args {
-        if !used_indexes.contains(&index) {
-            return index;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArrayLiteralKind {
+    Spread,
+    Bracket,
+}
+
+fn format_placeholder_value(value: &str, mode: RenderMode) -> String {
+    match mode {
+        RenderMode::Shell => shell_escape(value),
+        RenderMode::Eval => value.to_string(),
+    }
+}
+
+fn format_array_literal(args: &[String], mode: RenderMode, kind: ArrayLiteralKind) -> String {
+    match mode {
+        RenderMode::Shell => join_shell_args(args),
+        RenderMode::Eval => {
+            let values = args
+                .iter()
+                .map(|value| json_quote(value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            match kind {
+                ArrayLiteralKind::Spread => values,
+                ArrayLiteralKind::Bracket => format!("[{values}]"),
+            }
         }
     }
-    total_args
+}
+
+fn json_quote(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let code = c as u32;
+                out.push_str(&format!("\\u{:04x}", code));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn resolve_next_dir(current: &Path, next: &str) -> PathBuf {
@@ -542,7 +1288,7 @@ fn select_runner_mode(
     fallback_runner: Option<&str>,
 ) -> RunnerMode {
     let check_passed = check
-        .map(|command| run_shell_command(command, dir).success())
+        .map(|command| run_shell_command_silent(command, dir).success())
         .unwrap_or(true);
 
     if check_passed {
@@ -637,6 +1383,21 @@ fn run_shell_command(command: &str, dir: &Path) -> process::ExitStatus {
         .arg("-c")
         .arg(command)
         .current_dir(dir)
+        .status()
+        .unwrap_or_else(|err| {
+            eprintln!("[fire] Failed to execute `{command}`: {err}");
+            process::exit(1);
+        })
+}
+
+fn run_shell_command_silent(command: &str, dir: &Path) -> process::ExitStatus {
+    Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .unwrap_or_else(|err| {
             eprintln!("[fire] Failed to execute `{command}`: {err}");
@@ -861,6 +1622,7 @@ mod tests {
                 "quo'te".to_string(),
             ],
             true,
+            RenderMode::Shell,
             &mut stats,
         );
         assert_eq!(rendered, "echo hello 'sp ace' 'quo'\"'\"'te'");
@@ -878,6 +1640,7 @@ mod tests {
             &context,
             &["hey".to_string()],
             true,
+            RenderMode::Shell,
             &mut stats,
         );
         assert_eq!(rendered, "echo hey");
@@ -895,6 +1658,7 @@ mod tests {
             &context,
             &["front".to_string()],
             true,
+            RenderMode::Shell,
             &mut stats,
         );
         assert_eq!(rendered, "docker exec front echo hi");
@@ -914,6 +1678,7 @@ mod tests {
                 "third".to_string(),
             ],
             true,
+            RenderMode::Shell,
             &mut stats,
         );
         assert_eq!(rendered, "echo first 'second arg' third");
@@ -930,10 +1695,110 @@ mod tests {
             &context,
             &["one".to_string(), "two".to_string()],
             true,
+            RenderMode::Shell,
             &mut stats,
         );
         assert_eq!(rendered, "echo one two");
         assert_eq!(stats.used_arg_indexes.len(), 2);
+    }
+
+    #[test]
+    fn spread_placeholder_uses_only_unused_args() {
+        let mut context = ExecutionContext::default();
+        context.placeholder = Some("{{n}}".to_string());
+        let mut stats = RenderStats::default();
+        let rendered = render_runtime_string(
+            "echo {{2}} ...{{n}}",
+            &context,
+            &[
+                "first".to_string(),
+                "second arg".to_string(),
+                "third".to_string(),
+            ],
+            true,
+            RenderMode::Shell,
+            &mut stats,
+        );
+        assert_eq!(rendered, "echo 'second arg' first third");
+        assert_eq!(stats.used_arg_indexes.len(), 3);
+    }
+
+    #[test]
+    fn eval_array_placeholder_uses_only_unused_args() {
+        let mut context = ExecutionContext::default();
+        context.placeholder = Some("{{n}}".to_string());
+        let mut stats = RenderStats::default();
+        let rendered = render_runtime_string(
+            "fn({2}, [{{n}}])",
+            &context,
+            &["a".to_string(), "b".to_string(), "c".to_string()],
+            true,
+            RenderMode::Eval,
+            &mut stats,
+        );
+        assert_eq!(rendered, "fn(b, [\"a\", \"c\"])");
+        assert_eq!(stats.used_arg_indexes.len(), 3);
+    }
+
+    #[test]
+    fn eval_placeholder_replaces_without_shell_escaping() {
+        let context = ExecutionContext::default();
+        let mut stats = RenderStats::default();
+        let rendered = render_runtime_string(
+            "sayHello(\"{1}\", {2})",
+            &context,
+            &["hello world".to_string(), "1 + 1".to_string()],
+            true,
+            RenderMode::Eval,
+            &mut stats,
+        );
+        assert_eq!(rendered, "sayHello(\"hello world\", 1 + 1)");
+    }
+
+    #[test]
+    fn eval_spread_placeholder_expands_as_string_arguments() {
+        let mut context = ExecutionContext::default();
+        context.placeholder = Some("{{n}}".to_string());
+        let mut stats = RenderStats::default();
+        let rendered = render_runtime_string(
+            "fn(...{{n}})",
+            &context,
+            &["a".to_string(), "b c".to_string()],
+            true,
+            RenderMode::Eval,
+            &mut stats,
+        );
+        assert_eq!(rendered, "fn(\"a\", \"b c\")");
+    }
+
+    #[test]
+    fn eval_array_placeholder_expands_as_string_array() {
+        let mut context = ExecutionContext::default();
+        context.placeholder = Some("{{n}}".to_string());
+        let mut stats = RenderStats::default();
+        let rendered = render_runtime_string(
+            "fn([{{n}}])",
+            &context,
+            &["a".to_string(), "b".to_string()],
+            true,
+            RenderMode::Eval,
+            &mut stats,
+        );
+        assert_eq!(rendered, "fn([\"a\", \"b\"])");
+    }
+
+    #[test]
+    fn split_runtime_eval_parses_runtime_and_code() {
+        let (runtime, code) = split_runtime_eval("py:sayHello()");
+        assert_eq!(runtime, "py");
+        assert_eq!(code, "sayHello()");
+    }
+
+    #[test]
+    fn wildcard_match_supports_basic_star_patterns() {
+        assert!(wildcard_match("test.ts", "*.ts"));
+        assert!(wildcard_match("helpers.test.ts", "*.test.ts"));
+        assert!(!wildcard_match("test.js", "*.ts"));
     }
 
     #[test]

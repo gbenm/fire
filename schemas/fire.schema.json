@@ -81,7 +81,12 @@
       "properties": {
         "sdk": {
           "type": "string",
-          "description": "Runtime SDK identifier used in runtime expressions (for example: deno, python)."
+          "description": "Runtime SDK identifier used in runtime expressions.",
+          "enum": [
+            "node",
+            "deno",
+            "python"
+          ]
         },
         "runner": {
           "type": "string",
@@ -209,8 +214,8 @@
           "description": "Shell command(s) to execute. If an array is provided, commands run in order."
         },
         "eval": {
-          "type": "string",
-          "description": "Runtime expression to evaluate (for example: py:func(\"{1}\"))."
+          "$ref": "#/$defs/stringOrStringArray",
+          "description": "Runtime expression(s) to evaluate (for example: py:func(\"{1}\"))."
         },
         "compute": {
           "type": "object",
