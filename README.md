@@ -81,6 +81,12 @@ Install the current directory globally:
 fire cli install
 ```
 
+Create a minimal config with an interactive wizard:
+
+```bash
+fire cli init
+```
+
 Behavior:
 - Stores only the absolute directory path (no command cache, no file copy).
 - Avoids duplicates if the path is already installed.

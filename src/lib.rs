@@ -1,5 +1,6 @@
 use std::{env, path::Path, process};
 
+mod cli;
 mod completion;
 mod config;
 mod execute;
@@ -7,11 +8,11 @@ mod help;
 mod registry;
 mod resolve;
 
+use cli::handle_cli_command;
 use completion::{completion_suggestions, render_values_only, render_with_descriptions};
 use config::load_config;
 use execute::execute_resolved_command;
 use help::{print_command_help, print_root_help, print_scope_help};
-use registry::{install_directory, InstallResult};
 use resolve::resolve_command;
 
 pub fn setup_cli() {
@@ -91,37 +92,6 @@ pub fn setup_cli() {
     eprintln!("[fire] Unknown command: {}", command_args[0]);
     print_root_help(&config);
     process::exit(1);
-}
-
-fn handle_cli_command(command_args: &[String]) {
-    match command_args {
-        [cli, install] if cli == "cli" && install == "install" => {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            match install_directory(&cwd) {
-                Ok(InstallResult::Added) => {
-                    println!("Installed directory: {}", cwd.display());
-                }
-                Ok(InstallResult::AlreadyInstalled) => {
-                    println!("Directory already installed: {}", cwd.display());
-                }
-                Err(err) => {
-                    eprintln!("[fire] Failed to install directory: {err}");
-                    process::exit(1);
-                }
-            }
-        }
-        [cli] if cli == "cli" => {
-            println!("Fire CLI Management");
-            println!("Commands:");
-            println!("  install  Register the current directory for global command loading");
-        }
-        _ => {
-            eprintln!("[fire] Unknown cli command");
-            eprintln!("Usage:");
-            eprintln!("  fire cli install");
-            process::exit(1);
-        }
-    }
 }
 
 fn normalize_completion_words(mut words: Vec<String>, bin_name: &str) -> Vec<String> {

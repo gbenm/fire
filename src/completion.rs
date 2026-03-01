@@ -66,6 +66,7 @@ pub(crate) fn render_values_only(suggestions: &[CompletionSuggestion]) -> Vec<St
 }
 
 fn root_suggestions(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggestion> {
+    let core = core_root_commands(prefix);
     let local_commands = local_commands(config, prefix);
     let local_namespaces = local_namespaces(config, prefix);
     let local_groups = local_groups(config, prefix);
@@ -73,6 +74,7 @@ fn root_suggestions(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSugges
     let groups = global_groups(config, prefix);
     let global_commands = global_direct_commands(config, prefix);
     concat_suggestions(vec![
+        core,
         local_commands,
         local_namespaces,
         local_groups,
@@ -83,6 +85,11 @@ fn root_suggestions(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSugges
 }
 
 fn children_for_root_exact(config: &LoadedConfig, value: &str) -> Vec<CompletionSuggestion> {
+    let core_children = core_command_children(value, "");
+    if !core_children.is_empty() {
+        return core_children;
+    }
+
     let command_children = root_command_children(config, value);
     if !command_children.is_empty() {
         return command_children;
@@ -103,6 +110,11 @@ fn children_for_path(
 ) -> Vec<CompletionSuggestion> {
     if path.len() == 1 {
         let head = &path[0];
+        let core_children = core_command_children(head, prefix);
+        if !core_children.is_empty() {
+            return core_children;
+        }
+
         let command_children = root_command_children(config, head);
         if !command_children.is_empty() {
             return filter_prefix(prefix, command_children);
@@ -118,6 +130,41 @@ fn children_for_path(
 
     let candidates = children_for_exact_path(config, path);
     filter_prefix(prefix, candidates)
+}
+
+fn core_root_commands(prefix: &str) -> Vec<CompletionSuggestion> {
+    let command = CompletionSuggestion {
+        value: "cli".to_string(),
+        description: Some("Fire CLI management commands".to_string()),
+    };
+
+    if command.value.starts_with(prefix) {
+        vec![command]
+    } else {
+        Vec::new()
+    }
+}
+
+fn core_command_children(command: &str, prefix: &str) -> Vec<CompletionSuggestion> {
+    if command != "cli" {
+        return Vec::new();
+    }
+
+    let suggestions = vec![
+        CompletionSuggestion {
+            value: "install".to_string(),
+            description: Some("Register current directory globally".to_string()),
+        },
+        CompletionSuggestion {
+            value: "init".to_string(),
+            description: Some("Create a minimal fire config file".to_string()),
+        },
+    ];
+
+    suggestions
+        .into_iter()
+        .filter(|suggestion| suggestion.value.starts_with(prefix))
+        .collect()
 }
 
 fn children_for_exact_path(config: &LoadedConfig, path: &[String]) -> Vec<CompletionSuggestion> {
@@ -664,7 +711,7 @@ commands:
         let config = config_with_scopes();
         let values = completion_suggestions(&config, &[]);
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
-        assert_eq!(names, vec!["dev", "run", "ex", "backend", "ping"]);
+        assert_eq!(names, vec!["cli", "dev", "run", "ex", "backend", "ping"]);
     }
 
     #[test]
@@ -742,5 +789,13 @@ commands:
             render_with_descriptions(&values),
             vec!["run\trun service".to_string()]
         );
+    }
+
+    #[test]
+    fn core_cli_lists_subcommands() {
+        let config = config_with_scopes();
+        let values = completion_suggestions(&config, &["cli".to_string()]);
+        let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
+        assert_eq!(names, vec!["install", "init"]);
     }
 }
