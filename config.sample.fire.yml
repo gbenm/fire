@@ -1,8 +1,6 @@
 # yaml-language-server: $schema=./schemas/fire.schema.json
 dir: . # default working directory "."
 
-env_file: .env # default env file
-
 namespace:
   description: Example
   prefix: ex
@@ -73,7 +71,7 @@ commands:
     description: |
       y si agrego descripción a este?
       vamos
-    exec: npm run --key ${SECRET_KEY:-default_value}
+    exec: npm run
 
   run2:
     before: docker compose ps -q front | grep -q . || docker compose up -d front
@@ -81,7 +79,6 @@ commands:
 
   run3:
     runner: docker compose exec front /bin/bash # equivalent to run inside the container
-    env_file: .env.front # override the env file for this command
     exec: # multiple commands run in sequence; the last one receives the args
       - npm run build
       - npm run start
@@ -167,6 +164,3 @@ commands:
       - "CMD echo {2} is a beautiful place!"
       - "CMD echo and who else is with you? ...{{n}}"
       - "CMD echo and who else is with you? [{{n}}]"
-
-  web:
-    delegate: npm-run # built-in delegate that uses package.json scripts for autocompletion
