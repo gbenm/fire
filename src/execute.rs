@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
     io::Write,
     path::{Path, PathBuf},
     process,
@@ -8,7 +9,7 @@ use std::{
 use crate::resolve::ResolvedCommand;
 
 pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
-    let Some(commands_to_run) = resolved.command.execution_commands() else {
+    let Some(raw_commands_to_run) = resolved.command.execution_commands() else {
         eprintln!("[fire] Command path has no executable action.");
         if let Some(subcommands) = resolved.command.subcommands() {
             eprintln!("Commands:");
@@ -34,25 +35,79 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     let context = build_execution_context(&resolved);
     ensure_working_directory(&context.dir);
 
-    let selected_runner = select_runner_mode(&context);
-    let execute_before = should_execute_before(&selected_runner);
-    let mut exit_code = 0;
-    let commands_to_run = commands_with_remaining_args(&commands_to_run, resolved.remaining_args);
+    let mut ignored_stats = RenderStats::default();
+    let rendered_check = context.check.as_deref().map(|value| {
+        render_runtime_string(
+            value,
+            &context,
+            resolved.remaining_args,
+            false,
+            &mut ignored_stats,
+        )
+    });
+    let rendered_runner = context.runner.as_deref().map(|value| {
+        render_runtime_string(
+            value,
+            &context,
+            resolved.remaining_args,
+            false,
+            &mut ignored_stats,
+        )
+    });
+    let rendered_fallback_runner = context.fallback_runner.as_deref().map(|value| {
+        render_runtime_string(
+            value,
+            &context,
+            resolved.remaining_args,
+            false,
+            &mut ignored_stats,
+        )
+    });
 
-    match selected_runner {
-        RunnerMode::Runner(runner) => {
-            if execute_before {
-                if let Some(before) = context.before.as_deref() {
-                    let status = run_shell_command(before, &context.dir);
-                    let code = status.code().unwrap_or(1);
-                    if code != 0 {
-                        process::exit(code);
-                    }
-                }
+    let selected_runner = select_runner_mode(
+        &context.dir,
+        rendered_check.as_deref(),
+        rendered_runner.as_deref(),
+        rendered_fallback_runner.as_deref(),
+    );
+
+    if should_execute_before(&selected_runner) {
+        if let Some(before) = context.before.as_deref() {
+            let rendered_before = render_runtime_string(
+                before,
+                &context,
+                resolved.remaining_args,
+                false,
+                &mut ignored_stats,
+            );
+            let status = run_shell_command(&rendered_before, &context.dir);
+            let code = status.code().unwrap_or(1);
+            if code != 0 {
+                process::exit(code);
             }
-            exit_code = run_with_runner(&runner, &context.dir, &commands_to_run);
         }
-        RunnerMode::Fallback(runner) => {
+    }
+
+    let mut render_stats = RenderStats::default();
+    let rendered_commands_to_run = raw_commands_to_run
+        .iter()
+        .map(|command| {
+            render_runtime_string(
+                command,
+                &context,
+                resolved.remaining_args,
+                true,
+                &mut render_stats,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let tail_args = unresolved_args_for_tail(&context, resolved.remaining_args, &render_stats);
+    let commands_to_run = commands_with_remaining_args(&rendered_commands_to_run, &tail_args);
+
+    let mut exit_code = 0;
+    match selected_runner {
+        RunnerMode::Runner(runner) | RunnerMode::Fallback(runner) => {
             exit_code = run_with_runner(&runner, &context.dir, &commands_to_run);
         }
         RunnerMode::Direct => {
@@ -81,6 +136,9 @@ struct ExecutionContext {
     runner: Option<String>,
     fallback_runner: Option<String>,
     check: Option<String>,
+    placeholder: Option<String>,
+    on_unused_args: Option<UnusedArgsMode>,
+    macros: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +146,19 @@ enum RunnerMode {
     Direct,
     Runner(String),
     Fallback(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnusedArgsMode {
+    Ignore,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Default)]
+struct RenderStats {
+    used_arg_indexes: BTreeSet<usize>,
+    had_placeholders: bool,
 }
 
 fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
@@ -116,9 +187,329 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
         if let Some(fallback_runner) = non_empty(&spec.fallback_runner) {
             context.fallback_runner = Some(fallback_runner.to_string());
         }
+        if let Some(placeholder) = non_empty(&spec.placeholder) {
+            context.placeholder = Some(placeholder.to_string());
+        }
+        if let Some(on_unused_args) = non_empty(&spec.on_unused_args) {
+            context.on_unused_args = Some(parse_on_unused_args_mode(on_unused_args));
+        }
+        for (macro_key, macro_value) in &spec.macros {
+            context
+                .macros
+                .insert(macro_key.clone(), macro_value.clone());
+        }
     }
 
     context
+}
+
+fn parse_on_unused_args_mode(value: &str) -> UnusedArgsMode {
+    match value {
+        "ignore" => UnusedArgsMode::Ignore,
+        "warn" => UnusedArgsMode::Warn,
+        "error" => UnusedArgsMode::Error,
+        _ => {
+            eprintln!(
+                "[fire] Invalid on_unused_args value `{value}`. Use one of: ignore, warn, error."
+            );
+            process::exit(1);
+        }
+    }
+}
+
+fn unresolved_args_for_tail(
+    context: &ExecutionContext,
+    remaining_args: &[String],
+    stats: &RenderStats,
+) -> Vec<String> {
+    if remaining_args.is_empty() {
+        return Vec::new();
+    }
+
+    let placeholder_configured = context.placeholder.is_some();
+    let policy_configured = context.on_unused_args.is_some();
+
+    if !placeholder_configured && !policy_configured && !stats.had_placeholders {
+        return remaining_args.to_vec();
+    }
+
+    let unused_args = remaining_args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arg)| {
+            if stats.used_arg_indexes.contains(&index) {
+                None
+            } else {
+                Some(arg.clone())
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mode = context.on_unused_args.unwrap_or(UnusedArgsMode::Error);
+    match mode {
+        UnusedArgsMode::Ignore => Vec::new(),
+        UnusedArgsMode::Warn => {
+            if !unused_args.is_empty() {
+                eprintln!(
+                    "[fire] Warning: unused args ignored: {}",
+                    join_shell_args(&unused_args)
+                );
+            }
+            Vec::new()
+        }
+        UnusedArgsMode::Error => {
+            if !unused_args.is_empty() {
+                eprintln!(
+                    "[fire] Unused args are not allowed: {}",
+                    join_shell_args(&unused_args)
+                );
+                process::exit(1);
+            }
+            Vec::new()
+        }
+    }
+}
+
+fn render_runtime_string(
+    value: &str,
+    context: &ExecutionContext,
+    remaining_args: &[String],
+    track_usage: bool,
+    stats: &mut RenderStats,
+) -> String {
+    let with_macros = apply_macros(value, &context.macros);
+
+    let mut output = with_macros;
+    for template in placeholder_templates(context.placeholder.as_deref()) {
+        output =
+            replace_placeholder_template(&output, &template, remaining_args, track_usage, stats);
+        output = replace_array_placeholder_literal_forms(
+            &output,
+            &template,
+            remaining_args,
+            track_usage,
+            stats,
+        );
+    }
+
+    output
+}
+
+fn apply_macros(value: &str, macros_map: &BTreeMap<String, String>) -> String {
+    if macros_map.is_empty() {
+        return value.to_string();
+    }
+
+    let mut ordered_macros = macros_map
+        .iter()
+        .filter(|(key, _)| !key.is_empty())
+        .collect::<Vec<_>>();
+    ordered_macros.sort_by(|(left, _), (right, _)| right.len().cmp(&left.len()));
+
+    let mut output = value.to_string();
+    for _ in 0..8 {
+        let mut changed = false;
+        for (key, replacement) in &ordered_macros {
+            if output.contains(*key) {
+                output = output.replace(*key, replacement);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    output
+}
+
+fn placeholder_templates(custom: Option<&str>) -> Vec<String> {
+    let mut templates = Vec::new();
+    if let Some(custom) = custom {
+        let custom = custom.trim();
+        if !custom.is_empty() {
+            templates.push(custom.to_string());
+        }
+    }
+    templates.push("{n}".to_string());
+    templates.push("{{n}}".to_string());
+    templates.push("$n".to_string());
+
+    let mut seen = BTreeSet::new();
+    let mut unique = templates
+        .into_iter()
+        .filter(|template| seen.insert(template.clone()))
+        .collect::<Vec<_>>();
+    unique.sort_by(|left, right| right.len().cmp(&left.len()));
+    unique
+}
+
+fn replace_placeholder_template(
+    input: &str,
+    template: &str,
+    remaining_args: &[String],
+    track_usage: bool,
+    stats: &mut RenderStats,
+) -> String {
+    let Some(index_marker) = template.find('n') else {
+        return input.to_string();
+    };
+
+    let prefix = &template[..index_marker];
+    let suffix = &template[index_marker + 1..];
+
+    if prefix.is_empty() {
+        return input.to_string();
+    }
+
+    let mut output = String::new();
+    let mut cursor = 0;
+
+    while cursor < input.len() {
+        let Some(relative_prefix_start) = input[cursor..].find(prefix) else {
+            output.push_str(&input[cursor..]);
+            break;
+        };
+
+        let prefix_start = cursor + relative_prefix_start;
+        output.push_str(&input[cursor..prefix_start]);
+
+        let digit_start = prefix_start + prefix.len();
+        let mut digit_end = digit_start;
+
+        while digit_end < input.len() {
+            let Some(ch) = input[digit_end..].chars().next() else {
+                break;
+            };
+            if ch.is_ascii_digit() {
+                digit_end += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+
+        if digit_start == digit_end {
+            output.push_str(prefix);
+            cursor = prefix_start + prefix.len();
+            continue;
+        }
+
+        if !suffix.is_empty() {
+            let suffix_end = digit_end + suffix.len();
+            if suffix_end > input.len() || &input[digit_end..suffix_end] != suffix {
+                output.push_str(prefix);
+                cursor = prefix_start + prefix.len();
+                continue;
+            }
+
+            let index_raw = &input[digit_start..digit_end];
+            let index = index_raw
+                .parse::<usize>()
+                .ok()
+                .and_then(|value| value.checked_sub(1));
+
+            if track_usage {
+                stats.had_placeholders = true;
+            }
+
+            if let Some(index) = index {
+                if let Some(value) = remaining_args.get(index) {
+                    if track_usage {
+                        stats.used_arg_indexes.insert(index);
+                    }
+                    output.push_str(&shell_escape(value));
+                }
+            }
+
+            cursor = suffix_end;
+            continue;
+        }
+
+        let index_raw = &input[digit_start..digit_end];
+        let index = index_raw
+            .parse::<usize>()
+            .ok()
+            .and_then(|value| value.checked_sub(1));
+
+        if track_usage {
+            stats.had_placeholders = true;
+        }
+
+        if let Some(index) = index {
+            if let Some(value) = remaining_args.get(index) {
+                if track_usage {
+                    stats.used_arg_indexes.insert(index);
+                }
+                output.push_str(&shell_escape(value));
+            }
+        }
+
+        cursor = digit_end;
+    }
+
+    output
+}
+
+fn replace_array_placeholder_literal_forms(
+    input: &str,
+    template: &str,
+    remaining_args: &[String],
+    track_usage: bool,
+    stats: &mut RenderStats,
+) -> String {
+    let mut output = input.to_string();
+    output = replace_array_literal_token(
+        &output,
+        &format!("...{template}"),
+        remaining_args,
+        track_usage,
+        stats,
+    );
+    output = replace_array_literal_token(
+        &output,
+        &format!("[{template}]"),
+        remaining_args,
+        track_usage,
+        stats,
+    );
+    output
+}
+
+fn replace_array_literal_token(
+    input: &str,
+    token: &str,
+    remaining_args: &[String],
+    track_usage: bool,
+    stats: &mut RenderStats,
+) -> String {
+    if token.is_empty() || !input.contains(token) {
+        return input.to_string();
+    }
+
+    let start_index = first_unused_arg_index(&stats.used_arg_indexes, remaining_args.len());
+    let replacement = if start_index >= remaining_args.len() {
+        String::new()
+    } else {
+        let args = &remaining_args[start_index..];
+        if track_usage {
+            stats.had_placeholders = true;
+            for index in start_index..remaining_args.len() {
+                stats.used_arg_indexes.insert(index);
+            }
+        }
+        join_shell_args(args)
+    };
+
+    input.replace(token, &replacement)
+}
+
+fn first_unused_arg_index(used_indexes: &BTreeSet<usize>, total_args: usize) -> usize {
+    for index in 0..total_args {
+        if !used_indexes.contains(&index) {
+            return index;
+        }
+    }
+    total_args
 }
 
 fn resolve_next_dir(current: &Path, next: &str) -> PathBuf {
@@ -144,31 +535,34 @@ fn ensure_working_directory(dir: &Path) {
     }
 }
 
-fn select_runner_mode(context: &ExecutionContext) -> RunnerMode {
-    let check_passed = context
-        .check
-        .as_deref()
-        .map(|check| run_shell_command(check, &context.dir).success())
+fn select_runner_mode(
+    dir: &Path,
+    check: Option<&str>,
+    runner: Option<&str>,
+    fallback_runner: Option<&str>,
+) -> RunnerMode {
+    let check_passed = check
+        .map(|command| run_shell_command(command, dir).success())
         .unwrap_or(true);
 
     if check_passed {
-        if let Some(runner) = context.runner.clone() {
-            return RunnerMode::Runner(runner);
+        if let Some(runner) = runner {
+            return RunnerMode::Runner(runner.to_string());
         }
         return RunnerMode::Direct;
     }
 
-    if let Some(fallback) = context.fallback_runner.clone() {
-        return RunnerMode::Fallback(fallback);
+    if let Some(fallback_runner) = fallback_runner {
+        return RunnerMode::Fallback(fallback_runner.to_string());
     }
 
-    if context.check.is_some() {
+    if check.is_some() {
         eprintln!("[fire] Check command failed and no fallback_runner is configured.");
         process::exit(1);
     }
 
-    if let Some(runner) = context.runner.clone() {
-        return RunnerMode::Runner(runner);
+    if let Some(runner) = runner {
+        return RunnerMode::Runner(runner.to_string());
     }
 
     RunnerMode::Direct
@@ -387,40 +781,22 @@ mod tests {
 
     #[test]
     fn select_runner_uses_fallback_when_check_fails() {
-        let context = ExecutionContext {
-            dir: std::env::current_dir().expect("cwd"),
-            runner: Some("bash".to_string()),
-            fallback_runner: Some("sh".to_string()),
-            check: Some("false".to_string()),
-            before: None,
-        };
-        let selected = select_runner_mode(&context);
+        let dir = std::env::current_dir().expect("cwd");
+        let selected = select_runner_mode(&dir, Some("false"), Some("bash"), Some("sh"));
         assert_eq!(selected, RunnerMode::Fallback("sh".to_string()));
     }
 
     #[test]
     fn select_runner_uses_primary_when_check_passes() {
-        let context = ExecutionContext {
-            dir: std::env::current_dir().expect("cwd"),
-            runner: Some("bash".to_string()),
-            fallback_runner: Some("sh".to_string()),
-            check: Some("true".to_string()),
-            before: None,
-        };
-        let selected = select_runner_mode(&context);
+        let dir = std::env::current_dir().expect("cwd");
+        let selected = select_runner_mode(&dir, Some("true"), Some("bash"), Some("sh"));
         assert_eq!(selected, RunnerMode::Runner("bash".to_string()));
     }
 
     #[test]
     fn select_runner_returns_direct_when_no_runner() {
-        let context = ExecutionContext {
-            dir: std::env::current_dir().expect("cwd"),
-            runner: None,
-            fallback_runner: None,
-            check: None,
-            before: Some("echo prep".to_string()),
-        };
-        let selected = select_runner_mode(&context);
+        let dir = std::env::current_dir().expect("cwd");
+        let selected = select_runner_mode(&dir, None, None, None);
         assert_eq!(selected, RunnerMode::Direct);
     }
 
@@ -470,5 +846,125 @@ mod tests {
             "bash".to_string()
         )));
         assert!(!should_execute_before(&RunnerMode::Direct));
+    }
+
+    #[test]
+    fn placeholders_replace_indexed_args_with_shell_escape() {
+        let context = ExecutionContext::default();
+        let mut stats = RenderStats::default();
+        let rendered = render_runtime_string(
+            "echo {1} {{2}} $3",
+            &context,
+            &[
+                "hello".to_string(),
+                "sp ace".to_string(),
+                "quo'te".to_string(),
+            ],
+            true,
+            &mut stats,
+        );
+        assert_eq!(rendered, "echo hello 'sp ace' 'quo'\"'\"'te'");
+        assert!(stats.had_placeholders);
+        assert_eq!(stats.used_arg_indexes.len(), 3);
+    }
+
+    #[test]
+    fn custom_placeholder_template_is_supported() {
+        let mut context = ExecutionContext::default();
+        context.placeholder = Some("[[n]]".to_string());
+        let mut stats = RenderStats::default();
+        let rendered = render_runtime_string(
+            "echo [[1]]",
+            &context,
+            &["hey".to_string()],
+            true,
+            &mut stats,
+        );
+        assert_eq!(rendered, "echo hey");
+    }
+
+    #[test]
+    fn macros_expand_before_placeholder_replacement() {
+        let mut context = ExecutionContext::default();
+        context
+            .macros
+            .insert("{{dynamic}}".to_string(), "docker exec {{1}}".to_string());
+        let mut stats = RenderStats::default();
+        let rendered = render_runtime_string(
+            "{{dynamic}} echo hi",
+            &context,
+            &["front".to_string()],
+            true,
+            &mut stats,
+        );
+        assert_eq!(rendered, "docker exec front echo hi");
+    }
+
+    #[test]
+    fn spread_placeholder_expands_to_remaining_args() {
+        let mut context = ExecutionContext::default();
+        context.placeholder = Some("{{n}}".to_string());
+        let mut stats = RenderStats::default();
+        let rendered = render_runtime_string(
+            "echo {{1}} ...{{n}}",
+            &context,
+            &[
+                "first".to_string(),
+                "second arg".to_string(),
+                "third".to_string(),
+            ],
+            true,
+            &mut stats,
+        );
+        assert_eq!(rendered, "echo first 'second arg' third");
+        assert_eq!(stats.used_arg_indexes.len(), 3);
+    }
+
+    #[test]
+    fn bracket_placeholder_expands_to_remaining_args() {
+        let mut context = ExecutionContext::default();
+        context.placeholder = Some("{{n}}".to_string());
+        let mut stats = RenderStats::default();
+        let rendered = render_runtime_string(
+            "echo [{{n}}]",
+            &context,
+            &["one".to_string(), "two".to_string()],
+            true,
+            &mut stats,
+        );
+        assert_eq!(rendered, "echo one two");
+        assert_eq!(stats.used_arg_indexes.len(), 2);
+    }
+
+    #[test]
+    fn unresolved_args_defaults_to_passthrough_without_placeholder_or_policy() {
+        let context = ExecutionContext::default();
+        let stats = RenderStats::default();
+        let args = vec!["one".to_string(), "two".to_string()];
+        assert_eq!(unresolved_args_for_tail(&context, &args, &stats), args);
+    }
+
+    #[test]
+    fn unresolved_args_respects_ignore_policy() {
+        let context = ExecutionContext {
+            on_unused_args: Some(UnusedArgsMode::Ignore),
+            ..ExecutionContext::default()
+        };
+        let stats = RenderStats::default();
+        let args = vec!["one".to_string()];
+        assert!(unresolved_args_for_tail(&context, &args, &stats).is_empty());
+    }
+
+    #[test]
+    fn unresolved_args_uses_consumed_indexes() {
+        let mut stats = RenderStats::default();
+        stats.had_placeholders = true;
+        stats.used_arg_indexes.insert(0);
+        let context = ExecutionContext {
+            on_unused_args: Some(UnusedArgsMode::Ignore),
+            ..ExecutionContext::default()
+        };
+        let args = vec!["one".to_string(), "two".to_string()];
+        assert!(unresolved_args_for_tail(&context, &args, &stats).is_empty());
     }
 }

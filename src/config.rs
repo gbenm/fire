@@ -58,6 +58,12 @@ pub(crate) struct CommandSpec {
     #[serde(default)]
     pub(crate) before: String,
     #[serde(default)]
+    pub(crate) placeholder: String,
+    #[serde(default)]
+    pub(crate) on_unused_args: String,
+    #[serde(default)]
+    pub(crate) macros: BTreeMap<String, String>,
+    #[serde(default)]
     pub(crate) dir: String,
     #[serde(default)]
     pub(crate) check: String,
