@@ -85,9 +85,8 @@ fn root_suggestions(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSugges
 }
 
 fn children_for_root_exact(config: &LoadedConfig, value: &str) -> Vec<CompletionSuggestion> {
-    let core_children = core_command_children(value, "");
-    if !core_children.is_empty() {
-        return core_children;
+    if value == "cli" {
+        return core_cli_children("");
     }
 
     let command_children = root_command_children(config, value);
@@ -108,13 +107,12 @@ fn children_for_path(
     path: &[String],
     prefix: &str,
 ) -> Vec<CompletionSuggestion> {
+    if let Some(core_children) = core_children_for_path(path, prefix) {
+        return core_children;
+    }
+
     if path.len() == 1 {
         let head = &path[0];
-        let core_children = core_command_children(head, prefix);
-        if !core_children.is_empty() {
-            return core_children;
-        }
-
         let command_children = root_command_children(config, head);
         if !command_children.is_empty() {
             return filter_prefix(prefix, command_children);
@@ -145,11 +143,32 @@ fn core_root_commands(prefix: &str) -> Vec<CompletionSuggestion> {
     }
 }
 
-fn core_command_children(command: &str, prefix: &str) -> Vec<CompletionSuggestion> {
-    if command != "cli" {
-        return Vec::new();
+fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<CompletionSuggestion>> {
+    if path.is_empty() || path[0] != "cli" {
+        return None;
     }
 
+    match path.len() {
+        1 => Some(core_cli_children(prefix)),
+        2 => {
+            if path[1] == "completion" {
+                Some(core_cli_completion_children(prefix))
+            } else {
+                Some(Vec::new())
+            }
+        }
+        3 => {
+            if path[1] == "completion" && path[2] == "install" {
+                Some(core_cli_completion_install_children(prefix))
+            } else {
+                Some(Vec::new())
+            }
+        }
+        _ => Some(Vec::new()),
+    }
+}
+
+fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
     let suggestions = vec![
         CompletionSuggestion {
             value: "install".to_string(),
@@ -158,6 +177,44 @@ fn core_command_children(command: &str, prefix: &str) -> Vec<CompletionSuggestio
         CompletionSuggestion {
             value: "init".to_string(),
             description: Some("Create a minimal fire config file".to_string()),
+        },
+        CompletionSuggestion {
+            value: "completion".to_string(),
+            description: Some("Install shell completion scripts".to_string()),
+        },
+    ];
+
+    suggestions
+        .into_iter()
+        .filter(|suggestion| suggestion.value.starts_with(prefix))
+        .collect()
+}
+
+fn core_cli_completion_children(prefix: &str) -> Vec<CompletionSuggestion> {
+    let suggestions = vec![CompletionSuggestion {
+        value: "install".to_string(),
+        description: Some("Install completion for bash/zsh".to_string()),
+    }];
+
+    suggestions
+        .into_iter()
+        .filter(|suggestion| suggestion.value.starts_with(prefix))
+        .collect()
+}
+
+fn core_cli_completion_install_children(prefix: &str) -> Vec<CompletionSuggestion> {
+    let suggestions = vec![
+        CompletionSuggestion {
+            value: "bash".to_string(),
+            description: Some("Install bash completion".to_string()),
+        },
+        CompletionSuggestion {
+            value: "zsh".to_string(),
+            description: Some("Install zsh completion".to_string()),
+        },
+        CompletionSuggestion {
+            value: "all".to_string(),
+            description: Some("Install both shells".to_string()),
         },
     ];
 
@@ -804,6 +861,33 @@ commands:
         let config = config_with_scopes();
         let values = completion_suggestions(&config, &["cli".to_string()]);
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
-        assert_eq!(names, vec!["install", "init"]);
+        assert_eq!(names, vec!["install", "init", "completion"]);
+    }
+
+    #[test]
+    fn core_cli_completion_lists_install() {
+        let config = config_with_scopes();
+        let values = completion_suggestions(
+            &config,
+            &["cli".to_string(), "completion".to_string(), "".to_string()],
+        );
+        let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
+        assert_eq!(names, vec!["install"]);
+    }
+
+    #[test]
+    fn core_cli_completion_install_lists_shell_targets() {
+        let config = config_with_scopes();
+        let values = completion_suggestions(
+            &config,
+            &[
+                "cli".to_string(),
+                "completion".to_string(),
+                "install".to_string(),
+                "".to_string(),
+            ],
+        );
+        let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
+        assert_eq!(names, vec!["bash", "zsh", "all"]);
     }
 }

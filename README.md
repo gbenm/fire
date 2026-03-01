@@ -87,6 +87,12 @@ Create a minimal config with an interactive wizard:
 fire cli init
 ```
 
+Install shell completions (standard user locations for zsh and bash):
+
+```bash
+fire cli completion install
+```
+
 Behavior:
 - Stores only the absolute directory path (no command cache, no file copy).
 - Avoids duplicates if the path is already installed.
@@ -127,27 +133,32 @@ Expected validation error (example in VS Code): `Property cli is not allowed.`
 
 Why: `cli` is reserved for internal CLI behavior and cannot be overridden as a user command at the root `commands` level.
 
-## Autocomplete Without External Scripts
+## Autocomplete
 Fire supports two completion modes:
 
 - Rich zsh completion (value + description)
 - Bash-compatible command completion (`complete -C`)
 
-### zsh
-```zsh
-source ./zsh_completations
+Install both shell scripts:
+
+```bash
+fire cli completion install
 ```
 
-### bash
+Install only one shell:
+
 ```bash
-complete -o nospace -C fire fire
+fire cli completion install zsh
+fire cli completion install bash
 ```
+
+The installer writes completion scripts to user-level standard locations and updates `~/.zshrc` / `~/.bashrc` with managed blocks.
 
 For `complete -C`, the shell invokes `fire` in completion mode using `COMP_LINE` / `COMP_POINT`.
 
 Completion output includes command name and `description` when present (`name<TAB>description`) in the `__complete` protocol, which is consumed by the zsh completion script.
 
-Note: `complete -C` only uses completion values; descriptions are a zsh-native feature through `zsh_completations`.
+Note: `complete -C` only uses completion values; descriptions are shown through the installed zsh completion function.
 
 ## Execution Rules
 - `fire <command>` executes `exec` (or `run`) of the resolved command.

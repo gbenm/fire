@@ -1,7 +1,7 @@
 use std::{
     fs,
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process,
 };
 
@@ -11,12 +11,33 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
     match command_args {
         [cli, install] if cli == "cli" && install == "install" => run_install(),
         [cli, init] if cli == "cli" && init == "init" => run_init(),
+        [cli, completion] if cli == "cli" && completion == "completion" => {
+            print_completion_help();
+        }
+        [cli, completion, install]
+            if cli == "cli" && completion == "completion" && install == "install" =>
+        {
+            run_completion_install(CompletionTarget::All)
+        }
+        [cli, completion, install, shell]
+            if cli == "cli" && completion == "completion" && install == "install" =>
+        {
+            let target = match parse_completion_target(shell) {
+                Some(target) => target,
+                None => {
+                    eprintln!("[fire] Invalid shell `{shell}`. Use one of: bash, zsh, all.");
+                    process::exit(1);
+                }
+            };
+            run_completion_install(target);
+        }
         [cli] if cli == "cli" => print_cli_help(),
         _ => {
             eprintln!("[fire] Unknown cli command");
             eprintln!("Usage:");
             eprintln!("  fire cli install");
             eprintln!("  fire cli init");
+            eprintln!("  fire cli completion install [bash|zsh|all]");
             process::exit(1);
         }
     }
@@ -91,6 +112,13 @@ fn print_cli_help() {
     println!("Commands:");
     println!("  install  Register the current directory for global command loading");
     println!("  init     Create a minimal fire config file with guided prompts");
+    println!("  completion  Manage shell completion scripts");
+}
+
+fn print_completion_help() {
+    println!("Fire CLI Completion");
+    println!("Commands:");
+    println!("  install [bash|zsh|all]  Install completion scripts (default: all)");
 }
 
 fn prompt_base_file_name() -> String {
@@ -213,9 +241,229 @@ fn non_empty(value: &str) -> Option<&str> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionTarget {
+    Bash,
+    Zsh,
+    All,
+}
+
+fn parse_completion_target(value: &str) -> Option<CompletionTarget> {
+    match value {
+        "bash" => Some(CompletionTarget::Bash),
+        "zsh" => Some(CompletionTarget::Zsh),
+        "all" => Some(CompletionTarget::All),
+        _ => None,
+    }
+}
+
+fn run_completion_install(target: CompletionTarget) {
+    let home_dir = dirs::home_dir().unwrap_or_else(|| {
+        eprintln!("[fire] Could not resolve HOME directory.");
+        process::exit(1);
+    });
+
+    println!("Fire CLI Completion Install");
+    println!("----------------------------------------");
+
+    let mut installed_paths: Vec<PathBuf> = Vec::new();
+    match target {
+        CompletionTarget::Bash => {
+            let path = install_bash_completion(&home_dir).unwrap_or_else(|err| {
+                eprintln!("[fire] {err}");
+                process::exit(1);
+            });
+            installed_paths.push(path);
+        }
+        CompletionTarget::Zsh => {
+            let path = install_zsh_completion(&home_dir).unwrap_or_else(|err| {
+                eprintln!("[fire] {err}");
+                process::exit(1);
+            });
+            installed_paths.push(path);
+        }
+        CompletionTarget::All => {
+            let zsh_path = install_zsh_completion(&home_dir).unwrap_or_else(|err| {
+                eprintln!("[fire] {err}");
+                process::exit(1);
+            });
+            installed_paths.push(zsh_path);
+
+            let bash_path = install_bash_completion(&home_dir).unwrap_or_else(|err| {
+                eprintln!("[fire] {err}");
+                process::exit(1);
+            });
+            installed_paths.push(bash_path);
+        }
+    }
+
+    println!("Installed completion files:");
+    for path in &installed_paths {
+        println!("  - {}", path.display());
+    }
+    println!();
+    println!("Open a new shell session (or source your shell rc file) to apply changes.");
+}
+
+fn install_zsh_completion(home_dir: &Path) -> Result<PathBuf, String> {
+    let completion_dir = home_dir.join(".zsh").join("completions");
+    fs::create_dir_all(&completion_dir)
+        .map_err(|err| format!("Failed to create zsh completion directory: {err}"))?;
+
+    let completion_path = completion_dir.join("_fire");
+    fs::write(&completion_path, zsh_completion_script())
+        .map_err(|err| format!("Failed to write zsh completion script: {err}"))?;
+
+    let zshrc_path = home_dir.join(".zshrc");
+    upsert_managed_block_file(
+        &zshrc_path,
+        zsh_block_start_marker(),
+        zsh_block_end_marker(),
+        &zsh_completion_rc_block(),
+    )?;
+
+    Ok(completion_path)
+}
+
+fn install_bash_completion(home_dir: &Path) -> Result<PathBuf, String> {
+    let completion_dir = home_dir
+        .join(".local")
+        .join("share")
+        .join("bash-completion")
+        .join("completions");
+    fs::create_dir_all(&completion_dir)
+        .map_err(|err| format!("Failed to create bash completion directory: {err}"))?;
+
+    let completion_path = completion_dir.join("fire");
+    fs::write(&completion_path, bash_completion_script())
+        .map_err(|err| format!("Failed to write bash completion script: {err}"))?;
+
+    let bashrc_path = home_dir.join(".bashrc");
+    upsert_managed_block_file(
+        &bashrc_path,
+        bash_block_start_marker(),
+        bash_block_end_marker(),
+        &bash_completion_rc_block(),
+    )?;
+
+    Ok(completion_path)
+}
+
+fn upsert_managed_block_file(
+    file_path: &Path,
+    start_marker: &str,
+    end_marker: &str,
+    block: &str,
+) -> Result<(), String> {
+    let current = fs::read_to_string(file_path).unwrap_or_default();
+    let updated = upsert_managed_block(&current, start_marker, end_marker, block);
+    fs::write(file_path, updated)
+        .map_err(|err| format!("Failed to update {}: {err}", file_path.display()))
+}
+
+fn upsert_managed_block(
+    current: &str,
+    start_marker: &str,
+    end_marker: &str,
+    block: &str,
+) -> String {
+    if let Some(start) = current.find(start_marker) {
+        if let Some(end_relative) = current[start..].find(end_marker) {
+            let end = start + end_relative + end_marker.len();
+            let mut output = String::new();
+            output.push_str(&current[..start]);
+            if !output.ends_with('\n') && !output.is_empty() {
+                output.push('\n');
+            }
+            output.push_str(block);
+            output.push('\n');
+            output.push_str(current[end..].trim_start_matches('\n'));
+            return output;
+        }
+    }
+
+    if current.trim().is_empty() {
+        return format!("{block}\n");
+    }
+
+    format!("{}\n\n{block}\n", current.trim_end())
+}
+
+fn zsh_completion_script() -> &'static str {
+    r#"#compdef fire
+
+_fire_cli() {
+  local -a lines
+  local -a entries
+  local line value note
+
+  lines=("${(@f)$(fire __complete -- "${words[@]}")}")
+  (( ${#lines[@]} == 0 )) && return 1
+
+  for line in "${lines[@]}"; do
+    if [[ "$line" == *$'\t'* ]]; then
+      value="${line%%$'\t'*}"
+      note="${line#*$'\t'}"
+      entries+=("$value:$note")
+    else
+      entries+=("$line:")
+    fi
+  done
+
+  _describe 'fire commands' entries
+}
+
+compdef _fire_cli fire
+"#
+}
+
+fn bash_completion_script() -> &'static str {
+    r#"# shellcheck shell=bash
+if type complete >/dev/null 2>&1; then
+  complete -o nospace -C fire fire
+fi
+"#
+}
+
+fn zsh_completion_rc_block() -> String {
+    format!(
+        "{}\nif [ -d \"$HOME/.zsh/completions\" ]; then\n  fpath=(\"$HOME/.zsh/completions\" $fpath)\nfi\nautoload -Uz compinit\ncompinit\n{}",
+        zsh_block_start_marker(),
+        zsh_block_end_marker()
+    )
+}
+
+fn bash_completion_rc_block() -> String {
+    format!(
+        "{}\nif [ -f \"$HOME/.local/share/bash-completion/completions/fire\" ]; then\n  source \"$HOME/.local/share/bash-completion/completions/fire\"\nfi\n{}",
+        bash_block_start_marker(),
+        bash_block_end_marker()
+    )
+}
+
+fn zsh_block_start_marker() -> &'static str {
+    "# >>> fire completion (zsh) >>>"
+}
+
+fn zsh_block_end_marker() -> &'static str {
+    "# <<< fire completion (zsh) <<<"
+}
+
+fn bash_block_start_marker() -> &'static str {
+    "# >>> fire completion (bash) >>>"
+}
+
+fn bash_block_end_marker() -> &'static str {
+    "# <<< fire completion (bash) <<<"
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_init_yaml, file_name_from_base, is_valid_file_base};
+    use super::{
+        bash_block_end_marker, bash_block_start_marker, build_init_yaml, file_name_from_base,
+        is_valid_file_base, parse_completion_target, upsert_managed_block, zsh_completion_script,
+        CompletionTarget,
+    };
 
     #[test]
     fn empty_base_name_uses_fire_yml() {
@@ -249,5 +497,62 @@ mod tests {
         assert!(yaml.contains("prefix: \"ex\""));
         assert!(yaml.contains("description: \"Example\""));
         assert!(yaml.contains("group: \"backend\""));
+    }
+
+    #[test]
+    fn parses_completion_target() {
+        assert_eq!(
+            parse_completion_target("bash"),
+            Some(CompletionTarget::Bash)
+        );
+        assert_eq!(parse_completion_target("zsh"), Some(CompletionTarget::Zsh));
+        assert_eq!(parse_completion_target("all"), Some(CompletionTarget::All));
+        assert_eq!(parse_completion_target("fish"), None);
+    }
+
+    #[test]
+    fn upsert_managed_block_appends_when_missing() {
+        let block = format!(
+            "{}\nsource ~/.bash_completion\n{}",
+            bash_block_start_marker(),
+            bash_block_end_marker()
+        );
+        let updated = upsert_managed_block(
+            "export PATH=\"$PATH:/bin\"\n",
+            bash_block_start_marker(),
+            bash_block_end_marker(),
+            &block,
+        );
+        assert!(updated.contains(bash_block_start_marker()));
+        assert!(updated.contains("source ~/.bash_completion"));
+    }
+
+    #[test]
+    fn upsert_managed_block_replaces_existing() {
+        let old = format!(
+            "{}\nold\n{}\n",
+            bash_block_start_marker(),
+            bash_block_end_marker()
+        );
+        let block = format!(
+            "{}\nnew\n{}",
+            bash_block_start_marker(),
+            bash_block_end_marker()
+        );
+        let updated = upsert_managed_block(
+            &old,
+            bash_block_start_marker(),
+            bash_block_end_marker(),
+            &block,
+        );
+        assert!(!updated.contains("\nold\n"));
+        assert!(updated.contains("\nnew\n"));
+    }
+
+    #[test]
+    fn embedded_zsh_completion_script_contains_compdef() {
+        let script = zsh_completion_script();
+        assert!(script.contains("#compdef fire"));
+        assert!(script.contains("compdef _fire_cli fire"));
     }
 }
