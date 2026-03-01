@@ -120,6 +120,7 @@ commands:
 
   fallback:
     check: exit -1
+    before: echo "ignore me please"
     fallback_runner: docker run --rm -it -v .:/mount alpine sh
     exec:
       - cd mount
@@ -129,6 +130,7 @@ commands:
 
   alpine:
     runner: docker compose exec linux sh
+    before: docker compose ps -q linux | grep -q . || docker compose up -d linux
     exec:
       - echo "This is running inside the alpine container!"
       - pwd

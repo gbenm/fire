@@ -34,15 +34,28 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     let context = build_execution_context(&resolved);
     ensure_working_directory(&context.dir);
 
-    let selected_runner = select_runner(&context);
+    let selected_runner = select_runner_mode(&context);
+    let execute_before = should_execute_before(&selected_runner);
     let mut exit_code = 0;
     let commands_to_run = commands_with_remaining_args(&commands_to_run, resolved.remaining_args);
 
     match selected_runner {
-        Some(runner) => {
+        RunnerMode::Runner(runner) => {
+            if execute_before {
+                if let Some(before) = context.before.as_deref() {
+                    let status = run_shell_command(before, &context.dir);
+                    let code = status.code().unwrap_or(1);
+                    if code != 0 {
+                        process::exit(code);
+                    }
+                }
+            }
             exit_code = run_with_runner(&runner, &context.dir, &commands_to_run);
         }
-        None => {
+        RunnerMode::Fallback(runner) => {
+            exit_code = run_with_runner(&runner, &context.dir, &commands_to_run);
+        }
+        RunnerMode::Direct => {
             for command in &commands_to_run {
                 let status = run_shell_command(command, &context.dir);
                 let code = status.code().unwrap_or(1);
@@ -57,12 +70,24 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     process::exit(exit_code);
 }
 
+fn should_execute_before(mode: &RunnerMode) -> bool {
+    matches!(mode, RunnerMode::Runner(_))
+}
+
 #[derive(Debug, Default)]
 struct ExecutionContext {
+    before: Option<String>,
     dir: PathBuf,
     runner: Option<String>,
     fallback_runner: Option<String>,
     check: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RunnerMode {
+    Direct,
+    Runner(String),
+    Fallback(String),
 }
 
 fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
@@ -78,6 +103,9 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
 
         if let Some(next_dir) = non_empty(&spec.dir) {
             context.dir = resolve_next_dir(&context.dir, next_dir);
+        }
+        if let Some(before) = non_empty(&spec.before) {
+            context.before = Some(before.to_string());
         }
         if let Some(check) = non_empty(&spec.check) {
             context.check = Some(check.to_string());
@@ -116,7 +144,7 @@ fn ensure_working_directory(dir: &Path) {
     }
 }
 
-fn select_runner(context: &ExecutionContext) -> Option<String> {
+fn select_runner_mode(context: &ExecutionContext) -> RunnerMode {
     let check_passed = context
         .check
         .as_deref()
@@ -124,11 +152,14 @@ fn select_runner(context: &ExecutionContext) -> Option<String> {
         .unwrap_or(true);
 
     if check_passed {
-        return context.runner.clone();
+        if let Some(runner) = context.runner.clone() {
+            return RunnerMode::Runner(runner);
+        }
+        return RunnerMode::Direct;
     }
 
     if let Some(fallback) = context.fallback_runner.clone() {
-        return Some(fallback);
+        return RunnerMode::Fallback(fallback);
     }
 
     if context.check.is_some() {
@@ -136,7 +167,11 @@ fn select_runner(context: &ExecutionContext) -> Option<String> {
         process::exit(1);
     }
 
-    context.runner.clone()
+    if let Some(runner) = context.runner.clone() {
+        return RunnerMode::Runner(runner);
+    }
+
+    RunnerMode::Direct
 }
 
 fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
@@ -357,9 +392,10 @@ mod tests {
             runner: Some("bash".to_string()),
             fallback_runner: Some("sh".to_string()),
             check: Some("false".to_string()),
+            before: None,
         };
-        let selected = select_runner(&context);
-        assert_eq!(selected, Some("sh".to_string()));
+        let selected = select_runner_mode(&context);
+        assert_eq!(selected, RunnerMode::Fallback("sh".to_string()));
     }
 
     #[test]
@@ -369,9 +405,23 @@ mod tests {
             runner: Some("bash".to_string()),
             fallback_runner: Some("sh".to_string()),
             check: Some("true".to_string()),
+            before: None,
         };
-        let selected = select_runner(&context);
-        assert_eq!(selected, Some("bash".to_string()));
+        let selected = select_runner_mode(&context);
+        assert_eq!(selected, RunnerMode::Runner("bash".to_string()));
+    }
+
+    #[test]
+    fn select_runner_returns_direct_when_no_runner() {
+        let context = ExecutionContext {
+            dir: std::env::current_dir().expect("cwd"),
+            runner: None,
+            fallback_runner: None,
+            check: None,
+            before: Some("echo prep".to_string()),
+        };
+        let selected = select_runner_mode(&context);
+        assert_eq!(selected, RunnerMode::Direct);
     }
 
     #[test]
@@ -409,5 +459,16 @@ mod tests {
         let runner = "docker compose exec -T linux sh";
         let normalized = normalize_runner_for_piped_stdin(runner);
         assert_eq!(normalized, runner);
+    }
+
+    #[test]
+    fn before_runs_only_for_primary_runner() {
+        assert!(should_execute_before(&RunnerMode::Runner(
+            "bash".to_string()
+        )));
+        assert!(!should_execute_before(&RunnerMode::Fallback(
+            "bash".to_string()
+        )));
+        assert!(!should_execute_before(&RunnerMode::Direct));
     }
 }

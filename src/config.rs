@@ -56,6 +56,8 @@ pub(crate) struct CommandSpec {
     #[serde(default)]
     pub(crate) description: String,
     #[serde(default)]
+    pub(crate) before: String,
+    #[serde(default)]
     pub(crate) dir: String,
     #[serde(default)]
     pub(crate) check: String,
