@@ -1,0 +1,4 @@
+# yaml-language-server: $schema=../schemas/fire.schema.json
+
+commands:
+  test: echo from test command

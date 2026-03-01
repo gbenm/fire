@@ -1,7 +1,7 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use serde::Deserialize;
@@ -76,6 +76,8 @@ struct FireFileRaw {
     #[serde(default)]
     namespace: Option<NamespaceRaw>,
     #[serde(default)]
+    include: Vec<String>,
+    #[serde(default)]
     commands: BTreeMap<String, CommandEntry>,
 }
 
@@ -84,6 +86,12 @@ struct NamespaceRaw {
     #[serde(default)]
     prefix: String,
     #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Clone)]
+struct NamespaceScope {
+    prefix: String,
     description: String,
 }
 
@@ -128,14 +136,9 @@ pub(crate) fn load_config() -> LoadedConfig {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // Local project commands.
-    let local_paths = discover_config_files(&cwd);
-    let local_raw = parse_raw_files(&local_paths);
-    let local_default_namespace = select_local_default_namespace_prefix(&local_raw, &cwd);
-    loaded.files.extend(to_file_configs(
-        &local_raw,
-        SourceKind::Local,
-        Some(&local_default_namespace),
-    ));
+    loaded
+        .files
+        .extend(load_local_file_configs(&cwd, SourceKind::Local));
 
     // Global installed directories. No implicit namespace here:
     // files without namespace/group stay as direct global commands.
@@ -144,17 +147,56 @@ pub(crate) fn load_config() -> LoadedConfig {
         if directory == cwd {
             continue;
         }
-        let paths = discover_config_files(&directory);
-        let raw = parse_raw_files(&paths);
-        let default_namespace = select_directory_default_namespace_prefix(&raw);
-        loaded.files.extend(to_file_configs(
-            &raw,
-            SourceKind::Global,
-            default_namespace.as_deref(),
-        ));
+        loaded
+            .files
+            .extend(load_global_file_configs(&directory, SourceKind::Global));
     }
 
     loaded
+}
+
+fn load_local_file_configs(cwd: &Path, source: SourceKind) -> Vec<FileConfig> {
+    load_directory_file_configs(cwd, source, DefaultNamespaceMode::DirectoryFallback)
+}
+
+fn load_global_file_configs(directory: &Path, source: SourceKind) -> Vec<FileConfig> {
+    load_directory_file_configs(directory, source, DefaultNamespaceMode::ExplicitOnly)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DefaultNamespaceMode {
+    DirectoryFallback,
+    ExplicitOnly,
+}
+
+fn load_directory_file_configs(
+    base_dir: &Path,
+    source: SourceKind,
+    namespace_mode: DefaultNamespaceMode,
+) -> Vec<FileConfig> {
+    let root_paths = discover_config_files(base_dir);
+    let root_raw = parse_raw_files(&root_paths);
+    let explicit_namespace = select_directory_explicit_namespace(&root_raw);
+
+    let default_namespace = match namespace_mode {
+        DefaultNamespaceMode::DirectoryFallback => {
+            Some(select_local_default_namespace_prefix(&root_raw, base_dir))
+        }
+        DefaultNamespaceMode::ExplicitOnly => select_directory_default_namespace_prefix(&root_raw),
+    };
+
+    let include_dirs = resolve_include_directories(base_dir, &root_raw);
+    let include_paths = discover_config_files_from_dirs(&include_dirs);
+    let include_raw = parse_raw_files(&include_paths);
+
+    let mut files = to_file_configs(&root_raw, source, default_namespace.as_deref(), None);
+    files.extend(to_file_configs(
+        &include_raw,
+        source,
+        default_namespace.as_deref(),
+        explicit_namespace.as_ref(),
+    ));
+    files
 }
 
 fn parse_raw_files(paths: &[PathBuf]) -> Vec<FireFileRaw> {
@@ -184,32 +226,42 @@ fn to_file_configs(
     raw_files: &[FireFileRaw],
     source: SourceKind,
     default_namespace_prefix: Option<&str>,
+    forced_namespace: Option<&NamespaceScope>,
 ) -> Vec<FileConfig> {
     raw_files
         .iter()
         .map(|raw| FileConfig {
             source,
-            scope: scope_from_raw(raw, default_namespace_prefix),
+            scope: scope_from_raw(raw, default_namespace_prefix, forced_namespace),
             commands: raw.commands.clone(),
         })
         .collect()
 }
 
-fn scope_from_raw(raw: &FireFileRaw, default_namespace_prefix: Option<&str>) -> FileScope {
+fn scope_from_raw(
+    raw: &FireFileRaw,
+    default_namespace_prefix: Option<&str>,
+    forced_namespace: Option<&NamespaceScope>,
+) -> FileScope {
     let group = raw.group.trim();
-    let namespace_prefix = raw
-        .namespace
-        .as_ref()
-        .map(|namespace| namespace.prefix.trim())
-        .filter(|value| !value.is_empty())
-        .or(default_namespace_prefix)
-        .unwrap_or("");
-    let namespace_description = raw
-        .namespace
-        .as_ref()
-        .map(|namespace| namespace.description.trim())
-        .unwrap_or("")
-        .to_string();
+    let (namespace_prefix, namespace_description) = if let Some(namespace) = forced_namespace {
+        (namespace.prefix.as_str(), namespace.description.clone())
+    } else {
+        let prefix = raw
+            .namespace
+            .as_ref()
+            .map(|namespace| namespace.prefix.trim())
+            .filter(|value| !value.is_empty())
+            .or(default_namespace_prefix)
+            .unwrap_or("");
+        let description = raw
+            .namespace
+            .as_ref()
+            .map(|namespace| namespace.description.trim())
+            .unwrap_or("")
+            .to_string();
+        (prefix, description)
+    };
 
     match (namespace_prefix.is_empty(), group.is_empty()) {
         (true, true) => FileScope::Root,
@@ -229,11 +281,18 @@ fn scope_from_raw(raw: &FireFileRaw, default_namespace_prefix: Option<&str>) -> 
 }
 
 fn select_directory_default_namespace_prefix(raw_files: &[FireFileRaw]) -> Option<String> {
+    select_directory_explicit_namespace(raw_files).map(|namespace| namespace.prefix)
+}
+
+fn select_directory_explicit_namespace(raw_files: &[FireFileRaw]) -> Option<NamespaceScope> {
     for raw in raw_files {
         if let Some(namespace) = &raw.namespace {
             let prefix = namespace.prefix.trim();
             if !prefix.is_empty() {
-                return Some(prefix.to_string());
+                return Some(NamespaceScope {
+                    prefix: prefix.to_string(),
+                    description: namespace.description.trim().to_string(),
+                });
             }
         }
     }
@@ -301,14 +360,89 @@ fn discover_config_files(base_dir: impl AsRef<Path>) -> Vec<PathBuf> {
     base_files
 }
 
+fn discover_config_files_from_dirs(directories: &[PathBuf]) -> Vec<PathBuf> {
+    let mut files = BTreeSet::new();
+    for directory in directories {
+        for path in discover_config_files(directory) {
+            files.insert(path);
+        }
+    }
+    files.into_iter().collect()
+}
+
+fn resolve_include_directories(base_dir: &Path, raw_files: &[FireFileRaw]) -> Vec<PathBuf> {
+    let mut directories = BTreeSet::new();
+
+    for raw in raw_files {
+        for include in &raw.include {
+            let trimmed = include.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let Some(relative) = normalize_relative_include_path(trimmed) else {
+                eprintln!("[fire] Invalid include path '{trimmed}'. Skipping.");
+                continue;
+            };
+
+            let path = base_dir.join(relative);
+            if !path.is_dir() {
+                eprintln!(
+                    "[fire] Include directory '{}' does not exist. Skipping.",
+                    path.display()
+                );
+                continue;
+            }
+
+            directories.insert(path);
+        }
+    }
+
+    directories.into_iter().collect()
+}
+
+fn normalize_relative_include_path(path: &str) -> Option<PathBuf> {
+    let raw = Path::new(path);
+    if raw.is_absolute() {
+        return None;
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in raw.components() {
+        match component {
+            Component::Normal(segment) => normalized.push(segment),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        return None;
+    }
+
+    Some(normalized)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("fire-{prefix}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
 
     #[test]
     fn missing_namespace_uses_directory_explicit_prefix() {
         let raw = FireFileRaw::default();
-        let scope = scope_from_raw(&raw, Some("ex"));
+        let scope = scope_from_raw(&raw, Some("ex"), None);
         match scope {
             FileScope::Namespace { namespace, .. } => assert_eq!(namespace, "ex"),
             _ => panic!("expected namespace scope"),
@@ -318,7 +452,7 @@ mod tests {
     #[test]
     fn missing_namespace_without_directory_prefix_stays_root() {
         let raw = FireFileRaw::default();
-        let scope = scope_from_raw(&raw, None);
+        let scope = scope_from_raw(&raw, None, None);
         match scope {
             FileScope::Root => {}
             _ => panic!("expected root scope"),
@@ -334,11 +468,13 @@ mod tests {
                     prefix: "ex".to_string(),
                     description: String::new(),
                 }),
+                include: Vec::new(),
                 commands: BTreeMap::new(),
             },
             FireFileRaw {
                 group: String::new(),
                 namespace: None,
+                include: Vec::new(),
                 commands: BTreeMap::new(),
             },
         ];
@@ -352,5 +488,157 @@ mod tests {
         let cwd = PathBuf::from("/tmp/My Project");
         let selected = select_local_default_namespace_prefix(&files, &cwd);
         assert_eq!(selected, "my-project".to_string());
+    }
+
+    #[test]
+    fn included_file_uses_forced_root_namespace() {
+        let raw = FireFileRaw {
+            group: "backend".to_string(),
+            namespace: Some(NamespaceRaw {
+                prefix: "custom".to_string(),
+                description: "Custom".to_string(),
+            }),
+            include: Vec::new(),
+            commands: BTreeMap::new(),
+        };
+        let forced = NamespaceScope {
+            prefix: "ex".to_string(),
+            description: "Example".to_string(),
+        };
+
+        let scope = scope_from_raw(&raw, None, Some(&forced));
+        match scope {
+            FileScope::NamespaceGroup {
+                namespace,
+                namespace_description,
+                group,
+            } => {
+                assert_eq!(namespace, "ex");
+                assert_eq!(namespace_description, "Example");
+                assert_eq!(group, "backend");
+            }
+            _ => panic!("expected namespace group scope"),
+        }
+    }
+
+    #[test]
+    fn include_paths_must_be_relative_and_non_parent() {
+        assert!(normalize_relative_include_path("samples/").is_some());
+        assert!(normalize_relative_include_path("./samples").is_some());
+        assert!(normalize_relative_include_path("../samples").is_none());
+        assert!(normalize_relative_include_path("/abs").is_none());
+        assert!(normalize_relative_include_path("").is_none());
+    }
+
+    #[test]
+    fn local_load_includes_directories_without_recursion_and_inherits_namespace() {
+        let root = unique_temp_dir("local-include");
+        let samples_dir = root.join("samples");
+        let nested_dir = samples_dir.join("nested");
+        fs::create_dir_all(&nested_dir).expect("create include dirs");
+
+        fs::write(
+            root.join("fire.yml"),
+            r#"
+namespace:
+  prefix: ex
+  description: Example
+include:
+  - samples/
+commands:
+  run:
+    exec: npm run
+"#,
+        )
+        .expect("write root file");
+
+        fs::write(
+            samples_dir.join("deploy.fire.yml"),
+            r#"
+group: backend
+namespace:
+  prefix: ignored
+  description: Ignored
+commands:
+  build:
+    exec: npm run build
+"#,
+        )
+        .expect("write included file");
+
+        fs::write(
+            nested_dir.join("ignored.fire.yml"),
+            r#"
+commands:
+  deep:
+    exec: echo deep
+"#,
+        )
+        .expect("write nested file");
+
+        let files = load_local_file_configs(&root, SourceKind::Local);
+        let has_build = files.iter().any(|file| file.commands.contains_key("build"));
+        let has_deep = files.iter().any(|file| file.commands.contains_key("deep"));
+        assert!(has_build);
+        assert!(!has_deep);
+
+        let backend_scope = files
+            .iter()
+            .find(|file| file.commands.contains_key("build"))
+            .map(|file| file.scope.clone())
+            .expect("backend scope");
+
+        match backend_scope {
+            FileScope::NamespaceGroup {
+                namespace,
+                namespace_description,
+                group,
+            } => {
+                assert_eq!(namespace, "ex");
+                assert_eq!(namespace_description, "Example");
+                assert_eq!(group, "backend");
+            }
+            _ => panic!("expected namespace group"),
+        }
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn global_load_includes_directories_without_extra_install_step() {
+        let root = unique_temp_dir("global-include");
+        let samples_dir = root.join("samples");
+        fs::create_dir_all(&samples_dir).expect("create include dirs");
+
+        fs::write(
+            root.join("fire.yml"),
+            r#"
+include:
+  - samples/
+commands:
+  root:
+    exec: echo root
+"#,
+        )
+        .expect("write root file");
+
+        fs::write(
+            samples_dir.join("test.fire.yml"),
+            r#"
+commands:
+  test:
+    exec: echo test
+"#,
+        )
+        .expect("write included file");
+
+        let files = load_global_file_configs(&root, SourceKind::Global);
+        let has_root = files.iter().any(|file| file.commands.contains_key("root"));
+        let has_test = files.iter().any(|file| file.commands.contains_key("test"));
+
+        assert!(has_root);
+        assert!(has_test);
+
+        fs::remove_dir_all(root).expect("cleanup");
     }
 }

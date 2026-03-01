@@ -29,7 +29,7 @@
     },
     "include": {
       "type": "array",
-      "description": "List of additional Fire config files to merge/include.",
+      "description": "List of additional local directories (relative to current directory) where Fire should load fire config files. Search is direct-level only (non-recursive).",
       "items": {
         "type": "string"
       }

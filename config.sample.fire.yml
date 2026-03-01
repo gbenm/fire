@@ -26,8 +26,7 @@ runtimes:
       - scripts/helpers/*.py
 
 include:
-  - common.fire.yml
-  - database.fire.yml
+  - samples/
 
 x-arg-config: &arg-config
   # Use {n} to represent the argument index: {{n}} -> {1}, {2}, ... ; #{n} -> #1, #2, ...

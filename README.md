@@ -15,6 +15,12 @@ Files are merged in this order:
 
 If the same command name appears more than once, the last loaded definition wins.
 
+Optional local include directories:
+- Define `include` in a root fire file to extend local loading into specific subdirectories.
+- Paths must be relative to the current directory (`samples/`, `tools/`), and Fire only scans each included directory root (non-recursive).
+- Included files follow the same scope rules (`namespace`, `group`, commands). If a root file defines `namespace.prefix`, included files inherit that namespace.
+- In globally installed directories, `include` is also honored using the installed directory as base path.
+
 Example:
 
 ```yaml
