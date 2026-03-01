@@ -63,6 +63,8 @@ pub(crate) struct CommandSpec {
     #[serde(default)]
     pub(crate) on_unused_args: String,
     #[serde(default)]
+    pub(crate) compute: BTreeMap<String, String>,
+    #[serde(default)]
     pub(crate) macros: BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) dir: String,

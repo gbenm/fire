@@ -219,7 +219,7 @@
         },
         "compute": {
           "type": "object",
-          "description": "Computed variables map (name -> runtime expression), evaluated before execution.",
+          "description": "Computed variables map (name -> expression), evaluated before execution. If expression uses a known runtime prefix (<runtime>:<code>) it is evaluated in that runtime; otherwise it is executed as a shell command.",
           "additionalProperties": {
             "type": "string"
           }

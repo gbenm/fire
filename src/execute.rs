@@ -16,8 +16,11 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     let context = build_execution_context(&resolved);
     ensure_working_directory(&context.dir);
 
+    let original_args = resolved.remaining_args.to_vec();
+    let computed_args = compute_arguments(&resolved, &context, &original_args);
+
     if let Some(raw_evals) = resolved.command.evaluation_expressions() {
-        run_evals_with_runtime(&resolved, &context, &raw_evals);
+        run_evals_with_runtime(&resolved, &context, &raw_evals, &computed_args);
     }
 
     let Some(raw_commands_to_run) = resolved.command.execution_commands() else {
@@ -48,7 +51,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
         render_runtime_string(
             value,
             &context,
-            resolved.remaining_args,
+            &computed_args,
             false,
             RenderMode::Shell,
             &mut ignored_stats,
@@ -58,7 +61,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
         render_runtime_string(
             value,
             &context,
-            resolved.remaining_args,
+            &computed_args,
             false,
             RenderMode::Shell,
             &mut ignored_stats,
@@ -68,7 +71,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
         render_runtime_string(
             value,
             &context,
-            resolved.remaining_args,
+            &computed_args,
             false,
             RenderMode::Shell,
             &mut ignored_stats,
@@ -87,7 +90,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
             let rendered_before = render_runtime_string(
                 before,
                 &context,
-                resolved.remaining_args,
+                &computed_args,
                 false,
                 RenderMode::Shell,
                 &mut ignored_stats,
@@ -107,7 +110,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
             render_runtime_string(
                 command,
                 &context,
-                resolved.remaining_args,
+                &computed_args,
                 true,
                 RenderMode::Shell,
                 &mut render_stats,
@@ -115,7 +118,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
         })
         .collect::<Vec<_>>();
 
-    let tail_args = unresolved_args_for_tail(&context, resolved.remaining_args, &render_stats);
+    let tail_args = unresolved_args_for_tail(&context, &computed_args, &render_stats);
     let commands_to_run = commands_with_remaining_args(&rendered_commands_to_run, &tail_args);
 
     let mut exit_code = 0;
@@ -176,6 +179,7 @@ fn run_evals_with_runtime(
     resolved: &ResolvedCommand<'_>,
     context: &ExecutionContext,
     raw_evals: &[String],
+    args: &[String],
 ) -> ! {
     let mut render_stats = RenderStats::default();
     let mut parsed = Vec::new();
@@ -184,7 +188,7 @@ fn run_evals_with_runtime(
         let rendered = render_runtime_string(
             raw_eval,
             context,
-            resolved.remaining_args,
+            args,
             true,
             RenderMode::Eval,
             &mut render_stats,
@@ -193,74 +197,12 @@ fn run_evals_with_runtime(
         parsed.push((runtime_key.to_string(), code.to_string()));
     }
 
-    enforce_unused_args_policy(context, resolved.remaining_args, &render_stats);
+    enforce_unused_args_policy(context, args, &render_stats);
 
     let mut engines: BTreeMap<String, RuntimeEngine> = BTreeMap::new();
     for (runtime_key, code) in &parsed {
         if !engines.contains_key(runtime_key) {
-            let runtime_config = resolved.runtimes.get(runtime_key).unwrap_or_else(|| {
-                eprintln!("[fire] Runtime `{runtime_key}` is not defined in `runtimes`.");
-                process::exit(1);
-            });
-            let runtime = resolve_runtime_definition(runtime_key, runtime_config);
-            let mut ignored_stats = RenderStats::default();
-            let rendered_check = runtime.check.as_deref().map(|value| {
-                render_runtime_string(
-                    value,
-                    context,
-                    resolved.remaining_args,
-                    false,
-                    RenderMode::Shell,
-                    &mut ignored_stats,
-                )
-            });
-            let rendered_runner = render_runtime_string(
-                &runtime.runner,
-                context,
-                resolved.remaining_args,
-                false,
-                RenderMode::Shell,
-                &mut ignored_stats,
-            );
-            let rendered_fallback = runtime.fallback_runner.as_deref().map(|value| {
-                render_runtime_string(
-                    value,
-                    context,
-                    resolved.remaining_args,
-                    false,
-                    RenderMode::Shell,
-                    &mut ignored_stats,
-                )
-            });
-
-            let selected = select_runner_mode(
-                &context.dir,
-                rendered_check.as_deref(),
-                Some(rendered_runner.as_str()),
-                rendered_fallback.as_deref(),
-            );
-
-            let runtime_runner = match selected {
-                RunnerMode::Runner(value) | RunnerMode::Fallback(value) => value,
-                RunnerMode::Direct => {
-                    eprintln!("[fire] Runtime `{runtime_key}` has no valid runner.");
-                    process::exit(1);
-                }
-            };
-
-            let normalized_runner = normalize_runner_for_piped_stdin(&runtime_runner);
-            let launch = format!(
-                "{} {}",
-                normalized_runner,
-                runtime_bootstrap_invocation(&runtime.sdk)
-            );
-            let mut engine = RuntimeEngine::start(&launch, &context.dir);
-
-            let library_paths = resolve_runtime_library_paths(&context.dir, &runtime.paths);
-            for path in &library_paths {
-                engine.load(path);
-            }
-
+            let engine = start_runtime_engine_for_key(runtime_key, resolved, context, args);
             engines.insert(runtime_key.clone(), engine);
         }
 
@@ -276,6 +218,217 @@ fn run_evals_with_runtime(
     }
 
     process::exit(0);
+}
+
+fn start_runtime_engine_for_key(
+    runtime_key: &str,
+    resolved: &ResolvedCommand<'_>,
+    context: &ExecutionContext,
+    args: &[String],
+) -> RuntimeEngine {
+    let runtime_config = resolved.runtimes.get(runtime_key).unwrap_or_else(|| {
+        eprintln!("[fire] Runtime `{runtime_key}` is not defined in `runtimes`.");
+        process::exit(1);
+    });
+    let runtime = resolve_runtime_definition(runtime_key, runtime_config);
+
+    let mut ignored_stats = RenderStats::default();
+    let rendered_check = runtime.check.as_deref().map(|value| {
+        render_runtime_string(
+            value,
+            context,
+            args,
+            false,
+            RenderMode::Shell,
+            &mut ignored_stats,
+        )
+    });
+    let rendered_runner = render_runtime_string(
+        &runtime.runner,
+        context,
+        args,
+        false,
+        RenderMode::Shell,
+        &mut ignored_stats,
+    );
+    let rendered_fallback = runtime.fallback_runner.as_deref().map(|value| {
+        render_runtime_string(
+            value,
+            context,
+            args,
+            false,
+            RenderMode::Shell,
+            &mut ignored_stats,
+        )
+    });
+
+    let selected = select_runner_mode(
+        &context.dir,
+        rendered_check.as_deref(),
+        Some(rendered_runner.as_str()),
+        rendered_fallback.as_deref(),
+    );
+
+    let runtime_runner = match selected {
+        RunnerMode::Runner(value) | RunnerMode::Fallback(value) => value,
+        RunnerMode::Direct => {
+            eprintln!("[fire] Runtime `{runtime_key}` has no valid runner.");
+            process::exit(1);
+        }
+    };
+
+    let normalized_runner = normalize_runner_for_piped_stdin(&runtime_runner);
+    let launch = format!(
+        "{} {}",
+        normalized_runner,
+        runtime_bootstrap_invocation(&runtime.sdk)
+    );
+    let mut engine = RuntimeEngine::start(&launch, &context.dir);
+
+    let library_paths = resolve_runtime_library_paths(&context.dir, &runtime.paths);
+    for path in &library_paths {
+        engine.load(path);
+    }
+
+    engine
+}
+
+fn compute_arguments(
+    resolved: &ResolvedCommand<'_>,
+    context: &ExecutionContext,
+    original_args: &[String],
+) -> Vec<String> {
+    if context.compute.is_empty() {
+        return original_args.to_vec();
+    }
+
+    let mut engines: BTreeMap<String, RuntimeEngine> = BTreeMap::new();
+    let mut args = original_args.to_vec();
+
+    let mut targets = context
+        .compute
+        .iter()
+        .filter_map(|(key, expr)| parse_compute_arg_index(key).map(|index| (index, expr)))
+        .collect::<Vec<_>>();
+
+    targets.sort_by_key(|(index, _)| *index);
+
+    for (index, expr) in targets {
+        if index >= args.len() {
+            continue;
+        }
+
+        match compute_expression_value(resolved, context, original_args, &mut engines, expr) {
+            Ok(value) => args[index] = value,
+            Err(err) => {
+                close_runtime_engines(engines);
+                eprintln!("[fire] {err}");
+                process::exit(1);
+            }
+        }
+    }
+
+    close_runtime_engines(engines);
+    args
+}
+
+fn compute_expression_value(
+    resolved: &ResolvedCommand<'_>,
+    context: &ExecutionContext,
+    original_args: &[String],
+    engines: &mut BTreeMap<String, RuntimeEngine>,
+    expr: &str,
+) -> Result<String, String> {
+    match parse_compute_expression(expr, resolved.runtimes) {
+        ComputeExpression::Runtime { key, code } => {
+            let rendered_code = render_runtime_string(
+                code,
+                context,
+                original_args,
+                false,
+                RenderMode::Eval,
+                &mut RenderStats::default(),
+            );
+
+            let engine = if let Some(engine) = engines.get_mut(key) {
+                engine
+            } else {
+                let engine = start_runtime_engine_for_key(key, resolved, context, original_args);
+                engines.insert(key.to_string(), engine);
+                engines.get_mut(key).unwrap()
+            };
+
+            engine
+                .eval_capture(&rendered_code)
+                .map(trim_trailing_newlines)
+                .map_err(|err| format!("Runtime `{key}` compute failed: {err}"))
+        }
+        ComputeExpression::Shell(command) => {
+            let rendered_command = render_runtime_string(
+                command,
+                context,
+                original_args,
+                false,
+                RenderMode::Shell,
+                &mut RenderStats::default(),
+            );
+            run_shell_command_capture(&rendered_command, &context.dir)
+                .map(trim_trailing_newlines)
+        }
+    }
+}
+
+fn parse_compute_arg_index(key: &str) -> Option<usize> {
+    let lowered = key.trim().to_ascii_lowercase();
+    let suffix = lowered.strip_prefix("arg")?;
+    let index = suffix.parse::<usize>().ok()?;
+    index.checked_sub(1)
+}
+
+enum ComputeExpression<'a> {
+    Runtime { key: &'a str, code: &'a str },
+    Shell(&'a str),
+}
+
+fn parse_compute_expression<'a>(
+    expr: &'a str,
+    runtimes: &BTreeMap<String, RuntimeConfig>,
+) -> ComputeExpression<'a> {
+    let trimmed = expr.trim();
+    if let Some(index) = trimmed.find(':') {
+        let prefix = &trimmed[..index];
+        if !prefix.is_empty() && !prefix.chars().any(char::is_whitespace) {
+            let code = trimmed[index + 1..].trim();
+            if matches!(prefix, "py" | "python" | "ts" | "js" | "node" | "deno")
+                && !runtimes.contains_key(prefix)
+            {
+                eprintln!("[fire] Runtime `{prefix}` is not defined in `runtimes`.");
+                process::exit(1);
+            }
+            if runtimes.contains_key(prefix) {
+                if code.is_empty() {
+                    eprintln!("[fire] Invalid compute expression `{expr}`. Runtime code is required.");
+                    process::exit(1);
+                }
+                return ComputeExpression::Runtime { key: prefix, code };
+            }
+        }
+    }
+
+    ComputeExpression::Shell(trimmed)
+}
+
+fn close_runtime_engines(engines: BTreeMap<String, RuntimeEngine>) {
+    for (_, mut engine) in engines.into_iter() {
+        engine.close();
+    }
+}
+
+fn trim_trailing_newlines(mut value: String) -> String {
+    while value.ends_with(['\n', '\r']) {
+        value.pop();
+    }
+    value
 }
 
 impl RuntimeEngine {
@@ -351,6 +504,25 @@ impl RuntimeEngine {
                 process::exit(1);
             }
         }
+    }
+
+    fn eval_capture(&mut self, code: &str) -> Result<String, String> {
+        let id = self.next_request_id();
+        let request = RuntimeRequest {
+            op: "eval",
+            id: id.clone(),
+            path: None,
+            code: Some(code),
+        };
+
+        run_runtime_request(&mut self.session, &request)
+            .map(|lines| lines.join("\n"))
+            .map(|mut output| {
+                while output.ends_with(['\n', '\r']) {
+                    output.pop();
+                }
+                output
+            })
     }
 
     fn close(&mut self) {
@@ -804,6 +976,7 @@ struct ExecutionContext {
     placeholder: Option<String>,
     on_unused_args: Option<UnusedArgsMode>,
     macros: BTreeMap<String, String>,
+    compute: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -863,6 +1036,11 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
         }
         if let Some(on_unused_args) = non_empty(&spec.on_unused_args) {
             context.on_unused_args = Some(parse_on_unused_args_mode(on_unused_args));
+        }
+        if !spec.compute.is_empty() {
+            for (key, value) in &spec.compute {
+                context.compute.insert(key.clone(), value.clone());
+            }
         }
         for (macro_key, macro_value) in &spec.macros {
             context
@@ -1390,6 +1568,29 @@ fn run_shell_command(command: &str, dir: &Path) -> process::ExitStatus {
         })
 }
 
+fn run_shell_command_capture(command: &str, dir: &Path) -> Result<String, String> {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(dir)
+        .output()
+        .map_err(|err| format!("Failed to execute `{command}`: {err}"))?;
+
+    if !output.status.success() {
+        let code = output.status.code().unwrap_or(1);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.trim().is_empty() {
+            return Err(format!("Compute command `{command}` failed with exit code {code}"));
+        }
+        return Err(format!(
+            "Compute command `{command}` failed with exit code {code}: {}",
+            stderr.trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn run_shell_command_silent(command: &str, dir: &Path) -> process::ExitStatus {
     Command::new("sh")
         .arg("-c")
@@ -1505,6 +1706,7 @@ fn ensure_non_tty_for_docker_compose_exec(tokens: &mut Vec<String>) {
 mod tests {
     use super::*;
     use crate::config::{CommandEntry, CommandSpec};
+    use std::path::Path;
 
     #[test]
     fn escape_single_quote_in_shell_argument() {
@@ -1831,5 +2033,80 @@ mod tests {
         };
         let args = vec!["one".to_string(), "two".to_string()];
         assert!(unresolved_args_for_tail(&context, &args, &stats).is_empty());
+    }
+
+    #[test]
+    fn compute_replaces_arguments_with_shell_results() {
+        let mut context = ExecutionContext::default();
+        context.dir = std::env::current_dir().expect("cwd");
+        context
+            .compute
+            .insert("arg1".to_string(), "printf %s {2}".to_string());
+        context
+            .compute
+            .insert("arg2".to_string(), "printf %s {1}".to_string());
+
+        let runtimes = BTreeMap::new();
+        let command = CommandEntry::Spec(CommandSpec::default());
+        let original = vec!["first".to_string(), "second value".to_string()];
+        let resolved = ResolvedCommand {
+            project_dir: Path::new("."),
+            runtimes: &runtimes,
+            command: &command,
+            command_chain: vec![&command],
+            consumed: 0,
+            remaining_args: &original,
+        };
+
+        let computed = compute_arguments(&resolved, &context, &original);
+        assert_eq!(computed, vec!["second value".to_string(), "first".to_string()]);
+    }
+
+    #[test]
+    fn compute_skips_missing_argument_indexes() {
+        let mut context = ExecutionContext::default();
+        context.dir = std::env::current_dir().expect("cwd");
+        context
+            .compute
+            .insert("arg3".to_string(), "echo should-be-ignored".to_string());
+
+        let runtimes = BTreeMap::new();
+        let command = CommandEntry::Spec(CommandSpec::default());
+        let original = vec!["one".to_string(), "two".to_string()];
+        let resolved = ResolvedCommand {
+            project_dir: Path::new("."),
+            runtimes: &runtimes,
+            command: &command,
+            command_chain: vec![&command],
+            consumed: 0,
+            remaining_args: &original,
+        };
+
+        let computed = compute_arguments(&resolved, &context, &original);
+        assert_eq!(computed, original);
+    }
+
+    #[test]
+    fn compute_trims_trailing_newlines() {
+        let mut context = ExecutionContext::default();
+        context.dir = std::env::current_dir().expect("cwd");
+        context
+            .compute
+            .insert("arg1".to_string(), "echo value".to_string());
+
+        let runtimes = BTreeMap::new();
+        let command = CommandEntry::Spec(CommandSpec::default());
+        let original = vec!["placeholder".to_string()];
+        let resolved = ResolvedCommand {
+            project_dir: Path::new("."),
+            runtimes: &runtimes,
+            command: &command,
+            command_chain: vec![&command],
+            consumed: 0,
+            remaining_args: &original,
+        };
+
+        let computed = compute_arguments(&resolved, &context, &original);
+        assert_eq!(computed, vec!["value".to_string()]);
     }
 }
