@@ -73,7 +73,7 @@ commands:
     description: |
       y si agrego descripción a este?
       vamos
-    exec: npm run --key ${SECRET_KEY:-default_value}
+    exec: npm run
 
   run2:
     before: docker compose ps -q front | grep -q . || docker compose up -d front

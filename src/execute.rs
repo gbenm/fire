@@ -792,43 +792,41 @@ fn enforce_unused_args_policy(
         return;
     }
 
-    let placeholder_configured = context.placeholder.is_some();
-    let policy_configured = context.on_unused_args.is_some();
-    if !placeholder_configured && !policy_configured && !stats.had_placeholders {
+    let mode = context.on_unused_args.unwrap_or(UnusedArgsMode::Ignore);
+    if matches!(mode, UnusedArgsMode::Ignore) {
         return;
     }
 
-    let unused_args = remaining_args
+    let unused_indexes = remaining_args
         .iter()
         .enumerate()
-        .filter_map(|(index, arg)| {
+        .filter_map(|(index, _)| {
             if stats.used_arg_indexes.contains(&index) {
                 None
             } else {
-                Some(arg.clone())
+                Some(index + 1)
             }
         })
         .collect::<Vec<_>>();
 
-    let mode = context.on_unused_args.unwrap_or(UnusedArgsMode::Error);
+    if unused_indexes.is_empty() {
+        return;
+    }
+
     match mode {
         UnusedArgsMode::Ignore => {}
         UnusedArgsMode::Warn => {
-            if !unused_args.is_empty() {
-                eprintln!(
-                    "[fire] Warning: unused args ignored: {}",
-                    join_shell_args(&unused_args)
-                );
-            }
+            eprintln!(
+                "[fire] Warning: unused arguments detected: {:?}",
+                unused_indexes
+            );
         }
         UnusedArgsMode::Error => {
-            if !unused_args.is_empty() {
-                eprintln!(
-                    "[fire] Unused args are not allowed: {}",
-                    join_shell_args(&unused_args)
-                );
-                process::exit(1);
-            }
+            eprintln!(
+                "[fire] Error: unused arguments detected: {:?}",
+                unused_indexes
+            );
+            process::exit(1);
         }
     }
 }
@@ -1076,13 +1074,12 @@ fn unresolved_args_for_tail(
     }
 
     let placeholder_configured = context.placeholder.is_some();
-    let policy_configured = context.on_unused_args.is_some();
 
-    if !placeholder_configured && !policy_configured && !stats.had_placeholders {
+    if !placeholder_configured && !stats.had_placeholders {
         return remaining_args.to_vec();
     }
 
-    let unused_args = remaining_args
+    remaining_args
         .iter()
         .enumerate()
         .filter_map(|(index, arg)| {
@@ -1092,31 +1089,7 @@ fn unresolved_args_for_tail(
                 Some(arg.clone())
             }
         })
-        .collect::<Vec<_>>();
-
-    let mode = context.on_unused_args.unwrap_or(UnusedArgsMode::Error);
-    match mode {
-        UnusedArgsMode::Ignore => Vec::new(),
-        UnusedArgsMode::Warn => {
-            if !unused_args.is_empty() {
-                eprintln!(
-                    "[fire] Warning: unused args ignored: {}",
-                    join_shell_args(&unused_args)
-                );
-            }
-            Vec::new()
-        }
-        UnusedArgsMode::Error => {
-            if !unused_args.is_empty() {
-                eprintln!(
-                    "[fire] Unused args are not allowed: {}",
-                    join_shell_args(&unused_args)
-                );
-                process::exit(1);
-            }
-            Vec::new()
-        }
-    }
+        .collect::<Vec<_>>()
 }
 
 fn render_runtime_string(
@@ -2012,27 +1985,72 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_args_respects_ignore_policy() {
-        let context = ExecutionContext {
-            on_unused_args: Some(UnusedArgsMode::Ignore),
-            ..ExecutionContext::default()
-        };
-        let stats = RenderStats::default();
-        let args = vec!["one".to_string()];
-        assert!(unresolved_args_for_tail(&context, &args, &stats).is_empty());
-    }
-
-    #[test]
-    fn unresolved_args_uses_consumed_indexes() {
+    fn unresolved_args_respects_consumed_indexes_without_policy_effect() {
         let mut stats = RenderStats::default();
         stats.had_placeholders = true;
         stats.used_arg_indexes.insert(0);
         let context = ExecutionContext {
-            on_unused_args: Some(UnusedArgsMode::Ignore),
+            on_unused_args: Some(UnusedArgsMode::Error),
             ..ExecutionContext::default()
         };
         let args = vec!["one".to_string(), "two".to_string()];
-        assert!(unresolved_args_for_tail(&context, &args, &stats).is_empty());
+        assert_eq!(
+            unresolved_args_for_tail(&context, &args, &stats),
+            vec!["two".to_string()]
+        );
+    }
+
+    #[test]
+    fn unused_args_policy_defaults_to_ignore_for_eval() {
+        let context = ExecutionContext::default();
+        let stats = RenderStats::default();
+        let args = vec!["one".to_string(), "two".to_string()];
+        enforce_unused_args_policy(&context, &args, &stats);
+    }
+
+    #[test]
+    fn unused_args_policy_warns_without_stopping_eval() {
+        let context = ExecutionContext {
+            on_unused_args: Some(UnusedArgsMode::Warn),
+            ..ExecutionContext::default()
+        };
+        let mut stats = RenderStats::default();
+        stats.had_placeholders = true;
+        stats.used_arg_indexes.insert(0);
+        let args = vec!["one".to_string(), "two".to_string()];
+        enforce_unused_args_policy(&context, &args, &stats);
+    }
+
+    #[test]
+    fn unused_args_detection_counts_dynamic_spread_in_eval() {
+        let mut context = ExecutionContext::default();
+        context.placeholder = Some("{{n}}".to_string());
+        let mut stats = RenderStats::default();
+        let args = vec!["first".to_string(), "second".to_string(), "third".to_string()];
+        render_runtime_string(
+            "py:print({1}, ...{{n}})",
+            &context,
+            &args,
+            true,
+            RenderMode::Eval,
+            &mut stats,
+        );
+
+        let unused = args
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| {
+                if stats.used_arg_indexes.contains(&index) {
+                    None
+                } else {
+                    Some(value.clone())
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert!(unused.is_empty());
+        assert!(stats.had_placeholders);
+        assert_eq!(stats.used_arg_indexes.len(), 3);
     }
 
     #[test]
