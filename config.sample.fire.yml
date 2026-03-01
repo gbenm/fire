@@ -164,6 +164,3 @@ commands:
       - "CMD echo {2} is a beautiful place!"
       - "CMD echo and who else is with you? ...{{n}}"
       - "CMD echo and who else is with you? [{{n}}]"
-
-  web:
-    delegate: npm-run # built-in delegate that uses package.json scripts for autocompletion

@@ -184,10 +184,6 @@
           "type": "string",
           "description": "Short user-facing description shown in listings and completion."
         },
-        "delegate": {
-          "type": "string",
-          "description": "Built-in delegate used to generate dynamic subcommands (for example: npm-run)."
-        },
         "placeholder": {
           "type": "string",
           "description": "Placeholder template for this command (same semantics as `x-arg-config.placeholder`)."
@@ -240,11 +236,6 @@
         {
           "required": [
             "eval"
-          ]
-        },
-        {
-          "required": [
-            "delegate"
           ]
         },
         {
