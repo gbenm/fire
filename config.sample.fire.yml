@@ -35,10 +35,10 @@ include:
   - samples/
 
 x-arg-config: &arg-config
-  # Use {n} to represent the argument index: {{n}} -> {1}, {2}, ... ; #{n} -> #1, #2, ...
+  # Define the placeholder pattern once. Only this pattern is honored—no implicit defaults.
+  # {{n}} -> {1}, {2}, ... ; @{n} -> @1, @2, ... ; spreads become ...<placeholder> and [<placeholder>].
   # The ...<placeholder> and [<placeholder>] forms must stay literal; they expand to arrays (string[]).
-  # Examples: ${n} -> ...${n} or [${n}]; {{n}} -> ...{{n}} or [{{n}}].
-  placeholder: "{{n}}" # replace ${n} with the index; you can also use $1, $2, $3, ...
+  placeholder: "{{n}}"
   on_unused_args: ignore # default is error; ignore skips, warn logs, error fails
 
 # Example: running `fire hello other args` executes `echo hello world other args...`
@@ -49,10 +49,10 @@ commands:
     commands:
       hello:
         description: "say twice"
-        placeholder: "@{n}"
+        placeholder: "{{n}}"
         exec:
           - echo hello world
-          - echo again $1
+          - echo again {1}
       world:
         description: "say world twice"
         exec:
@@ -113,6 +113,7 @@ commands:
     eval: js:getCurrentTimestamp()
 
   vars:
+    <<: *arg-config
     compute:
       arg1: ts:getServiceNameById("{1}")
     macros:
@@ -165,3 +166,7 @@ commands:
       - "CMD echo {2} is a beautiful place!"
       - "CMD echo and who else is with you? ...{{n}}"
       - "CMD echo and who else is with you? [{{n}}]"
+
+  list-args:
+    placeholder: "@{n}"
+    exec: "echo argument 1: @1, argument @2"

@@ -35,7 +35,7 @@ Fields:
 ## `eval` expressions
 Syntax: `<runtimeKey>:<code>`
 - Runtime key must match `runtimes` (e.g., `py`, `ts`, `js`).
-- Placeholders inside code are replaced before execution (`{1}`, `...{{n}}`, `[{{n}}]`).
+- Placeholders inside code are replaced **only if** the command defines `placeholder`; the pattern controls all forms (`{1}`, `...{{n}}`, `[{{n}}]`).
 - `on_unused_args` applies **only** here; default is `ignore`.
 
 Examples:

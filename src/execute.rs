@@ -1129,6 +1129,33 @@ fn render_runtime_string(
     output
 }
 
+fn split_placeholder_pattern(template: &str) -> Option<(&str, &str)> {
+    let trimmed = template.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(idx) = trimmed.find("{n}") {
+        let prefix = &trimmed[..idx];
+        let suffix = &trimmed[idx + 3..];
+        if prefix.is_empty() && suffix.is_empty() {
+            return None;
+        }
+        return Some((prefix, suffix));
+    }
+
+    if let Some(idx) = trimmed.find('n') {
+        let prefix = &trimmed[..idx];
+        let suffix = &trimmed[idx + 1..];
+        if prefix.is_empty() && suffix.is_empty() {
+            return None;
+        }
+        return Some((prefix, suffix));
+    }
+
+    None
+}
+
 fn apply_macros(value: &str, macros_map: &BTreeMap<String, String>) -> String {
     if macros_map.is_empty() {
         return value.to_string();
@@ -1165,17 +1192,7 @@ fn placeholder_templates(custom: Option<&str>) -> Vec<String> {
             templates.push(custom.to_string());
         }
     }
-    templates.push("{n}".to_string());
-    templates.push("{{n}}".to_string());
-    templates.push("$n".to_string());
-
-    let mut seen = BTreeSet::new();
-    let mut unique = templates
-        .into_iter()
-        .filter(|template| seen.insert(template.clone()))
-        .collect::<Vec<_>>();
-    unique.sort_by(|left, right| right.len().cmp(&left.len()));
-    unique
+    templates
 }
 
 fn replace_placeholder_template(
@@ -1186,16 +1203,9 @@ fn replace_placeholder_template(
     mode: RenderMode,
     stats: &mut RenderStats,
 ) -> String {
-    let Some(index_marker) = template.find('n') else {
+    let Some((prefix, suffix)) = split_placeholder_pattern(template) else {
         return input.to_string();
     };
-
-    let prefix = &template[..index_marker];
-    let suffix = &template[index_marker + 1..];
-
-    if prefix.is_empty() {
-        return input.to_string();
-    }
 
     let mut output = String::new();
     let mut cursor = 0;
@@ -1786,10 +1796,11 @@ mod tests {
 
     #[test]
     fn placeholders_replace_indexed_args_with_shell_escape() {
-        let context = ExecutionContext::default();
+        let mut context = ExecutionContext::default();
+        context.placeholder = Some("{{n}}".to_string());
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
-            "echo {1} {{2}} $3",
+            "echo {1} {2} {3}",
             &context,
             &[
                 "hello".to_string(),
@@ -1824,9 +1835,10 @@ mod tests {
     #[test]
     fn macros_expand_before_placeholder_replacement() {
         let mut context = ExecutionContext::default();
+        context.placeholder = Some("{{n}}".to_string());
         context
             .macros
-            .insert("{{dynamic}}".to_string(), "docker exec {{1}}".to_string());
+            .insert("{{dynamic}}".to_string(), "docker exec {1}".to_string());
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "{{dynamic}} echo hi",
@@ -1845,7 +1857,7 @@ mod tests {
         context.placeholder = Some("{{n}}".to_string());
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
-            "echo {{1}} ...{{n}}",
+            "echo {1} ...{{n}}",
             &context,
             &[
                 "first".to_string(),
@@ -1883,7 +1895,7 @@ mod tests {
         context.placeholder = Some("{{n}}".to_string());
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
-            "echo {{2}} ...{{n}}",
+            "echo {2} ...{{n}}",
             &context,
             &[
                 "first".to_string(),
@@ -1917,7 +1929,8 @@ mod tests {
 
     #[test]
     fn eval_placeholder_replaces_without_shell_escaping() {
-        let context = ExecutionContext::default();
+        let mut context = ExecutionContext::default();
+        context.placeholder = Some("{{n}}".to_string());
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "sayHello(\"{1}\", {2})",
@@ -2057,6 +2070,7 @@ mod tests {
     fn compute_replaces_arguments_with_shell_results() {
         let mut context = ExecutionContext::default();
         context.dir = std::env::current_dir().expect("cwd");
+        context.placeholder = Some("{{n}}".to_string());
         context
             .compute
             .insert("arg1".to_string(), "printf %s {2}".to_string());
@@ -2084,6 +2098,7 @@ mod tests {
     fn compute_skips_missing_argument_indexes() {
         let mut context = ExecutionContext::default();
         context.dir = std::env::current_dir().expect("cwd");
+        context.placeholder = Some("{{n}}".to_string());
         context
             .compute
             .insert("arg3".to_string(), "echo should-be-ignored".to_string());
@@ -2108,6 +2123,7 @@ mod tests {
     fn compute_trims_trailing_newlines() {
         let mut context = ExecutionContext::default();
         context.dir = std::env::current_dir().expect("cwd");
+        context.placeholder = Some("{{n}}".to_string());
         context
             .compute
             .insert("arg1".to_string(), "echo value".to_string());

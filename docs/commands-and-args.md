@@ -15,7 +15,7 @@ A command spec supports:
 - `check`: health probe; if it fails (exit code != 0), Fire switches to `fallback_runner` (or errors if none).
 - `macros`: simple string replacements applied before placeholder expansion.
 - `compute`: pre-compute argument values (see below).
-- `placeholder`: custom placeholder template (defaults described later).
+- `placeholder`: placeholder pattern. If absent, no interpolation or spreads occur.
 - `on_unused_args`: behavior for unused args in **eval** (default: `ignore`).
 
 String shorthand (`commands.foo: "npm test"`) is equivalent to a spec with `exec: "npm test"`.
@@ -52,15 +52,20 @@ commands:
 - `fallback_runner` engages when `check` is defined and fails.
 
 ## Positional placeholders
-Default disabled. `{n}` refers to an argument number, examples:
-- `@{n}` -> @1, @2, etc
-- `{{n}}` -> {1}, {2}, etc
+Placeholders are **opt-in**: nothing is substituted unless you set `placeholder` on the command (or via an anchor like `x-arg-config`).
 
-if the placeholder is `{{n}}`, so:
+How the pattern works:
 
-- `{1}`, `{2}` … — replace with the nth arg (1-based). Shell mode escapes; eval mode leaves raw.
-- `...{{n}}` — spreads **unused** args as individual values (`a b` → `"a", "b"` in eval; shell-escaped in exec).
-- `[{{n}}]` — spreads unused args as an array literal in eval.
+- The pattern must contain `{n}` (or `n`) to mark the index position.
+- The **same** pattern drives all forms; there are no fallbacks.
+- Individual placeholders are the pattern with `{n}` replaced by a 1-based index. Examples:
+  - `placeholder: "@{n}"` → use `@1`, `@2`, ...
+  - `placeholder: "{{n}}"` → use `{1}`, `{2}`, ...
+- Spread placeholders reuse the literal pattern:
+  - `...<placeholder>` spreads **unused** args individually (shell-escaped for exec; string literals for eval).
+  - `[<placeholder>]` spreads unused args as an array literal (eval only).
+
+Only the configured pattern is recognized. If you set `placeholder: "@{n}"`, tokens like `{1}` or `$1` will **not** be replaced.
 
 ## Macros
 Macros are literal string replacements, applied before placeholders:
