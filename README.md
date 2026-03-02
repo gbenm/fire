@@ -59,3 +59,8 @@ Associate your YAML with https://raw.githubusercontent.com/gbenm/fire/main/schem
 - [Progressive examples](./docs/examples.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 
+## If you enjoyed this and want to buy me a coffee ☕️
+- Buy Me a Coffee: https://buymeacoffee.com/gbenm
+- Bitcoin (BTC): `bc1q0l8na5gr6jgpnq6r7fj0nl3hqx2dm77l2vearuxx20s5ktes45vsxmksfu`
+- USDC (Ethereum ERC20): `0x26D01f6fBa520D343CDAF309ba04FB9a7B26b4DE`
+
