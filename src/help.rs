@@ -7,12 +7,20 @@ pub(crate) fn print_root_help(config: &LoadedConfig) {
     let namespaces = namespaces(config);
     let groups = groups(config);
     let global_commands = global_direct_commands(config);
+    let builtin_commands = vec![(
+        "cli".to_string(),
+        Some("Manage command configuration".to_string()),
+    )];
 
     println!("Fire CLI");
     print_section("Commands", &local_commands);
     print_section("Namespaces", &namespaces);
     print_section("Groups", &groups);
     print_section("Global Commands", &global_commands);
+    print_section("Built-in Commands", &builtin_commands);
+
+    println!();
+    println!("Docs: https://github.com/gbenm/fire");
 }
 
 pub(crate) fn print_scope_help(config: &LoadedConfig, path: &[String]) -> bool {
