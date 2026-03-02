@@ -118,6 +118,8 @@ struct FireFileRaw {
     runtimes: BTreeMap<String, RuntimeConfig>,
     #[serde(default)]
     commands: BTreeMap<String, CommandEntry>,
+    #[serde(flatten)]
+    _extra: BTreeMap<String, serde::de::IgnoredAny>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -314,11 +316,25 @@ fn parse_raw_files(paths: &[PathBuf]) -> Vec<FireFileRaw> {
             eprintln!("[fire] Could not read {}. Skipping.", path.display());
             continue;
         };
-        let value: FireFileRaw = match serde_yaml::from_str(&text) {
+        
+        let mut value: yaml_serde::Value = match yaml_serde::from_str(&text) {
+             Ok(v) => v,
+             Err(err) => {
+                eprintln!("[fire] Invalid YAML in {}: {}. Skipping.", path.display(), err);
+                continue;
+            }
+        };
+
+        if let Err(e) = value.apply_merge() {
+             eprintln!("[fire] Merge failed in {}: {}. Skipping.", path.display(), e);
+             continue;
+        }
+
+        let value: FireFileRaw = match yaml_serde::from_value(value) {
             Ok(value) => value,
             Err(err) => {
                 eprintln!(
-                    "[fire] Invalid YAML in {}: {}. Skipping.",
+                    "[fire] Invalid config structure in {}: {}. Skipping.",
                     path.display(),
                     err
                 );
@@ -582,6 +598,7 @@ mod tests {
                 include: Vec::new(),
                 runtimes: BTreeMap::new(),
                 commands: BTreeMap::new(),
+                _extra: BTreeMap::new(),
             },
             FireFileRaw {
                 group: String::new(),
@@ -589,6 +606,7 @@ mod tests {
                 include: Vec::new(),
                 runtimes: BTreeMap::new(),
                 commands: BTreeMap::new(),
+                _extra: BTreeMap::new(),
             },
         ];
         let selected = select_directory_default_namespace_prefix(&files);
@@ -614,6 +632,7 @@ mod tests {
             include: Vec::new(),
             runtimes: BTreeMap::new(),
             commands: BTreeMap::new(),
+            _extra: BTreeMap::new(),
         };
         let forced = NamespaceScope {
             prefix: "ex".to_string(),
@@ -769,5 +788,30 @@ commands:
     fn command_without_exec_run_or_eval_is_not_runnable() {
         let command = CommandEntry::Spec(CommandSpec::default());
         assert!(!command.is_runnable());
+    }
+
+    #[test]
+    fn yaml_anchors_merge_keys_work() {
+        let yaml = r#"
+x-common: &common
+  description: Shared description
+
+commands:
+  param:
+    <<: *common
+    exec: echo hi
+"#;
+        let mut value: yaml_serde::Value = yaml_serde::from_str(yaml).expect("parse yaml");
+        // Apply merge keys manually as we do in production code
+        value.apply_merge().expect("merge");
+        let raw: FireFileRaw = yaml_serde::from_value(value).expect("deserialize");
+        
+        let command = raw.commands.get("param").expect("param command");
+        match command {
+            CommandEntry::Spec(spec) => {
+                assert_eq!(spec.description, "Shared description");
+            }
+            _ => panic!("expected spec"),
+        }
     }
 }

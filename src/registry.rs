@@ -22,7 +22,7 @@ pub(crate) fn load_installed_directories() -> Vec<PathBuf> {
     let Ok(text) = fs::read_to_string(path) else {
         return Vec::new();
     };
-    let parsed: RegistryFile = match serde_yaml::from_str(&text) {
+    let parsed: RegistryFile = match yaml_serde::from_str(&text) {
         Ok(value) => value,
         Err(_) => return Vec::new(),
     };
@@ -66,7 +66,7 @@ fn write_registry(installed: &[PathBuf]) -> Result<InstallResult, String> {
             .collect(),
     };
     let content =
-        serde_yaml::to_string(&data).map_err(|err| format!("Cannot serialize registry: {err}"))?;
+        yaml_serde::to_string(&data).map_err(|err| format!("Cannot serialize registry: {err}"))?;
     fs::write(registry_path(), content)
         .map_err(|err| format!("Cannot write registry file: {err}"))?;
     Ok(InstallResult::Added)

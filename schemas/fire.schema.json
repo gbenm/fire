@@ -4,6 +4,9 @@
   "title": "Fire Config",
   "type": "object",
   "additionalProperties": false,
+  "patternProperties": {
+    "^x-": {}
+  },
   "properties": {
     "dir": {
       "type": "string",
@@ -29,10 +32,6 @@
       "items": {
         "type": "string"
       }
-    },
-    "x-arg-config": {
-      "description": "Reusable argument placeholder behavior, usually consumed via YAML anchors.",
-      "$ref": "#/$defs/argConfig"
     },
     "commands": {
       "type": "object",
@@ -108,25 +107,6 @@
         "sdk"
       ]
     },
-    "argConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "placeholder": {
-          "type": "string",
-          "description": "Placeholder template for positional args. Example: '{{n}}', '$n'."
-        },
-        "on_unused_args": {
-          "type": "string",
-          "description": "Behavior when extra args are passed and not consumed by placeholders.",
-          "enum": [
-            "ignore",
-            "warn",
-            "error"
-          ]
-        }
-      }
-    },
     "stringOrStringArray": {
       "description": "A single command string or a sequence of command strings.",
       "oneOf": [
@@ -186,7 +166,7 @@
         },
         "placeholder": {
           "type": "string",
-          "description": "Placeholder template for this command (same semantics as `x-arg-config.placeholder`)."
+          "description": "Placeholder template for this command."
         },
         "on_unused_args": {
           "type": "string",

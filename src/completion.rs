@@ -717,7 +717,7 @@ mod tests {
             struct Wrapper {
                 commands: BTreeMap<String, CommandEntry>,
             }
-            serde_yaml::from_str::<Wrapper>(yaml)
+            yaml_serde::from_str::<Wrapper>(yaml)
                 .expect("valid yaml")
                 .commands
         }
@@ -852,7 +852,7 @@ commands:
             struct Wrapper {
                 commands: BTreeMap<String, CommandEntry>,
             }
-            serde_yaml::from_str::<Wrapper>(yaml)
+            yaml_serde::from_str::<Wrapper>(yaml)
                 .expect("valid yaml")
                 .commands
         }
