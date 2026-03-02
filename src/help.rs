@@ -115,8 +115,15 @@ fn local_commands(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
         if file.source != crate::config::SourceKind::Local {
             continue;
         }
-        for (name, entry) in &file.commands {
-            map.insert(name.clone(), optional_description(entry));
+        match &file.scope {
+            FileScope::Root | FileScope::Namespace { .. } => {
+                for (name, entry) in &file.commands {
+                    map.insert(name.clone(), optional_description(entry));
+                }
+            }
+            FileScope::Group { .. } | FileScope::NamespaceGroup { .. } => {
+                // Commands inside groups are NOT displayed at root level.
+            }
         }
     }
     map.into_iter().collect()
@@ -146,8 +153,14 @@ fn namespaces(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
 fn groups(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
     let mut map = BTreeMap::new();
     for file in &config.files {
-        if let FileScope::Group { group } = &file.scope {
-            map.insert(group.clone(), None);
+        match &file.scope {
+            FileScope::Group { group } => {
+                map.insert(group.clone(), None);
+            }
+            FileScope::NamespaceGroup { group, .. } if file.source == crate::config::SourceKind::Local => {
+                map.insert(group.clone(), None);
+            }
+            _ => {}
         }
     }
     map.into_iter().collect()
@@ -219,11 +232,17 @@ fn namespace_groups(config: &LoadedConfig, namespace: &str) -> Vec<(String, Opti
 fn group_commands(config: &LoadedConfig, group: &str) -> Vec<(String, Option<String>)> {
     let mut map = BTreeMap::new();
     for file in &config.files {
-        if let FileScope::Group { group: file_alias } = &file.scope {
-            if file_alias == group {
-                for (name, entry) in &file.commands {
-                    map.insert(name.clone(), optional_description(entry));
-                }
+        let is_match = match &file.scope {
+            FileScope::Group { group: file_alias } => file_alias == group,
+            FileScope::NamespaceGroup { group: file_alias, .. } if file.source == crate::config::SourceKind::Local => {
+                file_alias == group
+            }
+            _ => false,
+        };
+
+        if is_match {
+            for (name, entry) in &file.commands {
+                map.insert(name.clone(), optional_description(entry));
             }
         }
     }
@@ -272,9 +291,13 @@ fn has_namespace(config: &LoadedConfig, namespace: &str) -> bool {
 }
 
 fn has_root_group(config: &LoadedConfig, group: &str) -> bool {
-    config.files.iter().any(
-        |file| matches!(&file.scope, FileScope::Group { group: file_alias } if file_alias == group),
-    )
+    config.files.iter().any(|file| match &file.scope {
+        FileScope::Group { group: file_alias } => file_alias == group,
+        FileScope::NamespaceGroup { group: file_alias, .. } if file.source == crate::config::SourceKind::Local => {
+            file_alias == group
+        }
+        _ => false,
+    })
 }
 
 fn has_namespace_prefix(config: &LoadedConfig, namespace: &str, group: &str) -> bool {

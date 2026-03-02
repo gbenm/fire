@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::Path};
 
-use crate::config::{CommandEntry, FileScope, LoadedConfig, RuntimeConfig};
+use crate::config::{CommandEntry, LoadedConfig, RuntimeConfig};
 
 pub(crate) struct ResolvedCommand<'a> {
     pub(crate) project_dir: &'a Path,
@@ -19,7 +19,7 @@ pub(crate) fn resolve_command<'a>(
 
     for file in &config.files {
         for (command_name, command_entry) in &file.commands {
-            let Some(base_consumed) = scope_match_consumed(&file.scope, command_name, args) else {
+            let Some(base_consumed) = scope_match_consumed(&file, command_name, args) else {
                 continue;
             };
 
@@ -58,22 +58,16 @@ pub(crate) fn resolve_command<'a>(
     best
 }
 
-fn scope_match_consumed(scope: &FileScope, command_name: &str, args: &[String]) -> Option<usize> {
-    let local_match = if args.first().map(String::as_str) == Some(command_name) {
-        Some(1)
-    } else {
-        None
-    };
-
-    let scoped_match = match scope {
-        FileScope::Root => {
+fn scope_match_consumed(file: &crate::config::FileConfig, command_name: &str, args: &[String]) -> Option<usize> {
+    let explicit_match = match &file.scope {
+        crate::config::FileScope::Root => {
             if args.first().map(String::as_str) == Some(command_name) {
                 Some(1)
             } else {
                 None
             }
         }
-        FileScope::Namespace { namespace, .. } => {
+        crate::config::FileScope::Namespace { namespace, .. } => {
             if args.first().map(String::as_str) == Some(namespace.as_str())
                 && args.get(1).map(String::as_str) == Some(command_name)
             {
@@ -82,7 +76,7 @@ fn scope_match_consumed(scope: &FileScope, command_name: &str, args: &[String]) 
                 None
             }
         }
-        FileScope::Group { group } => {
+        crate::config::FileScope::Group { group } => {
             if args.first().map(String::as_str) == Some(group.as_str())
                 && args.get(1).map(String::as_str) == Some(command_name)
             {
@@ -91,7 +85,7 @@ fn scope_match_consumed(scope: &FileScope, command_name: &str, args: &[String]) 
                 None
             }
         }
-        FileScope::NamespaceGroup {
+        crate::config::FileScope::NamespaceGroup {
             namespace, group, ..
         } => {
             if args.first().map(String::as_str) == Some(namespace.as_str())
@@ -105,7 +99,41 @@ fn scope_match_consumed(scope: &FileScope, command_name: &str, args: &[String]) 
         }
     };
 
-    scoped_match.or(local_match)
+    if explicit_match.is_some() {
+        return explicit_match;
+    }
+
+    // Implicit matching (Local ONLY)
+    if file.source == crate::config::SourceKind::Local {
+         // Inside the directory of the namespace/group.
+         // Rules:
+         // 3.2: Namespace optional inside its directory.
+         match &file.scope {
+             crate::config::FileScope::Namespace { .. } => {
+                 // fire command -> supported
+                 if args.first().map(String::as_str) == Some(command_name) {
+                     return Some(1);
+                 }
+             }
+             crate::config::FileScope::NamespaceGroup { group, .. } => {
+                 // fire group command -> supported
+                  if args.first().map(String::as_str) == Some(group.as_str())
+                     && args.get(1).map(String::as_str) == Some(command_name)
+                 {
+                     return Some(2);
+                 }
+             }
+             crate::config::FileScope::Root => {
+                 // Already handled in explicit_match for Root
+             }
+             crate::config::FileScope::Group { .. } => {
+                 // fire group command -> Already handled in explicit_match
+                 // Group is always mandatory.
+             }
+         }
+    }
+
+    None
 }
 
 fn better_than(
@@ -209,7 +237,28 @@ commands:
   api:
     exec: npm run api
 "#;
+        // Case 1: Local source (Implicit allowed)
         let config = LoadedConfig {
+            files: vec![FileConfig {
+                source: SourceKind::Local,
+                project_dir: PathBuf::from("."),
+                scope: FileScope::NamespaceGroup {
+                    namespace: "ex".to_string(),
+                    namespace_description: String::new(),
+                    group: "backend".to_string(),
+                },
+                runtimes: BTreeMap::new(),
+                commands: parse_commands(yaml),
+            }],
+        };
+
+        // Local: fire backend api -> works (implicit namespace)
+        let args = vec!["backend".to_string(), "api".to_string(), "--watch".to_string()];
+        let resolved = resolve_command(&config, &args).expect("resolved implicit local");
+        assert_eq!(resolved.consumed, 2);
+
+        // Case 2: Global source (Implicit disallowed)
+        let config_global = LoadedConfig {
             files: vec![FileConfig {
                 source: SourceKind::Global,
                 project_dir: PathBuf::from("."),
@@ -223,10 +272,14 @@ commands:
             }],
         };
 
-        let args = vec!["api".to_string(), "--watch".to_string()];
-        let resolved = resolve_command(&config, &args).expect("resolved");
+        // Global: fire backend api -> fails (require namespace)
+        let args_global = vec!["backend".to_string(), "api".to_string(), "--watch".to_string()];
+        let resolved_global = resolve_command(&config_global, &args_global);
+        assert!(resolved_global.is_none(), "Global should not resolve implicit namespace");
 
-        assert_eq!(resolved.consumed, 1);
-        assert_eq!(resolved.remaining_args, &["--watch".to_string()]);
+        // Global: fire ex backend api -> works
+        let args_global_explicit = vec!["ex".to_string(), "backend".to_string(), "api".to_string(), "--watch".to_string()];
+        let resolved_global_explicit = resolve_command(&config_global, &args_global_explicit).expect("resolved explicit global");
+        assert_eq!(resolved_global_explicit.consumed, 3);
     }
 }

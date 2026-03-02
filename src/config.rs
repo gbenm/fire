@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Component, Path, PathBuf},
+    process::Command,
 };
 
 use serde::Deserialize;
@@ -196,16 +197,19 @@ pub(crate) fn load_config() -> LoadedConfig {
     let mut loaded = LoadedConfig::default();
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+    // Attempt git root detection FIRST
+    let project_root = detect_git_root(&cwd).unwrap_or(cwd.clone());
+
     // Local project commands.
     loaded
         .files
-        .extend(load_local_file_configs(&cwd, SourceKind::Local));
+        .extend(load_local_file_configs(&project_root, SourceKind::Local));
 
     // Global installed directories. No implicit namespace here:
     // files without namespace/group stay as direct global commands.
     let installed_dirs = load_installed_directories();
     for directory in installed_dirs {
-        if directory == cwd {
+        if directory == project_root {
             continue;
         }
         loaded
@@ -214,6 +218,42 @@ pub(crate) fn load_config() -> LoadedConfig {
     }
 
     loaded
+}
+
+fn detect_git_root(cwd: &Path) -> Option<PathBuf> {
+    if !cwd.exists() {
+        return None;
+    }
+
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let path_str = String::from_utf8(output.stdout).ok()?;
+    let path = PathBuf::from(path_str.trim());
+
+    // Check if git root has ANY fire config.
+    let config_files = discover_config_files(&path);
+    if config_files.is_empty() {
+        return None;
+    }
+
+    // Check if any of the root config files defines a namespace.
+    let raw = parse_raw_files(&config_files);
+    let has_explicit_namespace = select_directory_explicit_namespace(&raw).is_some();
+
+    if has_explicit_namespace {
+         return Some(path);
+    }
+
+    None
 }
 
 fn load_local_file_configs(cwd: &Path, source: SourceKind) -> Vec<FileConfig> {
