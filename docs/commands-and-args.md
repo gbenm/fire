@@ -1,0 +1,117 @@
+# Writing Commands and Handling Arguments
+
+This guide shows how to author commands, chain hooks, and work with positional arguments and placeholders.
+
+## Command shapes
+A command spec supports:
+- `description`: short help text shown in listings/completion.
+- `exec`: shell command(s) to run. If you pass an array, commands run in order; the last one receives user args.
+- `eval`: runtime expression(s) (see `runtimes` guide).
+- `commands`: nested subcommands. Resolution is greedy—the deepest valid path wins.
+- `before`: shell command that runs only when using a primary runner (not fallback).
+- `dir`: working directory for this command (overrides file-level `dir`).
+- `runner`: prefix to execute commands inside another environment (e.g., container shell).
+- `fallback_runner`: alternative runner used when `check` fails.
+- `check`: health probe; if it fails (exit code != 0), Fire switches to `fallback_runner` (or errors if none).
+- `macros`: simple string replacements applied before placeholder expansion.
+- `compute`: pre-compute argument values (see below).
+- `placeholder`: custom placeholder template (defaults described later).
+- `on_unused_args`: behavior for unused args in **eval** (default: `ignore`).
+
+String shorthand (`commands.foo: "npm test"`) is equivalent to a spec with `exec: "npm test"`.
+
+### Reusing arg settings
+Use `x-arg-config` at the file root to share `placeholder` and `on_unused_args`, then merge with `<<`:
+```yaml
+x-arg-config: &arg-config
+  placeholder: "{{n}}"
+  on_unused_args: warn
+
+commands:
+  computed:
+    <<: *arg-config
+    eval: py:sayHello("{1}", ...{{n}})
+```
+
+## Hooks and runners
+```yaml
+commands:
+  run:
+    # start front service it it's not running
+    before: docker compose ps -q front | grep -q . || docker compose up -d front
+    exec: compose exec front npm run
+
+  start:
+    runner: docker run --rm -it docker run --rm -it node:lts-alpine sh
+    exec:
+      - npm run build
+      - npm run start
+```
+- `before` runs once, only on the primary runner path.
+- `runner` pipes commands through another process.
+- `fallback_runner` engages when `check` is defined and fails.
+
+## Positional placeholders
+Default disabled. `{n}` refers to an argument number, examples:
+- `@{n}` -> @1, @2, etc
+- `{{n}}` -> {1}, {2}, etc
+
+if the placeholder is `{{n}}`, so:
+
+- `{1}`, `{2}` … — replace with the nth arg (1-based). Shell mode escapes; eval mode leaves raw.
+- `...{{n}}` — spreads **unused** args as individual values (`a b` → `"a", "b"` in eval; shell-escaped in exec).
+- `[{{n}}]` — spreads unused args as an array literal in eval.
+
+## Macros
+Macros are literal string replacements, applied before placeholders:
+```yaml
+front:
+  macros:
+    "{{front}}": docker compose exec front
+    DYNAMIC: docker compose exec {{1}}
+  exec: "{{front}} npm run"
+  commands:
+    hello: "DYNAMIC echo Hello"
+```
+
+- `fire front` -> `docker compose exec front npm run`
+- `fire front hello alpine` -> `docker compose exec alpine echo Hello`
+
+## Unused arguments policy (eval only)
+`on_unused_args` controls what happens when users pass extra args that are not consumed by placeholders in `eval` expressions:
+- `ignore` (default): do nothing.
+- `warn`: print a warning with the 1-based unused indexes, continue.
+- `error`: print an error and stop before eval.
+
+Only `eval` uses this policy; shell execution keeps trailing args intact.
+
+## Compute: pre-processing arguments
+Use `compute` to mutate incoming args before commands run:
+```yaml
+compute:
+  arg1: ts:makeHash("{1}", "sha256")
+  arg2: printf %s {2}
+```
+- Keys are `arg<index>` (1-based). Missing args are ignored.
+- Values with a known runtime prefix (`py:`, `ts:`, `js:`, `node:`, `deno:`) execute in that runtime (see [Runtimes](./runtimes-and-eval.md)); others run as shell commands.
+- Compute sees the original user args; results replace the argument for the rest of the pipeline (placeholders, exec, eval).
+
+## Nested commands and greedy resolution
+Fire resolves the deepest matching path, then passes remaining tokens to the target command:
+```yaml
+run:
+  exec: npm run
+  commands:
+    build: npm run clean && npm run build
+    start: fire build && npm run start
+```
+- `fire run` → `npm run`
+- `fire run build` → `npm run clean && npm run build`
+- `fire run other` → `npm run other` (because `other` isn’t a subcommand)
+
+## Help suffix
+Users can append `:h` to any resolved path to show description and subcommands instead of executing:
+```
+fire run :h
+fire ex backend api :h
+```

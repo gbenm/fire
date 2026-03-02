@@ -49,9 +49,10 @@ commands:
     commands:
       hello:
         description: "say twice"
+        placeholder: "@{n}"
         exec:
           - echo hello world
-          - echo again
+          - echo again $1
       world:
         description: "say world twice"
         exec:
