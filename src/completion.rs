@@ -255,9 +255,16 @@ fn local_commands(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggesti
         if file.source != SourceKind::Local {
             continue;
         }
-        for (name, entry) in &file.commands {
-            if name.starts_with(prefix) {
-                map.insert(name.clone(), command_suggestion(name, entry));
+        match &file.scope {
+            FileScope::Root | FileScope::Namespace { .. } => {
+                for (name, entry) in &file.commands {
+                    if name.starts_with(prefix) {
+                        map.insert(name.clone(), command_suggestion(name, entry));
+                    }
+                }
+            }
+            FileScope::Group { .. } | FileScope::NamespaceGroup { .. } => {
+                 // Hidden from root commands
             }
         }
     }
@@ -372,10 +379,18 @@ fn local_groups(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggestion
         if file.source != SourceKind::Local {
             continue;
         }
-        if let FileScope::Group { group } = &file.scope {
-            if group.starts_with(prefix) {
-                set.insert(group.clone());
+        match &file.scope {
+            FileScope::Group { group } => {
+               if group.starts_with(prefix) {
+                    set.insert(group.clone());
+                }
             }
+            FileScope::NamespaceGroup { group, .. } => {
+                 if group.starts_with(prefix) {
+                    set.insert(group.clone());
+                 }
+            }
+            _ => {}
         }
     }
     set.into_iter()
@@ -450,14 +465,26 @@ fn namespace_groups(
 fn group_children(config: &LoadedConfig, group: &str, prefix: &str) -> Vec<CompletionSuggestion> {
     let mut map = BTreeMap::new();
     for file in &config.files {
-        if let FileScope::Group { group: file_alias } = &file.scope {
-            if file_alias == group {
-                for (name, entry) in &file.commands {
-                    if name.starts_with(prefix) {
-                        map.insert(name.clone(), command_suggestion(name, entry));
+        match &file.scope {
+            FileScope::Group { group: file_alias } => {
+                if file_alias == group {
+                    for (name, entry) in &file.commands {
+                        if name.starts_with(prefix) {
+                            map.insert(name.clone(), command_suggestion(name, entry));
+                        }
                     }
                 }
             }
+            FileScope::NamespaceGroup { group: file_alias, .. } if file.source == SourceKind::Local => {
+                if file_alias == group {
+                     for (name, entry) in &file.commands {
+                        if name.starts_with(prefix) {
+                            map.insert(name.clone(), command_suggestion(name, entry));
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     map.into_values().collect()
@@ -526,13 +553,21 @@ fn nested_from_group_scope(
     let group = &path[0];
     let command_name = &path[1];
     let mut command = None;
+    
+    // We reverse to prioritize overrides (though not fully applicable here, but consistent style)
     for file in config.files.iter().rev() {
-        if let FileScope::Group { group: file_alias } = &file.scope {
-            if file_alias == group {
-                if let Some(candidate) = file.commands.get(command_name) {
-                    command = Some(candidate);
-                    break;
-                }
+        let matches = match &file.scope {
+            FileScope::Group { group: file_alias } => file_alias == group,
+            FileScope::NamespaceGroup { group: file_alias, .. } if file.source == SourceKind::Local => {
+                file_alias == group
+            }
+            _ => false,
+        };
+
+        if matches {
+             if let Some(candidate) = file.commands.get(command_name) {
+                command = Some(candidate);
+                break;
             }
         }
     }
@@ -845,7 +880,9 @@ commands:
             }],
         };
 
-        let values = completion_suggestions(&config, &["run".to_string()]);
+        // Updated loop to respect mandatory group enforcement.
+        // Command "run" in group "ops" must be accessed via "ops run".
+        let values = completion_suggestions(&config, &["ops".to_string(), "run".to_string()]);
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
         assert_eq!(names, vec!["start", "test"]);
     }
