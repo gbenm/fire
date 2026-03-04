@@ -15,7 +15,7 @@ A command spec supports:
 - `fallback_runner`: alternative runner used when `check` fails.
 - `check`: health probe; if it fails (exit code != 0), Fire switches to `fallback_runner` (or errors if none).
 - `macros`: simple string replacements applied before placeholder expansion.
-- `compute`: pre-compute argument values (see below).
+- `compute`: define computed variables (see below).
 - `placeholder`: placeholder pattern. If absent, no interpolation or spreads occur.
 - `on_unused_args`: behavior for unused args in **eval** (default: `ignore`).
 
@@ -91,16 +91,18 @@ front:
 
 Only `eval` uses this policy; shell execution keeps trailing args intact.
 
-## Compute: pre-processing arguments
-Use `compute` to mutate incoming args before commands run:
+## Compute: computed variables
+Use `compute` to define literal tokens that are replaced with computed values before placeholders are processed:
 ```yaml
 compute:
-  arg1: ts:makeHash("{1}", "sha256")
-  arg2: printf %s {2}
+  "{hash}": ts:makeHash("{1}", "sha256")
+  "{service}": printf %s "{2}"
+exec: echo "{service} => {hash}"
 ```
-- Keys are `arg<index>` (1-based). Missing args are ignored.
+- Keys are literal replacement tokens (for example `"{hash}"`).
 - Values with a known runtime prefix (`py:`, `ts:`, `js:`, `node:`, `deno:`) execute in that runtime (see [Runtimes](./runtimes-and-eval.md)); others run as shell commands.
-- Compute sees the original user args; results replace the argument for the rest of the pipeline (placeholders, exec, eval).
+- Compute sees the original user args and can use placeholders in the compute expression (for example `{1}`, `...{{n}}` based on your configured `placeholder`).
+- The computed token can be reused in `exec`, `eval`, `before`, `check`, `runner`, and `fallback_runner`.
 
 ## Nested commands and greedy resolution
 Fire resolves the deepest matching path, then passes remaining tokens to the target command:

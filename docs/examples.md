@@ -53,16 +53,16 @@ run:
 ```yaml
 utils:
   compute:
-    arg1: ts:getServiceNameById("{1}")
+    "{service}": ts:getServiceNameById("{1}")
   macros:
     "{{front}}": docker compose exec front
-    "{{dynamic}}": docker compose exec {{1}}
+    "{{dynamic}}": docker compose exec {service}
   exec: "{{front}} npm run"
   commands:
     npm-version: "{{front}} npm -v"
     hello: "{{dynamic}} echo Hello"
 ```
-- Macro substitution happens before placeholders. Compute can rewrite args used by macros.
+- Macro substitution happens before placeholders. Compute can define dynamic tokens reused by macros and commands.
 
 ## 7) Eval with argument spreads
 ```yaml
@@ -95,10 +95,10 @@ template:
 hash:
   <<: *arg-config
   compute:
-    arg1: ts:makeHash("{1}", "sha256")
-  exec: echo "HASH: {1}"
+    "{hash}": ts:makeHash("{1}", "sha256")
+  exec: echo "HASH: {hash}"
 ```
-- Argument 1 is hashed via the `ts` runtime before executing the shell command.
+- `{hash}` is computed via the `ts` runtime and then injected into the command.
 
 ## 11) Fallback-only runner with directory prep
 ```yaml

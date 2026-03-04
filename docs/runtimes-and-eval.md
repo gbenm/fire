@@ -67,11 +67,12 @@ Notes:
 - Regular `print`/`console.log` output from your runtime code is still forwarded as-is.
 
 ## Compute + eval
-`compute` entries can also use runtime prefixes. These run **before** command rendering and can feed into placeholders:
+`compute` entries can also use runtime prefixes. These run **before** command rendering and define reusable literal tokens:
 ```yaml
 compute:
-  arg1: ts:makeHash("{1}", "sha256")
-exec: echo "Hello {1}, your job is {2}"
+  "{hash}": ts:makeHash("{1}", "sha256")
+  "{label}": echo "build-{2}"
+exec: echo "Hello {1}, hash={hash}, label={label}"
 ```
 
 ## Error handling

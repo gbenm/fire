@@ -19,10 +19,16 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     ensure_working_directory(&context.dir);
 
     let original_args = resolved.remaining_args.to_vec();
-    let computed_args = compute_arguments(&resolved, &context, &original_args);
+    let computed_values = compute_values(&resolved, &context, &original_args);
 
     if let Some(raw_evals) = resolved.command.evaluation_expressions() {
-        run_evals_with_runtime(&resolved, &context, &raw_evals, &computed_args);
+        run_evals_with_runtime(
+            &resolved,
+            &context,
+            &raw_evals,
+            &original_args,
+            &computed_values,
+        );
     }
 
     let Some(raw_commands_to_run) = resolved.command.execution_commands() else {
@@ -53,7 +59,8 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
         render_runtime_string(
             value,
             &context,
-            &computed_args,
+            &original_args,
+            &computed_values,
             false,
             RenderMode::Shell,
             &mut ignored_stats,
@@ -63,7 +70,8 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
         render_runtime_string(
             value,
             &context,
-            &computed_args,
+            &original_args,
+            &computed_values,
             false,
             RenderMode::Shell,
             &mut ignored_stats,
@@ -73,7 +81,8 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
         render_runtime_string(
             value,
             &context,
-            &computed_args,
+            &original_args,
+            &computed_values,
             false,
             RenderMode::Shell,
             &mut ignored_stats,
@@ -92,7 +101,8 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
             let rendered_before = render_runtime_string(
                 before,
                 &context,
-                &computed_args,
+                &original_args,
+                &computed_values,
                 false,
                 RenderMode::Shell,
                 &mut ignored_stats,
@@ -112,7 +122,8 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
             render_runtime_string(
                 command,
                 &context,
-                &computed_args,
+                &original_args,
+                &computed_values,
                 true,
                 RenderMode::Shell,
                 &mut render_stats,
@@ -120,7 +131,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
         })
         .collect::<Vec<_>>();
 
-    let tail_args = unresolved_args_for_tail(&context, &computed_args, &render_stats);
+    let tail_args = unresolved_args_for_tail(&context, &original_args, &render_stats);
     let commands_to_run = commands_with_remaining_args(&rendered_commands_to_run, &tail_args);
 
     let mut exit_code = 0;
@@ -194,6 +205,7 @@ fn run_evals_with_runtime(
     context: &ExecutionContext,
     raw_evals: &[String],
     args: &[String],
+    compute_values: &BTreeMap<String, String>,
 ) -> ! {
     let mut render_stats = RenderStats::default();
     let mut parsed = Vec::new();
@@ -203,6 +215,7 @@ fn run_evals_with_runtime(
             raw_eval,
             context,
             args,
+            compute_values,
             true,
             RenderMode::Eval,
             &mut render_stats,
@@ -216,7 +229,8 @@ fn run_evals_with_runtime(
     let mut engines: BTreeMap<String, RuntimeEngine> = BTreeMap::new();
     for (runtime_key, code) in &parsed {
         if !engines.contains_key(runtime_key) {
-            let engine = start_runtime_engine_for_key(runtime_key, resolved, context, args);
+            let engine =
+                start_runtime_engine_for_key(runtime_key, resolved, context, args, compute_values);
             engines.insert(runtime_key.clone(), engine);
         }
 
@@ -249,6 +263,7 @@ fn start_runtime_engine_for_key(
     resolved: &ResolvedCommand<'_>,
     context: &ExecutionContext,
     args: &[String],
+    computed_values: &BTreeMap<String, String>,
 ) -> RuntimeEngine {
     let runtime_config = resolved.runtimes.get(runtime_key).unwrap_or_else(|| {
         eprintln!("[fire] Runtime `{runtime_key}` is not defined in `runtimes`.");
@@ -262,6 +277,7 @@ fn start_runtime_engine_for_key(
             value,
             context,
             args,
+            computed_values,
             false,
             RenderMode::Shell,
             &mut ignored_stats,
@@ -271,6 +287,7 @@ fn start_runtime_engine_for_key(
         &runtime.runner,
         context,
         args,
+        computed_values,
         false,
         RenderMode::Shell,
         &mut ignored_stats,
@@ -280,6 +297,7 @@ fn start_runtime_engine_for_key(
             value,
             context,
             args,
+            computed_values,
             false,
             RenderMode::Shell,
             &mut ignored_stats,
@@ -317,33 +335,35 @@ fn start_runtime_engine_for_key(
     engine
 }
 
-fn compute_arguments(
+fn compute_values(
     resolved: &ResolvedCommand<'_>,
     context: &ExecutionContext,
     original_args: &[String],
-) -> Vec<String> {
+) -> BTreeMap<String, String> {
     if context.compute.is_empty() {
-        return original_args.to_vec();
+        return BTreeMap::new();
     }
 
     let mut engines: BTreeMap<String, RuntimeEngine> = BTreeMap::new();
-    let mut args = original_args.to_vec();
+    let mut values = BTreeMap::new();
 
-    let mut targets = context
-        .compute
-        .iter()
-        .filter_map(|(key, expr)| parse_compute_arg_index(key).map(|index| (index, expr)))
-        .collect::<Vec<_>>();
-
-    targets.sort_by_key(|(index, _)| *index);
-
-    for (index, expr) in targets {
-        if index >= args.len() {
+    for (token, expr) in &context.compute {
+        let token = token.trim();
+        if token.is_empty() {
             continue;
         }
 
-        match compute_expression_value(resolved, context, original_args, &mut engines, expr) {
-            Ok(value) => args[index] = value,
+        match compute_expression_value(
+            resolved,
+            context,
+            original_args,
+            &values,
+            &mut engines,
+            expr,
+        ) {
+            Ok(value) => {
+                values.insert(token.to_string(), value);
+            }
             Err(err) => {
                 close_runtime_engines(engines);
                 eprintln!("[fire] {err}");
@@ -353,13 +373,14 @@ fn compute_arguments(
     }
 
     close_runtime_engines(engines);
-    args
+    values
 }
 
 fn compute_expression_value(
     resolved: &ResolvedCommand<'_>,
     context: &ExecutionContext,
     original_args: &[String],
+    computed_values: &BTreeMap<String, String>,
     engines: &mut BTreeMap<String, RuntimeEngine>,
     expr: &str,
 ) -> Result<String, String> {
@@ -369,6 +390,7 @@ fn compute_expression_value(
                 code,
                 context,
                 original_args,
+                computed_values,
                 false,
                 RenderMode::Eval,
                 &mut RenderStats::default(),
@@ -377,7 +399,13 @@ fn compute_expression_value(
             let engine = if let Some(engine) = engines.get_mut(key) {
                 engine
             } else {
-                let engine = start_runtime_engine_for_key(key, resolved, context, original_args);
+                let engine = start_runtime_engine_for_key(
+                    key,
+                    resolved,
+                    context,
+                    original_args,
+                    computed_values,
+                );
                 engines.insert(key.to_string(), engine);
                 engines.get_mut(key).unwrap()
             };
@@ -392,6 +420,7 @@ fn compute_expression_value(
                 command,
                 context,
                 original_args,
+                computed_values,
                 false,
                 RenderMode::Shell,
                 &mut RenderStats::default(),
@@ -399,13 +428,6 @@ fn compute_expression_value(
             run_shell_command_capture(&rendered_command, &context.dir).map(trim_trailing_newlines)
         }
     }
-}
-
-fn parse_compute_arg_index(key: &str) -> Option<usize> {
-    let lowered = key.trim().to_ascii_lowercase();
-    let suffix = lowered.strip_prefix("arg")?;
-    let index = suffix.parse::<usize>().ok()?;
-    index.checked_sub(1)
 }
 
 enum ComputeExpression<'a> {
@@ -1184,13 +1206,15 @@ fn render_runtime_string(
     value: &str,
     context: &ExecutionContext,
     remaining_args: &[String],
+    computed_values: &BTreeMap<String, String>,
     track_usage: bool,
     mode: RenderMode,
     stats: &mut RenderStats,
 ) -> String {
     let with_macros = apply_macros(value, &context.macros);
+    let with_compute = apply_macros(&with_macros, computed_values);
 
-    let mut output = with_macros;
+    let mut output = with_compute;
     let templates = placeholder_templates(context.placeholder.as_deref());
     for template in &templates {
         output = replace_placeholder_template(
@@ -1779,7 +1803,26 @@ fn ensure_non_tty_for_docker_compose_exec(tokens: &mut Vec<String>) {
 mod tests {
     use super::*;
     use crate::config::{CommandEntry, CommandSpec};
-    use std::path::Path;
+    use std::{collections::BTreeMap, path::Path};
+
+    fn render_runtime_string(
+        value: &str,
+        context: &ExecutionContext,
+        remaining_args: &[String],
+        track_usage: bool,
+        mode: RenderMode,
+        stats: &mut RenderStats,
+    ) -> String {
+        super::render_runtime_string(
+            value,
+            context,
+            remaining_args,
+            &BTreeMap::new(),
+            track_usage,
+            mode,
+            stats,
+        )
+    }
 
     #[test]
     fn escape_single_quote_in_shell_argument() {
@@ -2185,16 +2228,16 @@ mod tests {
     }
 
     #[test]
-    fn compute_replaces_arguments_with_shell_results() {
+    fn compute_resolves_literal_variable_values() {
         let mut context = ExecutionContext::default();
         context.dir = std::env::current_dir().expect("cwd");
         context.placeholder = Some("{{n}}".to_string());
         context
             .compute
-            .insert("arg1".to_string(), "printf %s {2}".to_string());
+            .insert("{left}".to_string(), "printf %s {2}".to_string());
         context
             .compute
-            .insert("arg2".to_string(), "printf %s {1}".to_string());
+            .insert("{right}".to_string(), "printf %s {1}".to_string());
 
         let runtimes = BTreeMap::new();
         let command = CommandEntry::Spec(CommandSpec::default());
@@ -2208,25 +2251,23 @@ mod tests {
             remaining_args: &original,
         };
 
-        let computed = compute_arguments(&resolved, &context, &original);
-        assert_eq!(
-            computed,
-            vec!["second value".to_string(), "first".to_string()]
-        );
+        let computed = compute_values(&resolved, &context, &original);
+        assert_eq!(computed.get("{left}"), Some(&"second value".to_string()));
+        assert_eq!(computed.get("{right}"), Some(&"first".to_string()));
     }
 
     #[test]
-    fn compute_skips_missing_argument_indexes() {
+    fn compute_values_are_reusable_as_exact_tokens() {
         let mut context = ExecutionContext::default();
         context.dir = std::env::current_dir().expect("cwd");
         context.placeholder = Some("{{n}}".to_string());
         context
             .compute
-            .insert("arg3".to_string(), "echo should-be-ignored".to_string());
+            .insert("{sum}".to_string(), "printf %s 42".to_string());
 
         let runtimes = BTreeMap::new();
         let command = CommandEntry::Spec(CommandSpec::default());
-        let original = vec!["one".to_string(), "two".to_string()];
+        let original = vec!["one".to_string()];
         let resolved = ResolvedCommand {
             project_dir: Path::new("."),
             runtimes: &runtimes,
@@ -2236,8 +2277,18 @@ mod tests {
             remaining_args: &original,
         };
 
-        let computed = compute_arguments(&resolved, &context, &original);
-        assert_eq!(computed, original);
+        let computed = compute_values(&resolved, &context, &original);
+        let mut stats = RenderStats::default();
+        let rendered = super::render_runtime_string(
+            "echo {sum} {1}",
+            &context,
+            &original,
+            &computed,
+            true,
+            RenderMode::Shell,
+            &mut stats,
+        );
+        assert_eq!(rendered, "echo 42 one");
     }
 
     #[test]
@@ -2247,7 +2298,7 @@ mod tests {
         context.placeholder = Some("{{n}}".to_string());
         context
             .compute
-            .insert("arg1".to_string(), "echo value".to_string());
+            .insert("{value}".to_string(), "echo value".to_string());
 
         let runtimes = BTreeMap::new();
         let command = CommandEntry::Spec(CommandSpec::default());
@@ -2261,7 +2312,7 @@ mod tests {
             remaining_args: &original,
         };
 
-        let computed = compute_arguments(&resolved, &context, &original);
-        assert_eq!(computed, vec!["value".to_string()]);
+        let computed = compute_values(&resolved, &context, &original);
+        assert_eq!(computed.get("{value}"), Some(&"value".to_string()));
     }
 }

@@ -96,9 +96,9 @@ commands:
   up:
     <<: *arg-config
     compute:
-      arg1: ts:makeHash("{1}", "sha256")
+      .hash: ts:makeHash("{1}", "sha256")
     description: "<name> <job>"
-    exec: echo "Hello {1}, your job is {2}"
+    exec: echo "Hello {1}, your job is {2}, hash=.hash"
 
   computed:
     <<: *arg-config
@@ -115,10 +115,10 @@ commands:
   vars:
     <<: *arg-config
     compute:
-      arg1: ts:getServiceNameById("{1}")
+      "{service}": ts:getServiceNameById("{1}")
     macros:
       "{{front}}": docker compose exec front
-      "{{dynamic}}": docker compose exec {{1}}
+      "{{dynamic}}": docker compose exec {service}
     exec: "{{front}} npm run"
     commands:
       npm-version: "{{front}} npm -v"
