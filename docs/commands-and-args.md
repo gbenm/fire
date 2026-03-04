@@ -7,6 +7,7 @@ A command spec supports:
 - `description`: short help text shown in listings/completion.
 - `exec`: shell command(s) to run. If you pass an array, commands run in order; the last one receives user args.
 - `eval`: runtime expression(s) (see `runtimes` guide).
+  - Return handling: `void` = no output, `string` = printed, `string[]` = each string executed as a shell command.
 - `commands`: nested subcommands. Resolution is greedy—the deepest valid path wins.
 - `before`: shell command that runs only when using a primary runner (not fallback).
 - `dir`: working directory for this command (overrides file-level `dir`).

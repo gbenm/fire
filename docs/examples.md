@@ -72,7 +72,15 @@ computed:
 ```
 - `{1}`, `{2}` pick specific args; `...{{n}}` expands the rest as individual string arguments for the runtime, you can use [{{n}}] to get a string[].
 
-## 8) Placeholders
+## 8) Eval returning command list
+```yaml
+commands:
+  setup:
+    eval: py:getSetupCommands("{1}")
+```
+- If `getSetupCommands` returns `["echo one", "echo two"]`, Fire executes both commands in order.
+
+## 9) Placeholders
 ```yaml
 template:
   <<: *arg-config
@@ -82,7 +90,7 @@ template:
     - "CMD echo and who else is with you? ...{{n}}"
 ```
 
-## 9) Runtime compute + exec
+## 10) Runtime compute + exec
 ```yaml
 hash:
   <<: *arg-config
@@ -92,7 +100,7 @@ hash:
 ```
 - Argument 1 is hashed via the `ts` runtime before executing the shell command.
 
-## 10) Fallback-only runner with directory prep
+## 11) Fallback-only runner with directory prep
 ```yaml
 fallback:
   check: exit -1

@@ -170,3 +170,6 @@ commands:
   list-args:
     placeholder: "@{n}"
     exec: "echo argument 1: @1, argument @2"
+
+  hello-eval:
+    eval: ts:getEcho()

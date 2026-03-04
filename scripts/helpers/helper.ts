@@ -6,3 +6,8 @@ export function getServiceNameById(id: string): string {
 	const hash = makeHash(id, "sha256");
 	return `svc-${hash.slice(0, 8)}`;
 }
+
+export const getEcho = () => [
+	"echo Hello from helper.ts!"
+];
+

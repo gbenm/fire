@@ -9,6 +9,8 @@ use std::{
     time::Duration,
 };
 
+use serde::Deserialize;
+
 use crate::config::RuntimeConfig;
 use crate::resolve::ResolvedCommand;
 
@@ -175,6 +177,18 @@ struct RuntimeRequest<'a> {
     code: Option<&'a str>,
 }
 
+#[derive(Debug, Clone)]
+enum RuntimeEvalResult {
+    Text(String),
+    Commands(Vec<String>),
+}
+
+#[derive(Debug, Default, Clone)]
+struct RuntimeResponse {
+    output_lines: Vec<String>,
+    eval_result: Option<RuntimeEvalResult>,
+}
+
 fn run_evals_with_runtime(
     resolved: &ResolvedCommand<'_>,
     context: &ExecutionContext,
@@ -210,7 +224,17 @@ fn run_evals_with_runtime(
             eprintln!("[fire] Runtime engine `{runtime_key}` not available.");
             process::exit(1);
         });
-        engine.eval(code);
+        let commands = engine.eval(code);
+        for command in commands {
+            let status = run_shell_command(&command, &context.dir);
+            let code = status.code().unwrap_or(1);
+            if code != 0 {
+                for (_, mut engine) in engines {
+                    engine.close();
+                }
+                process::exit(code);
+            }
+        }
     }
 
     for (_, mut engine) in engines {
@@ -484,7 +508,7 @@ impl RuntimeEngine {
         }
     }
 
-    fn eval(&mut self, code: &str) {
+    fn eval(&mut self, code: &str) -> Vec<String> {
         let id = self.next_request_id();
         let request = RuntimeRequest {
             op: "eval",
@@ -494,9 +518,18 @@ impl RuntimeEngine {
         };
 
         match run_runtime_request(&mut self.session, &request) {
-            Ok(output_lines) => {
-                for line in output_lines {
+            Ok(response) => {
+                for line in response.output_lines {
                     println!("{line}");
+                }
+
+                match response.eval_result {
+                    Some(RuntimeEvalResult::Text(value)) => {
+                        println!("{value}");
+                        Vec::new()
+                    }
+                    Some(RuntimeEvalResult::Commands(commands)) => commands,
+                    None => Vec::new(),
                 }
             }
             Err(err) => {
@@ -517,7 +550,15 @@ impl RuntimeEngine {
         };
 
         run_runtime_request(&mut self.session, &request)
-            .map(|lines| lines.join("\n"))
+            .map(|response| {
+                let mut lines = response.output_lines;
+                match response.eval_result {
+                    Some(RuntimeEvalResult::Text(value)) => lines.push(value),
+                    Some(RuntimeEvalResult::Commands(commands)) => lines.push(commands.join("\n")),
+                    None => {}
+                }
+                lines.join("\n")
+            })
             .map(|mut output| {
                 while output.ends_with(['\n', '\r']) {
                     output.pop();
@@ -556,7 +597,7 @@ impl RuntimeEngine {
 fn run_runtime_request(
     session: &mut RuntimeSession,
     request: &RuntimeRequest<'_>,
-) -> Result<Vec<String>, String> {
+) -> Result<RuntimeResponse, String> {
     let payload = format_runtime_request_json(request);
     writeln!(session.stdin, "{payload}").map_err(|err| format!("Cannot write request: {err}"))?;
     session
@@ -566,7 +607,9 @@ fn run_runtime_request(
 
     let done_marker = format!("__FIRE_DONE__{}", request.id);
     let error_prefix = format!("__FIRE_ERROR__{}:", request.id);
+    let result_prefix = format!("__FIRE_RESULT__{}:", request.id);
     let mut output = Vec::new();
+    let mut eval_result = None;
 
     loop {
         let mut line = String::new();
@@ -585,10 +628,37 @@ fn run_runtime_request(
         if let Some(rest) = line.strip_prefix(&error_prefix) {
             return Err(rest.to_string());
         }
+        if let Some(payload) = line.strip_prefix(&result_prefix) {
+            if let Some(parsed) = parse_runtime_result_payload(payload) {
+                eval_result = Some(parsed);
+                continue;
+            }
+        }
         output.push(line);
     }
 
-    Ok(output)
+    Ok(RuntimeResponse {
+        output_lines: output,
+        eval_result,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeResultPayload {
+    kind: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    commands: Vec<String>,
+}
+
+fn parse_runtime_result_payload(payload: &str) -> Option<RuntimeEvalResult> {
+    let parsed: RuntimeResultPayload = yaml_serde::from_str(payload).ok()?;
+    match parsed.kind.as_str() {
+        "text" => Some(RuntimeEvalResult::Text(parsed.text)),
+        "commands" => Some(RuntimeEvalResult::Commands(parsed.commands)),
+        _ => None,
+    }
 }
 
 fn format_runtime_request_json(request: &RuntimeRequest<'_>) -> String {
@@ -854,8 +924,15 @@ for raw in sys.stdin:
             except SyntaxError:
                 exec(code, ctx)
                 value = None
-            if value is not None:
-                print(value, flush=True)
+            if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                payload = json.dumps({"kind": "commands", "commands": value}, ensure_ascii=False)
+                print(f"__FIRE_RESULT__{rid}:{payload}", flush=True)
+            elif isinstance(value, str):
+                payload = json.dumps({"kind": "text", "text": value}, ensure_ascii=False)
+                print(f"__FIRE_RESULT__{rid}:{payload}", flush=True)
+            elif value is not None:
+                payload = json.dumps({"kind": "text", "text": str(value)}, ensure_ascii=False)
+                print(f"__FIRE_RESULT__{rid}:{payload}", flush=True)
             print(f"__FIRE_DONE__{rid}", flush=True)
         elif op == "exit":
             print(f"__FIRE_DONE__{rid}", flush=True)
@@ -870,6 +947,7 @@ fn node_runtime_bootstrap_script() -> &'static str {
 const { pathToFileURL } = require("node:url");
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const done = (id) => process.stdout.write(`__FIRE_DONE__${id}\n`);
+const result = (id, payload) => process.stdout.write(`__FIRE_RESULT__${id}:${JSON.stringify(payload)}\n`);
 rl.on("line", async (line) => {
   const trimmed = line.trim();
   if (!trimmed) return;
@@ -889,8 +967,12 @@ rl.on("line", async (line) => {
     }
     if (msg.op === "eval") {
       const value = await eval(msg.code);
-      if (value !== undefined) {
-        process.stdout.write(String(value) + "\n");
+      if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+        result(id, { kind: "commands", commands: value });
+      } else if (typeof value === "string") {
+        result(id, { kind: "text", text: value });
+      } else if (value !== undefined) {
+        result(id, { kind: "text", text: String(value) });
       }
       done(id);
       return;
@@ -914,6 +996,7 @@ const writeLine = async (value) => {
   await Deno.stdout.write(encoder.encode(value + "\n"));
 };
 const done = async (id) => writeLine(`__FIRE_DONE__${id}`);
+const result = async (id, payload) => writeLine(`__FIRE_RESULT__${id}:${JSON.stringify(payload)}`);
 const toFileUrl = (path) => new URL(`file://${path.startsWith("/") ? path : "/" + path}`).href;
 const handle = async (line) => {
   const trimmed = line.trim();
@@ -934,8 +1017,12 @@ const handle = async (line) => {
     }
     if (msg.op === "eval") {
       const value = await eval(msg.code);
-      if (value !== undefined) {
-        await writeLine(String(value));
+      if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+        await result(id, { kind: "commands", commands: value });
+      } else if (typeof value === "string") {
+        await result(id, { kind: "text", text: value });
+      } else if (value !== undefined) {
+        await result(id, { kind: "text", text: String(value) });
       }
       await done(id);
       return;
@@ -1983,6 +2070,30 @@ mod tests {
         let (runtime, code) = split_runtime_eval("py:sayHello()");
         assert_eq!(runtime, "py");
         assert_eq!(code, "sayHello()");
+    }
+
+    #[test]
+    fn runtime_result_payload_parses_text_value() {
+        let parsed = parse_runtime_result_payload(r#"{"kind":"text","text":"hello"}"#)
+            .expect("parse text payload");
+        match parsed {
+            RuntimeEvalResult::Text(value) => assert_eq!(value, "hello"),
+            RuntimeEvalResult::Commands(_) => panic!("expected text result"),
+        }
+    }
+
+    #[test]
+    fn runtime_result_payload_parses_commands_array() {
+        let parsed = parse_runtime_result_payload(
+            r#"{"kind":"commands","commands":["echo one","echo two"]}"#,
+        )
+        .expect("parse commands payload");
+        match parsed {
+            RuntimeEvalResult::Commands(values) => {
+                assert_eq!(values, vec!["echo one".to_string(), "echo two".to_string()])
+            }
+            RuntimeEvalResult::Text(_) => panic!("expected commands result"),
+        }
     }
 
     #[test]

@@ -54,7 +54,17 @@ computed3:
 ```
 
 ## Library loading and sessions
-For each runtime key, Fire starts a session, loads files matching `paths`, and reuses the same process for multiple `eval` statements. Outputs printed by the runtime are forwarded to the user; returned values are printed when present.
+For each runtime key, Fire starts a session, loads files matching `paths`, and reuses the same process for multiple `eval` statements.
+
+`eval` return handling:
+- `void` / `undefined` / `None`: no implicit output.
+- `string`: printed as command output (same behavior as today).
+- `string[]` (array/list of strings): each item is executed as a shell command, in order.
+- Any other return type: converted to string and printed.
+
+Notes:
+- This applies only to the **return value** of `eval`.
+- Regular `print`/`console.log` output from your runtime code is still forwarded as-is.
 
 ## Compute + eval
 `compute` entries can also use runtime prefixes. These run **before** command rendering and can feed into placeholders:
