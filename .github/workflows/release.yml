@@ -48,7 +48,26 @@ jobs:
           esac
           VERSION="${TAG_NAME#v}"
           perl -0777 -i -pe 's/^version\s*=\s*"[0-9A-Za-z\.\-\+]+"/version = "'"${VERSION}"'"/m' Cargo.toml
-          perl -0777 -i -pe 's/(\[\[package\]\]\nname = "fire-cli"\nversion = ")[0-9A-Za-z\.\-\+]+(")/$1'"${VERSION}"'$2/m' Cargo.lock
+          awk -v v="${VERSION}" '
+            BEGIN { in_pkg = 0; fire_pkg = 0; updated = 0 }
+            /^\[\[package\]\]$/ { in_pkg = 1; fire_pkg = 0 }
+            in_pkg && /^name = "fire-cli"$/ { fire_pkg = 1; print; next }
+            in_pkg && fire_pkg && /^version = "/ {
+              print "version = \"" v "\""
+              in_pkg = 0
+              fire_pkg = 0
+              updated = 1
+              next
+            }
+            { print }
+            END {
+              if (updated == 0) {
+                print "fire-cli package block not found in Cargo.lock" > "/dev/stderr"
+                exit 1
+              }
+            }
+          ' Cargo.lock > Cargo.lock.tmp
+          mv Cargo.lock.tmp Cargo.lock
           grep -n '^version = ' Cargo.toml
           awk 'found && /^version = / {print; exit} /^\[\[package\]\]$/ {found=0} /^name = "fire-cli"$/ {found=1}' Cargo.lock
 
