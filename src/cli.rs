@@ -3,6 +3,7 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     process,
+    process::Command,
 };
 
 use crate::registry::{install_directory, InstallResult};
@@ -11,6 +12,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
     match command_args {
         [cli, install] if cli == "cli" && install == "install" => run_install(),
         [cli, init] if cli == "cli" && init == "init" => run_init(),
+        [cli, upgrade] if cli == "cli" && upgrade == "upgrade" => run_upgrade(),
         [cli, completion] if cli == "cli" && completion == "completion" => {
             print_completion_help();
         }
@@ -37,6 +39,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("Usage:");
             eprintln!("  fire cli install");
             eprintln!("  fire cli init");
+            eprintln!("  fire cli upgrade");
             eprintln!("  fire cli completion install [bash|zsh|all]");
             process::exit(1);
         }
@@ -108,17 +111,54 @@ fn run_init() {
 }
 
 fn print_cli_help() {
-    println!("Fire CLI Management");
+    println!("Fire CLI Management v{}", crate::FIRE_VERSION);
     println!("Commands:");
     println!("  install  Register the current directory for global command loading");
     println!("  init     Create a minimal fire config file with guided prompts");
+    println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");
     println!("  completion  Manage shell completion scripts");
 }
 
 fn print_completion_help() {
-    println!("Fire CLI Completion");
+    println!("Fire CLI Completion v{}", crate::FIRE_VERSION);
     println!("Commands:");
     println!("  install [bash|zsh|all]  Install completion scripts (default: all)");
+}
+
+fn run_upgrade() {
+    if !is_brew_installation() {
+        eprintln!(
+            "[fire] `fire cli upgrade` is only supported when `fire` is installed via Homebrew."
+        );
+        process::exit(1);
+    }
+
+    run_checked("brew", &["update"]);
+    run_checked("brew", &["upgrade", "fire"]);
+}
+
+fn run_checked(cmd: &str, args: &[&str]) {
+    let status = Command::new(cmd).args(args).status().unwrap_or_else(|err| {
+        eprintln!("[fire] Failed to run `{cmd} {}`: {err}", args.join(" "));
+        process::exit(1);
+    });
+    if !status.success() {
+        process::exit(status.code().unwrap_or(1));
+    }
+}
+
+fn is_brew_installation() -> bool {
+    is_brew_formula_installed("fire")
+}
+
+fn is_brew_formula_installed(formula: &str) -> bool {
+    let output = Command::new("brew")
+        .args(["list", "--versions", formula])
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    output.status.success()
 }
 
 fn prompt_base_file_name() -> String {

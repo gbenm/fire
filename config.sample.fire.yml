@@ -45,6 +45,8 @@ x-arg-config: &arg-config
 commands:
   hello: echo hello world
 
+  pwd: pwd
+
   double:
     commands:
       hello:
@@ -171,5 +173,6 @@ commands:
     placeholder: "@{n}"
     exec: "echo argument 1: @1, argument @2"
 
-  hello-eval:
+  echo-eval:
+    dir: schemas
     eval: ts:getEcho()

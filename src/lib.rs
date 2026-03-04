@@ -15,6 +15,8 @@ use execute::execute_resolved_command;
 use help::{print_command_help, print_root_help, print_scope_help};
 use resolve::{detect_terminal_command_collision, resolve_command};
 
+pub const FIRE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub fn setup_cli() {
     let mut args: Vec<String> = env::args().collect();
     let bin_name = args

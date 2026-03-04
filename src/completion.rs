@@ -182,6 +182,10 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
             value: "completion".to_string(),
             description: Some("Install shell completion scripts".to_string()),
         },
+        CompletionSuggestion {
+            value: "upgrade".to_string(),
+            description: Some("Upgrade fire via Homebrew (brew installs only)".to_string()),
+        },
     ];
 
     suggestions
@@ -955,7 +959,7 @@ commands:
         let config = config_with_scopes();
         let values = completion_suggestions(&config, &["cli".to_string()]);
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
-        assert_eq!(names, vec!["install", "init", "completion"]);
+        assert_eq!(names, vec!["install", "init", "completion", "upgrade"]);
     }
 
     #[test]

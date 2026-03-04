@@ -7,6 +7,7 @@ use crate::config::{local_implicit_namespace, CommandEntry, LoadedConfig, Runtim
 
 pub(crate) struct ResolvedCommand<'a> {
     pub(crate) project_dir: &'a Path,
+    pub(crate) runtime_paths_base_dir: &'a Path,
     pub(crate) runtimes: &'a BTreeMap<String, RuntimeConfig>,
     pub(crate) command: &'a CommandEntry,
     pub(crate) command_chain: Vec<&'a CommandEntry>,
@@ -48,6 +49,10 @@ pub(crate) fn resolve_command<'a>(
 
             let candidate = ResolvedCommand {
                 project_dir: &file.project_dir,
+                runtime_paths_base_dir: file
+                    .config_path
+                    .parent()
+                    .unwrap_or(file.project_dir.as_path()),
                 runtimes: &file.runtimes,
                 command: current,
                 command_chain: chain,
@@ -210,7 +215,10 @@ fn better_than(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, path::PathBuf};
+    use std::{
+        collections::BTreeMap,
+        path::{Path, PathBuf},
+    };
 
     use crate::config::{CommandEntry, FileConfig, FileScope, LoadedConfig, SourceKind};
 
@@ -558,6 +566,32 @@ commands:
         assert!(
             detect_terminal_command_collision(&config, &nested_args, nested_resolved.consumed)
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn runtime_paths_base_dir_comes_from_runtime_file_directory() {
+        let yaml = r#"
+commands:
+  run:
+    exec: echo run
+"#;
+        let config = LoadedConfig {
+            files: vec![FileConfig {
+                source: SourceKind::Local,
+                project_dir: PathBuf::from("/tmp/project"),
+                config_path: PathBuf::from("/tmp/project/configs/backend.fire.yml"),
+                scope: FileScope::Root,
+                runtimes: BTreeMap::new(),
+                commands: parse_commands(yaml),
+            }],
+        };
+
+        let args = vec!["run".to_string()];
+        let resolved = resolve_command(&config, &args).expect("resolved");
+        assert_eq!(
+            resolved.runtime_paths_base_dir,
+            Path::new("/tmp/project/configs")
         );
     }
 }

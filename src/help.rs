@@ -12,7 +12,7 @@ pub(crate) fn print_root_help(config: &LoadedConfig) {
         Some("Manage command configuration".to_string()),
     )];
 
-    println!("Fire CLI");
+    println!("Fire CLI v{}", crate::FIRE_VERSION);
     print_section("Commands", &local_commands);
     print_section("Namespaces", &namespaces);
     print_section("Groups", &groups);
@@ -50,7 +50,7 @@ pub(crate) fn print_scope_help(config: &LoadedConfig, path: &[String]) -> bool {
 
 pub(crate) fn print_command_help(command_path: &[String], command: &CommandEntry) {
     if command_path.is_empty() {
-        println!("Fire CLI");
+        println!("Fire CLI v{}", crate::FIRE_VERSION);
     } else {
         println!("Command: {}", command_path.join(" "));
     }

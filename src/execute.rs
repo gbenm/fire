@@ -327,7 +327,8 @@ fn start_runtime_engine_for_key(
     );
     let mut engine = RuntimeEngine::start(&launch, &context.dir);
 
-    let library_paths = resolve_runtime_library_paths(&context.dir, &runtime.paths);
+    let library_paths =
+        resolve_runtime_library_paths(resolved.runtime_paths_base_dir, &runtime.paths);
     for path in &library_paths {
         engine.load(path);
     }
@@ -1802,7 +1803,7 @@ fn ensure_non_tty_for_docker_compose_exec(tokens: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CommandEntry, CommandSpec};
+    use crate::config::{CommandAction, CommandEntry, CommandSpec};
     use std::{collections::BTreeMap, path::Path};
 
     fn render_runtime_string(
@@ -2244,6 +2245,7 @@ mod tests {
         let original = vec!["first".to_string(), "second value".to_string()];
         let resolved = ResolvedCommand {
             project_dir: Path::new("."),
+            runtime_paths_base_dir: Path::new("."),
             runtimes: &runtimes,
             command: &command,
             command_chain: vec![&command],
@@ -2270,6 +2272,7 @@ mod tests {
         let original = vec!["one".to_string()];
         let resolved = ResolvedCommand {
             project_dir: Path::new("."),
+            runtime_paths_base_dir: Path::new("."),
             runtimes: &runtimes,
             command: &command,
             command_chain: vec![&command],
@@ -2305,6 +2308,7 @@ mod tests {
         let original = vec!["placeholder".to_string()];
         let resolved = ResolvedCommand {
             project_dir: Path::new("."),
+            runtime_paths_base_dir: Path::new("."),
             runtimes: &runtimes,
             command: &command,
             command_chain: vec![&command],
@@ -2314,5 +2318,39 @@ mod tests {
 
         let computed = compute_values(&resolved, &context, &original);
         assert_eq!(computed.get("{value}"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn nested_dirs_are_resolved_relative_to_parent_command() {
+        let nested2 = CommandEntry::Spec(CommandSpec {
+            dir: "sub".to_string(),
+            exec: Some(CommandAction::Single("echo nested2".to_string())),
+            ..CommandSpec::default()
+        });
+        let nested = CommandEntry::Spec(CommandSpec {
+            dir: "sub".to_string(),
+            commands: BTreeMap::from([("nested2".to_string(), nested2.clone())]),
+            ..CommandSpec::default()
+        });
+        let root = CommandEntry::Spec(CommandSpec {
+            dir: "schemas".to_string(),
+            commands: BTreeMap::from([("nested".to_string(), nested.clone())]),
+            ..CommandSpec::default()
+        });
+
+        let runtimes = BTreeMap::new();
+        let args = Vec::<String>::new();
+        let resolved = ResolvedCommand {
+            project_dir: Path::new("/tmp/project"),
+            runtime_paths_base_dir: Path::new("/tmp/project"),
+            runtimes: &runtimes,
+            command: &nested2,
+            command_chain: vec![&root, &nested, &nested2],
+            consumed: 3,
+            remaining_args: &args,
+        };
+
+        let context = build_execution_context(&resolved);
+        assert_eq!(context.dir, PathBuf::from("/tmp/project/schemas/sub/sub"));
     }
 }

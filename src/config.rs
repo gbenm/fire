@@ -114,6 +114,24 @@ struct FireFileRaw {
     #[serde(default)]
     namespace: Option<NamespaceRaw>,
     #[serde(default)]
+    before: String,
+    #[serde(default)]
+    placeholder: String,
+    #[serde(default)]
+    on_unused_args: String,
+    #[serde(default)]
+    compute: BTreeMap<String, String>,
+    #[serde(default)]
+    macros: BTreeMap<String, String>,
+    #[serde(default)]
+    dir: String,
+    #[serde(default)]
+    check: String,
+    #[serde(default)]
+    runner: String,
+    #[serde(default)]
+    fallback_runner: String,
+    #[serde(default)]
     include: Vec<String>,
     #[serde(default)]
     runtimes: BTreeMap<String, RuntimeConfig>,
@@ -141,6 +159,23 @@ struct NamespaceScope {
 struct ParsedFireFile {
     path: PathBuf,
     raw: FireFileRaw,
+}
+
+impl FireFileRaw {
+    fn command_defaults(&self) -> CommandSpec {
+        CommandSpec {
+            before: self.before.clone(),
+            placeholder: self.placeholder.clone(),
+            on_unused_args: self.on_unused_args.clone(),
+            compute: self.compute.clone(),
+            macros: self.macros.clone(),
+            dir: self.dir.clone(),
+            check: self.check.clone(),
+            runner: self.runner.clone(),
+            fallback_runner: self.fallback_runner.clone(),
+            ..CommandSpec::default()
+        }
+    }
 }
 
 impl CommandEntry {
@@ -392,15 +427,108 @@ fn to_file_configs(
 ) -> Vec<FileConfig> {
     raw_files
         .iter()
-        .map(|parsed| FileConfig {
-            source,
-            project_dir: project_dir.to_path_buf(),
-            config_path: parsed.path.clone(),
-            scope: scope_from_raw(&parsed.raw, default_namespace_prefix, forced_namespace),
-            runtimes: parsed.raw.runtimes.clone(),
-            commands: parsed.raw.commands.clone(),
+        .map(|parsed| {
+            let defaults = parsed.raw.command_defaults();
+            FileConfig {
+                source,
+                project_dir: project_dir.to_path_buf(),
+                config_path: parsed.path.clone(),
+                scope: scope_from_raw(&parsed.raw, default_namespace_prefix, forced_namespace),
+                runtimes: parsed.raw.runtimes.clone(),
+                commands: apply_file_defaults_to_commands(&parsed.raw.commands, &defaults),
+            }
         })
         .collect()
+}
+
+fn apply_file_defaults_to_commands(
+    commands: &BTreeMap<String, CommandEntry>,
+    defaults: &CommandSpec,
+) -> BTreeMap<String, CommandEntry> {
+    if command_defaults_empty(defaults) {
+        return commands.clone();
+    }
+
+    commands
+        .iter()
+        .map(|(name, entry)| {
+            (
+                name.clone(),
+                apply_file_defaults_to_entry(entry.clone(), defaults),
+            )
+        })
+        .collect()
+}
+
+fn apply_file_defaults_to_entry(entry: CommandEntry, defaults: &CommandSpec) -> CommandEntry {
+    match entry {
+        CommandEntry::Shorthand(exec) => {
+            let mut spec = defaults.clone();
+            spec.exec = Some(CommandAction::Single(exec));
+            CommandEntry::Spec(spec)
+        }
+        CommandEntry::Spec(mut spec) => {
+            if spec.before.trim().is_empty() {
+                spec.before = defaults.before.clone();
+            }
+            if spec.placeholder.trim().is_empty() {
+                spec.placeholder = defaults.placeholder.clone();
+            }
+            if spec.on_unused_args.trim().is_empty() {
+                spec.on_unused_args = defaults.on_unused_args.clone();
+            }
+            if !defaults.dir.trim().is_empty() {
+                if spec.dir.trim().is_empty() {
+                    spec.dir = defaults.dir.clone();
+                } else if !Path::new(spec.dir.trim()).is_absolute() {
+                    spec.dir = join_dir_fragments(&defaults.dir, &spec.dir);
+                }
+            }
+            if spec.check.trim().is_empty() {
+                spec.check = defaults.check.clone();
+            }
+            if spec.runner.trim().is_empty() {
+                spec.runner = defaults.runner.clone();
+            }
+            if spec.fallback_runner.trim().is_empty() {
+                spec.fallback_runner = defaults.fallback_runner.clone();
+            }
+
+            if !defaults.compute.is_empty() {
+                let mut merged = defaults.compute.clone();
+                merged.extend(spec.compute.clone());
+                spec.compute = merged;
+            }
+            if !defaults.macros.is_empty() {
+                let mut merged = defaults.macros.clone();
+                merged.extend(spec.macros.clone());
+                spec.macros = merged;
+            }
+
+            CommandEntry::Spec(spec)
+        }
+    }
+}
+
+fn join_dir_fragments(base: &str, child: &str) -> String {
+    let base = base.trim();
+    let child = child.trim();
+    if base.is_empty() {
+        return child.to_string();
+    }
+    Path::new(base).join(child).to_string_lossy().to_string()
+}
+
+fn command_defaults_empty(defaults: &CommandSpec) -> bool {
+    defaults.before.trim().is_empty()
+        && defaults.placeholder.trim().is_empty()
+        && defaults.on_unused_args.trim().is_empty()
+        && defaults.compute.is_empty()
+        && defaults.macros.is_empty()
+        && defaults.dir.trim().is_empty()
+        && defaults.check.trim().is_empty()
+        && defaults.runner.trim().is_empty()
+        && defaults.fallback_runner.trim().is_empty()
 }
 
 fn scope_from_raw(
@@ -641,6 +769,7 @@ mod tests {
                     runtimes: BTreeMap::new(),
                     commands: BTreeMap::new(),
                     _extra: BTreeMap::new(),
+                    ..FireFileRaw::default()
                 },
             },
             ParsedFireFile {
@@ -652,6 +781,7 @@ mod tests {
                     runtimes: BTreeMap::new(),
                     commands: BTreeMap::new(),
                     _extra: BTreeMap::new(),
+                    ..FireFileRaw::default()
                 },
             },
         ];
@@ -682,6 +812,7 @@ mod tests {
             runtimes: BTreeMap::new(),
             commands: BTreeMap::new(),
             _extra: BTreeMap::new(),
+            ..FireFileRaw::default()
         };
         let forced = NamespaceScope {
             prefix: "ex".to_string(),
@@ -862,6 +993,77 @@ commands:
             }
             _ => panic!("expected spec"),
         }
+    }
+
+    #[test]
+    fn file_level_dir_applies_to_top_level_commands() {
+        let raw = FireFileRaw {
+            dir: "./schemas".to_string(),
+            commands: BTreeMap::from([(
+                "hello".to_string(),
+                CommandEntry::Shorthand("echo hi".to_string()),
+            )]),
+            ..FireFileRaw::default()
+        };
+
+        let parsed = vec![ParsedFireFile {
+            path: PathBuf::from("/tmp/project/fire.yml"),
+            raw,
+        }];
+        let files = to_file_configs(&parsed, SourceKind::Local, Path::new("/tmp/project"), None, None);
+        let command = files[0].commands.get("hello").expect("hello command");
+        let spec = command.spec().expect("spec command");
+        assert_eq!(spec.dir, "./schemas");
+    }
+
+    #[test]
+    fn command_level_dir_overrides_file_level_dir() {
+        let raw = FireFileRaw {
+            dir: "./schemas".to_string(),
+            commands: BTreeMap::from([(
+                "hello".to_string(),
+                CommandEntry::Spec(CommandSpec {
+                    dir: "custom".to_string(),
+                    exec: Some(CommandAction::Single("echo hi".to_string())),
+                    ..CommandSpec::default()
+                }),
+            )]),
+            ..FireFileRaw::default()
+        };
+
+        let parsed = vec![ParsedFireFile {
+            path: PathBuf::from("/tmp/project/fire.yml"),
+            raw,
+        }];
+        let files = to_file_configs(&parsed, SourceKind::Local, Path::new("/tmp/project"), None, None);
+        let command = files[0].commands.get("hello").expect("hello command");
+        let spec = command.spec().expect("spec command");
+        assert_eq!(spec.dir, "./schemas/custom");
+    }
+
+    #[test]
+    fn absolute_command_dir_does_not_chain_with_file_level_dir() {
+        let raw = FireFileRaw {
+            dir: "./schemas".to_string(),
+            commands: BTreeMap::from([(
+                "hello".to_string(),
+                CommandEntry::Spec(CommandSpec {
+                    dir: "/tmp/absolute".to_string(),
+                    exec: Some(CommandAction::Single("echo hi".to_string())),
+                    ..CommandSpec::default()
+                }),
+            )]),
+            ..FireFileRaw::default()
+        };
+
+        let parsed = vec![ParsedFireFile {
+            path: PathBuf::from("/tmp/project/fire.yml"),
+            raw,
+        }];
+        let files = to_file_configs(&parsed, SourceKind::Local, Path::new("/tmp/project"), None, None);
+        let command = files[0].commands.get("hello").expect("hello command");
+        let spec = command.spec().expect("spec command");
+        assert_eq!(spec.dir, "/tmp/absolute");
     }
 
     #[test]

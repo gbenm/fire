@@ -35,6 +35,23 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Sync Cargo.toml version from tag
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          case "${TAG_NAME}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "Invalid tag format: ${TAG_NAME}. Expected vX.Y.Z"
+              exit 1
+              ;;
+          esac
+          VERSION="${TAG_NAME#v}"
+          perl -0777 -i -pe 's/^version\s*=\s*"[0-9A-Za-z\.\-\+]+"/version = "'"${VERSION}"'"/m' Cargo.toml
+          perl -0777 -i -pe 's/(\[\[package\]\]\nname = "fire-cli"\nversion = ")[0-9A-Za-z\.\-\+]+(")/$1'"${VERSION}"'$2/m' Cargo.lock
+          grep -n '^version = ' Cargo.toml
+          awk 'found && /^version = / {print; exit} /^\[\[package\]\]$/ {found=0} /^name = "fire-cli"$/ {found=1}' Cargo.lock
+
       - name: Build release binary
         run: cargo build --release --locked --target "${{ matrix.target }}"
 

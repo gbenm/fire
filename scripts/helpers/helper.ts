@@ -8,6 +8,8 @@ export function getServiceNameById(id: string): string {
 }
 
 export const getEcho = () => [
-	"echo Hello from helper.ts!"
+	"echo Hello from helper.ts!",
+	"pwd",
+	"ls",
 ];
 

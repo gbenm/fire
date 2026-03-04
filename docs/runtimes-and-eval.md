@@ -31,6 +31,9 @@ Fields:
 - `check`: optional probe; if it fails, `fallback_runner` is used.
 - `fallback_runner`: alternative runner (often a container image) when `check` fails.
 - `paths`: glob patterns to pre-load modules/functions into the runtime session.
+  - Absolute paths are supported.
+  - Relative paths are resolved from the directory of the YAML file that defines that runtime.
+  - This only affects runtime file loading; runtime execution directory still follows normal command `dir` resolution.
 
 ## `eval` expressions
 Syntax: `<runtimeKey>:<code>`
