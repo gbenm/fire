@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::config::{CommandEntry, FileScope, LoadedConfig};
+use crate::config::{local_implicit_namespace, CommandEntry, FileScope, LoadedConfig};
 
 pub(crate) fn print_root_help(config: &LoadedConfig) {
     let local_commands = local_commands(config);
@@ -119,19 +119,25 @@ fn print_section(title: &str, items: &[(String, Option<String>)]) {
 
 fn local_commands(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
     let mut map = BTreeMap::new();
+    let implicit_namespace = local_implicit_namespace(config);
     for file in &config.files {
-        if file.source != crate::config::SourceKind::Local {
-            continue;
-        }
         match &file.scope {
-            FileScope::Root | FileScope::Namespace { .. } => {
+            FileScope::Root if file.source == crate::config::SourceKind::Local => {
                 for (name, entry) in &file.commands {
                     map.insert(name.clone(), optional_description(entry));
+                }
+            }
+            FileScope::Namespace { namespace, .. } => {
+                if implicit_namespace.as_deref() == Some(namespace.as_str()) {
+                    for (name, entry) in &file.commands {
+                        map.insert(name.clone(), optional_description(entry));
+                    }
                 }
             }
             FileScope::Group { .. } | FileScope::NamespaceGroup { .. } => {
                 // Commands inside groups are NOT displayed at root level.
             }
+            FileScope::Root => {}
         }
     }
     map.into_iter().collect()
@@ -160,13 +166,18 @@ fn namespaces(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
 
 fn groups(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
     let mut map = BTreeMap::new();
+    let implicit_namespace = local_implicit_namespace(config);
     for file in &config.files {
         match &file.scope {
             FileScope::Group { group } => {
                 map.insert(group.clone(), None);
             }
-            FileScope::NamespaceGroup { group, .. } if file.source == crate::config::SourceKind::Local => {
-                map.insert(group.clone(), None);
+            FileScope::NamespaceGroup {
+                namespace, group, ..
+            } => {
+                if implicit_namespace.as_deref() == Some(namespace.as_str()) {
+                    map.insert(group.clone(), None);
+                }
             }
             _ => {}
         }
@@ -239,12 +250,15 @@ fn namespace_groups(config: &LoadedConfig, namespace: &str) -> Vec<(String, Opti
 
 fn group_commands(config: &LoadedConfig, group: &str) -> Vec<(String, Option<String>)> {
     let mut map = BTreeMap::new();
+    let implicit_namespace = local_implicit_namespace(config);
     for file in &config.files {
         let is_match = match &file.scope {
             FileScope::Group { group: file_alias } => file_alias == group,
-            FileScope::NamespaceGroup { group: file_alias, .. } if file.source == crate::config::SourceKind::Local => {
-                file_alias == group
-            }
+            FileScope::NamespaceGroup {
+                namespace,
+                group: file_alias,
+                ..
+            } => implicit_namespace.as_deref() == Some(namespace.as_str()) && file_alias == group,
             _ => false,
         };
 
@@ -299,11 +313,14 @@ fn has_namespace(config: &LoadedConfig, namespace: &str) -> bool {
 }
 
 fn has_root_group(config: &LoadedConfig, group: &str) -> bool {
+    let implicit_namespace = local_implicit_namespace(config);
     config.files.iter().any(|file| match &file.scope {
         FileScope::Group { group: file_alias } => file_alias == group,
-        FileScope::NamespaceGroup { group: file_alias, .. } if file.source == crate::config::SourceKind::Local => {
-            file_alias == group
-        }
+        FileScope::NamespaceGroup {
+            namespace,
+            group: file_alias,
+            ..
+        } => implicit_namespace.as_deref() == Some(namespace.as_str()) && file_alias == group,
         _ => false,
     })
 }
@@ -358,6 +375,7 @@ mod tests {
                 FileConfig {
                     source: SourceKind::Local,
                     project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/fire-test.yml"),
                     scope: FileScope::Root,
                     runtimes: BTreeMap::new(),
                     commands: parse_commands(
@@ -372,6 +390,7 @@ commands:
                 FileConfig {
                     source: SourceKind::Global,
                     project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/fire-test.yml"),
                     scope: FileScope::Namespace {
                         namespace: "ex".to_string(),
                         namespace_description: "Example".to_string(),
@@ -389,6 +408,7 @@ commands:
                 FileConfig {
                     source: SourceKind::Global,
                     project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/fire-test.yml"),
                     scope: FileScope::NamespaceGroup {
                         namespace: "ex".to_string(),
                         namespace_description: "Example".to_string(),

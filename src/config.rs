@@ -24,6 +24,7 @@ pub(crate) enum SourceKind {
 pub(crate) struct FileConfig {
     pub(crate) source: SourceKind,
     pub(crate) project_dir: PathBuf,
+    pub(crate) config_path: PathBuf,
     pub(crate) scope: FileScope,
     pub(crate) runtimes: BTreeMap<String, RuntimeConfig>,
     pub(crate) commands: BTreeMap<String, CommandEntry>,
@@ -136,6 +137,12 @@ struct NamespaceScope {
     description: String,
 }
 
+#[derive(Debug, Clone)]
+struct ParsedFireFile {
+    path: PathBuf,
+    raw: FireFileRaw,
+}
+
 impl CommandEntry {
     pub(crate) fn description(&self) -> Option<&str> {
         match self {
@@ -222,6 +229,25 @@ pub(crate) fn load_config() -> LoadedConfig {
     loaded
 }
 
+pub(crate) fn local_implicit_namespace(config: &LoadedConfig) -> Option<String> {
+    let namespaces: BTreeSet<String> = config
+        .files
+        .iter()
+        .filter(|file| file.source == SourceKind::Local)
+        .filter_map(|file| match &file.scope {
+            FileScope::Namespace { namespace, .. } => Some(namespace.clone()),
+            FileScope::NamespaceGroup { namespace, .. } => Some(namespace.clone()),
+            FileScope::Root | FileScope::Group { .. } => None,
+        })
+        .collect();
+
+    if namespaces.len() == 1 {
+        namespaces.into_iter().next()
+    } else {
+        None
+    }
+}
+
 fn detect_git_root(cwd: &Path) -> Option<PathBuf> {
     if !cwd.exists() {
         return None;
@@ -252,7 +278,7 @@ fn detect_git_root(cwd: &Path) -> Option<PathBuf> {
     let has_explicit_namespace = select_directory_explicit_namespace(&raw).is_some();
 
     if has_explicit_namespace {
-         return Some(path);
+        return Some(path);
     }
 
     None
@@ -309,25 +335,33 @@ fn load_directory_file_configs(
     files
 }
 
-fn parse_raw_files(paths: &[PathBuf]) -> Vec<FireFileRaw> {
+fn parse_raw_files(paths: &[PathBuf]) -> Vec<ParsedFireFile> {
     let mut parsed = Vec::new();
     for path in paths {
         let Ok(text) = fs::read_to_string(path) else {
             eprintln!("[fire] Could not read {}. Skipping.", path.display());
             continue;
         };
-        
+
         let mut value: yaml_serde::Value = match yaml_serde::from_str(&text) {
-             Ok(v) => v,
-             Err(err) => {
-                eprintln!("[fire] Invalid YAML in {}: {}. Skipping.", path.display(), err);
+            Ok(v) => v,
+            Err(err) => {
+                eprintln!(
+                    "[fire] Invalid YAML in {}: {}. Skipping.",
+                    path.display(),
+                    err
+                );
                 continue;
             }
         };
 
         if let Err(e) = value.apply_merge() {
-             eprintln!("[fire] Merge failed in {}: {}. Skipping.", path.display(), e);
-             continue;
+            eprintln!(
+                "[fire] Merge failed in {}: {}. Skipping.",
+                path.display(),
+                e
+            );
+            continue;
         }
 
         let value: FireFileRaw = match yaml_serde::from_value(value) {
@@ -341,13 +375,16 @@ fn parse_raw_files(paths: &[PathBuf]) -> Vec<FireFileRaw> {
                 continue;
             }
         };
-        parsed.push(value);
+        parsed.push(ParsedFireFile {
+            path: path.clone(),
+            raw: value,
+        });
     }
     parsed
 }
 
 fn to_file_configs(
-    raw_files: &[FireFileRaw],
+    raw_files: &[ParsedFireFile],
     source: SourceKind,
     project_dir: &Path,
     default_namespace_prefix: Option<&str>,
@@ -355,12 +392,13 @@ fn to_file_configs(
 ) -> Vec<FileConfig> {
     raw_files
         .iter()
-        .map(|raw| FileConfig {
+        .map(|parsed| FileConfig {
             source,
             project_dir: project_dir.to_path_buf(),
-            scope: scope_from_raw(raw, default_namespace_prefix, forced_namespace),
-            runtimes: raw.runtimes.clone(),
-            commands: raw.commands.clone(),
+            config_path: parsed.path.clone(),
+            scope: scope_from_raw(&parsed.raw, default_namespace_prefix, forced_namespace),
+            runtimes: parsed.raw.runtimes.clone(),
+            commands: parsed.raw.commands.clone(),
         })
         .collect()
 }
@@ -407,12 +445,13 @@ fn scope_from_raw(
     }
 }
 
-fn select_directory_default_namespace_prefix(raw_files: &[FireFileRaw]) -> Option<String> {
+fn select_directory_default_namespace_prefix(raw_files: &[ParsedFireFile]) -> Option<String> {
     select_directory_explicit_namespace(raw_files).map(|namespace| namespace.prefix)
 }
 
-fn select_directory_explicit_namespace(raw_files: &[FireFileRaw]) -> Option<NamespaceScope> {
-    for raw in raw_files {
+fn select_directory_explicit_namespace(raw_files: &[ParsedFireFile]) -> Option<NamespaceScope> {
+    for parsed in raw_files {
+        let raw = &parsed.raw;
         if let Some(namespace) = &raw.namespace {
             let prefix = namespace.prefix.trim();
             if !prefix.is_empty() {
@@ -426,7 +465,7 @@ fn select_directory_explicit_namespace(raw_files: &[FireFileRaw]) -> Option<Name
     None
 }
 
-fn select_local_default_namespace_prefix(raw_files: &[FireFileRaw], cwd: &Path) -> String {
+fn select_local_default_namespace_prefix(raw_files: &[ParsedFireFile], cwd: &Path) -> String {
     if let Some(prefix) = select_directory_default_namespace_prefix(raw_files) {
         return prefix;
     }
@@ -497,10 +536,11 @@ fn discover_config_files_from_dirs(directories: &[PathBuf]) -> Vec<PathBuf> {
     files.into_iter().collect()
 }
 
-fn resolve_include_directories(base_dir: &Path, raw_files: &[FireFileRaw]) -> Vec<PathBuf> {
+fn resolve_include_directories(base_dir: &Path, raw_files: &[ParsedFireFile]) -> Vec<PathBuf> {
     let mut directories = BTreeSet::new();
 
-    for raw in raw_files {
+    for parsed in raw_files {
+        let raw = &parsed.raw;
         for include in &raw.include {
             let trimmed = include.trim();
             if trimmed.is_empty() {
@@ -589,24 +629,30 @@ mod tests {
     #[test]
     fn select_directory_default_namespace_prefix_reads_first_explicit() {
         let files = vec![
-            FireFileRaw {
-                group: String::new(),
-                namespace: Some(NamespaceRaw {
-                    prefix: "ex".to_string(),
-                    description: String::new(),
-                }),
-                include: Vec::new(),
-                runtimes: BTreeMap::new(),
-                commands: BTreeMap::new(),
-                _extra: BTreeMap::new(),
+            ParsedFireFile {
+                path: PathBuf::from("/tmp/one.fire.yml"),
+                raw: FireFileRaw {
+                    group: String::new(),
+                    namespace: Some(NamespaceRaw {
+                        prefix: "ex".to_string(),
+                        description: String::new(),
+                    }),
+                    include: Vec::new(),
+                    runtimes: BTreeMap::new(),
+                    commands: BTreeMap::new(),
+                    _extra: BTreeMap::new(),
+                },
             },
-            FireFileRaw {
-                group: String::new(),
-                namespace: None,
-                include: Vec::new(),
-                runtimes: BTreeMap::new(),
-                commands: BTreeMap::new(),
-                _extra: BTreeMap::new(),
+            ParsedFireFile {
+                path: PathBuf::from("/tmp/two.fire.yml"),
+                raw: FireFileRaw {
+                    group: String::new(),
+                    namespace: None,
+                    include: Vec::new(),
+                    runtimes: BTreeMap::new(),
+                    commands: BTreeMap::new(),
+                    _extra: BTreeMap::new(),
+                },
             },
         ];
         let selected = select_directory_default_namespace_prefix(&files);
@@ -615,7 +661,10 @@ mod tests {
 
     #[test]
     fn select_local_default_namespace_prefix_falls_back_to_directory_name() {
-        let files = vec![FireFileRaw::default()];
+        let files = vec![ParsedFireFile {
+            path: PathBuf::from("/tmp/one.fire.yml"),
+            raw: FireFileRaw::default(),
+        }];
         let cwd = PathBuf::from("/tmp/My Project");
         let selected = select_local_default_namespace_prefix(&files, &cwd);
         assert_eq!(selected, "my-project".to_string());
@@ -805,7 +854,7 @@ commands:
         // Apply merge keys manually as we do in production code
         value.apply_merge().expect("merge");
         let raw: FireFileRaw = yaml_serde::from_value(value).expect("deserialize");
-        
+
         let command = raw.commands.get("param").expect("param command");
         match command {
             CommandEntry::Spec(spec) => {
@@ -813,5 +862,54 @@ commands:
             }
             _ => panic!("expected spec"),
         }
+    }
+
+    #[test]
+    fn local_implicit_namespace_requires_single_value() {
+        let config_single = LoadedConfig {
+            files: vec![FileConfig {
+                source: SourceKind::Local,
+                project_dir: PathBuf::from("."),
+                config_path: PathBuf::from("/tmp/fire-test.yml"),
+                scope: FileScope::Namespace {
+                    namespace: "ex".to_string(),
+                    namespace_description: String::new(),
+                },
+                runtimes: BTreeMap::new(),
+                commands: BTreeMap::new(),
+            }],
+        };
+        assert_eq!(
+            local_implicit_namespace(&config_single),
+            Some("ex".to_string())
+        );
+
+        let config_multiple = LoadedConfig {
+            files: vec![
+                FileConfig {
+                    source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/fire-test.yml"),
+                    scope: FileScope::Namespace {
+                        namespace: "ex".to_string(),
+                        namespace_description: String::new(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: BTreeMap::new(),
+                },
+                FileConfig {
+                    source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/fire-test.yml"),
+                    scope: FileScope::Namespace {
+                        namespace: "qa".to_string(),
+                        namespace_description: String::new(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: BTreeMap::new(),
+                },
+            ],
+        };
+        assert_eq!(local_implicit_namespace(&config_multiple), None);
     }
 }

@@ -1,6 +1,9 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
-use crate::config::{CommandEntry, LoadedConfig, RuntimeConfig};
+use crate::config::{local_implicit_namespace, CommandEntry, LoadedConfig, RuntimeConfig};
 
 pub(crate) struct ResolvedCommand<'a> {
     pub(crate) project_dir: &'a Path,
@@ -16,10 +19,13 @@ pub(crate) fn resolve_command<'a>(
     args: &'a [String],
 ) -> Option<ResolvedCommand<'a>> {
     let mut best: Option<ResolvedCommand<'a>> = None;
+    let implicit_namespace = local_implicit_namespace(config);
 
     for file in &config.files {
         for (command_name, command_entry) in &file.commands {
-            let Some(base_consumed) = scope_match_consumed(&file, command_name, args) else {
+            let Some(base_consumed) =
+                scope_match_consumed(&file, command_name, args, implicit_namespace.as_deref())
+            else {
                 continue;
             };
 
@@ -58,7 +64,61 @@ pub(crate) fn resolve_command<'a>(
     best
 }
 
-fn scope_match_consumed(file: &crate::config::FileConfig, command_name: &str, args: &[String]) -> Option<usize> {
+pub(crate) fn detect_terminal_command_collision(
+    config: &LoadedConfig,
+    args: &[String],
+    consumed: usize,
+) -> Result<(), String> {
+    let implicit_namespace = local_implicit_namespace(config);
+    let mut paths: BTreeSet<PathBuf> = BTreeSet::new();
+
+    for file in &config.files {
+        for (command_name, command_entry) in &file.commands {
+            let Some(base_consumed) =
+                scope_match_consumed(file, command_name, args, implicit_namespace.as_deref())
+            else {
+                continue;
+            };
+
+            let mut candidate_consumed = base_consumed;
+            let mut current = command_entry;
+            while candidate_consumed < args.len() {
+                let Some(subcommands) = current.subcommands() else {
+                    break;
+                };
+                if let Some(next) = subcommands.get(&args[candidate_consumed]) {
+                    current = next;
+                    candidate_consumed += 1;
+                    continue;
+                }
+                break;
+            }
+
+            if candidate_consumed == consumed && current.is_runnable() {
+                paths.insert(file.config_path.clone());
+            }
+        }
+    }
+
+    if paths.len() <= 1 {
+        return Ok(());
+    }
+
+    let invocation = args[..consumed].join(" ");
+    let mut message = format!("Duplicate terminal command:\ninvocation: {invocation}");
+    for (index, path) in paths.iter().enumerate() {
+        message.push('\n');
+        message.push_str(&format!("file_{}: {}", index + 1, path.display()));
+    }
+    Err(message)
+}
+
+fn scope_match_consumed(
+    file: &crate::config::FileConfig,
+    command_name: &str,
+    args: &[String],
+    implicit_namespace: Option<&str>,
+) -> Option<usize> {
     let explicit_match = match &file.scope {
         crate::config::FileScope::Root => {
             if args.first().map(String::as_str) == Some(command_name) {
@@ -103,34 +163,29 @@ fn scope_match_consumed(file: &crate::config::FileConfig, command_name: &str, ar
         return explicit_match;
     }
 
-    // Implicit matching (Local ONLY)
-    if file.source == crate::config::SourceKind::Local {
-         // Inside the directory of the namespace/group.
-         // Rules:
-         // 3.2: Namespace optional inside its directory.
-         match &file.scope {
-             crate::config::FileScope::Namespace { .. } => {
-                 // fire command -> supported
-                 if args.first().map(String::as_str) == Some(command_name) {
-                     return Some(1);
-                 }
-             }
-             crate::config::FileScope::NamespaceGroup { group, .. } => {
-                 // fire group command -> supported
-                  if args.first().map(String::as_str) == Some(group.as_str())
-                     && args.get(1).map(String::as_str) == Some(command_name)
-                 {
-                     return Some(2);
-                 }
-             }
-             crate::config::FileScope::Root => {
-                 // Already handled in explicit_match for Root
-             }
-             crate::config::FileScope::Group { .. } => {
-                 // fire group command -> Already handled in explicit_match
-                 // Group is always mandatory.
-             }
-         }
+    // Implicit namespace matching: when there is one local active namespace,
+    // namespace-prefixed commands can omit the namespace token.
+    if let Some(active_namespace) = implicit_namespace {
+        match &file.scope {
+            crate::config::FileScope::Namespace { namespace, .. } => {
+                if namespace == active_namespace
+                    && args.first().map(String::as_str) == Some(command_name)
+                {
+                    return Some(1);
+                }
+            }
+            crate::config::FileScope::NamespaceGroup {
+                namespace, group, ..
+            } => {
+                if namespace == active_namespace
+                    && args.first().map(String::as_str) == Some(group.as_str())
+                    && args.get(1).map(String::as_str) == Some(command_name)
+                {
+                    return Some(2);
+                }
+            }
+            crate::config::FileScope::Root | crate::config::FileScope::Group { .. } => {}
+        }
     }
 
     None
@@ -184,6 +239,7 @@ commands:
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
+                config_path: PathBuf::from("/tmp/fire-test.yml"),
                 scope: FileScope::Root,
                 runtimes: BTreeMap::new(),
                 commands: parse_commands(yaml),
@@ -208,6 +264,7 @@ commands:
             files: vec![FileConfig {
                 source: SourceKind::Global,
                 project_dir: PathBuf::from("."),
+                config_path: PathBuf::from("/tmp/fire-test.yml"),
                 scope: FileScope::NamespaceGroup {
                     namespace: "ex".to_string(),
                     namespace_description: String::new(),
@@ -242,6 +299,7 @@ commands:
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
+                config_path: PathBuf::from("/tmp/fire-test.yml"),
                 scope: FileScope::NamespaceGroup {
                     namespace: "ex".to_string(),
                     namespace_description: String::new(),
@@ -253,33 +311,253 @@ commands:
         };
 
         // Local: fire backend api -> works (implicit namespace)
-        let args = vec!["backend".to_string(), "api".to_string(), "--watch".to_string()];
+        let args = vec![
+            "backend".to_string(),
+            "api".to_string(),
+            "--watch".to_string(),
+        ];
         let resolved = resolve_command(&config, &args).expect("resolved implicit local");
         assert_eq!(resolved.consumed, 2);
 
-        // Case 2: Global source (Implicit disallowed)
+        // Case 2: Global source (implicit allowed when local namespace is active)
         let config_global = LoadedConfig {
-            files: vec![FileConfig {
-                source: SourceKind::Global,
-                project_dir: PathBuf::from("."),
-                scope: FileScope::NamespaceGroup {
-                    namespace: "ex".to_string(),
-                    namespace_description: String::new(),
-                    group: "backend".to_string(),
+            files: vec![
+                FileConfig {
+                    source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/fire-test.yml"),
+                    scope: FileScope::Namespace {
+                        namespace: "ex".to_string(),
+                        namespace_description: String::new(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: BTreeMap::new(),
                 },
-                runtimes: BTreeMap::new(),
-                commands: parse_commands(yaml),
-            }],
+                FileConfig {
+                    source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/fire-test.yml"),
+                    scope: FileScope::NamespaceGroup {
+                        namespace: "ex".to_string(),
+                        namespace_description: String::new(),
+                        group: "backend".to_string(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: parse_commands(yaml),
+                },
+            ],
         };
 
-        // Global: fire backend api -> fails (require namespace)
-        let args_global = vec!["backend".to_string(), "api".to_string(), "--watch".to_string()];
-        let resolved_global = resolve_command(&config_global, &args_global);
-        assert!(resolved_global.is_none(), "Global should not resolve implicit namespace");
+        // Global: fire backend api -> works because local namespace context is "ex"
+        let args_global = vec![
+            "backend".to_string(),
+            "api".to_string(),
+            "--watch".to_string(),
+        ];
+        let resolved_global = resolve_command(&config_global, &args_global)
+            .expect("resolved implicit global by local namespace context");
+        assert_eq!(resolved_global.consumed, 2);
 
         // Global: fire ex backend api -> works
-        let args_global_explicit = vec!["ex".to_string(), "backend".to_string(), "api".to_string(), "--watch".to_string()];
-        let resolved_global_explicit = resolve_command(&config_global, &args_global_explicit).expect("resolved explicit global");
+        let args_global_explicit = vec![
+            "ex".to_string(),
+            "backend".to_string(),
+            "api".to_string(),
+            "--watch".to_string(),
+        ];
+        let resolved_global_explicit = resolve_command(&config_global, &args_global_explicit)
+            .expect("resolved explicit global");
         assert_eq!(resolved_global_explicit.consumed, 3);
+    }
+
+    #[test]
+    fn detects_terminal_collision_for_global_group_without_namespace() {
+        let yaml = r#"
+commands:
+  example:
+    exec: echo one
+"#;
+        let config = LoadedConfig {
+            files: vec![
+                FileConfig {
+                    source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/a.fire.yml"),
+                    scope: FileScope::Group {
+                        group: "common".to_string(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: parse_commands(yaml),
+                },
+                FileConfig {
+                    source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/b.fire.yml"),
+                    scope: FileScope::Group {
+                        group: "common".to_string(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: parse_commands(yaml),
+                },
+            ],
+        };
+
+        let args = vec!["common".to_string(), "example".to_string()];
+        let resolved = resolve_command(&config, &args).expect("resolved");
+        let error = detect_terminal_command_collision(&config, &args, resolved.consumed)
+            .expect_err("must report collision");
+
+        assert!(error.contains("Duplicate terminal command"));
+        assert!(error.contains("invocation: common example"));
+        assert!(error.contains("file_1: /tmp/a.fire.yml"));
+        assert!(error.contains("file_2: /tmp/b.fire.yml"));
+    }
+
+    #[test]
+    fn allows_same_name_when_both_are_non_terminal() {
+        let yaml = r#"
+commands:
+  example:
+    commands:
+      sub:
+        exec: echo one
+"#;
+        let config = LoadedConfig {
+            files: vec![
+                FileConfig {
+                    source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/a.fire.yml"),
+                    scope: FileScope::Group {
+                        group: "common".to_string(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: parse_commands(yaml),
+                },
+                FileConfig {
+                    source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/b.fire.yml"),
+                    scope: FileScope::Group {
+                        group: "common".to_string(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: parse_commands(yaml),
+                },
+            ],
+        };
+
+        let args = vec!["common".to_string(), "example".to_string()];
+        let resolved = resolve_command(&config, &args).expect("resolved");
+        assert!(!resolved.command.is_runnable());
+        let check = detect_terminal_command_collision(&config, &args, resolved.consumed);
+        assert!(check.is_ok());
+    }
+
+    #[test]
+    fn detects_collision_between_implicit_namespace_group_and_global_group() {
+        let yaml = r#"
+commands:
+  example:
+    exec: echo one
+"#;
+        let config = LoadedConfig {
+            files: vec![
+                FileConfig {
+                    source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/local-ns.fire.yml"),
+                    scope: FileScope::Namespace {
+                        namespace: "ex".to_string(),
+                        namespace_description: String::new(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: BTreeMap::new(),
+                },
+                FileConfig {
+                    source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/local-group.fire.yml"),
+                    scope: FileScope::NamespaceGroup {
+                        namespace: "ex".to_string(),
+                        namespace_description: String::new(),
+                        group: "common".to_string(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: parse_commands(yaml),
+                },
+                FileConfig {
+                    source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/global-group.fire.yml"),
+                    scope: FileScope::Group {
+                        group: "common".to_string(),
+                    },
+                    runtimes: BTreeMap::new(),
+                    commands: parse_commands(yaml),
+                },
+            ],
+        };
+
+        let args = vec!["common".to_string(), "example".to_string()];
+        let resolved = resolve_command(&config, &args).expect("resolved");
+        let error = detect_terminal_command_collision(&config, &args, resolved.consumed)
+            .expect_err("must report collision");
+
+        assert!(error.contains("invocation: common example"));
+        assert!(error.contains("/tmp/local-group.fire.yml"));
+        assert!(error.contains("/tmp/global-group.fire.yml"));
+    }
+
+    #[test]
+    fn terminal_and_non_terminal_same_name_both_work() {
+        let config = LoadedConfig {
+            files: vec![
+                FileConfig {
+                    source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/one.fire.yml"),
+                    scope: FileScope::Root,
+                    runtimes: BTreeMap::new(),
+                    commands: parse_commands(
+                        r#"
+commands:
+  example:
+    commands:
+      nested: echo "hello world"
+"#,
+                    ),
+                },
+                FileConfig {
+                    source: SourceKind::Local,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/two.fire.yml"),
+                    scope: FileScope::Root,
+                    runtimes: BTreeMap::new(),
+                    commands: parse_commands(
+                        r#"
+commands:
+  example: echo "hello world"
+"#,
+                    ),
+                },
+            ],
+        };
+
+        let root_args = vec!["example".to_string()];
+        let root_resolved = resolve_command(&config, &root_args).expect("resolve example");
+        assert!(root_resolved.command.is_runnable());
+        assert!(
+            detect_terminal_command_collision(&config, &root_args, root_resolved.consumed).is_ok()
+        );
+
+        let nested_args = vec!["example".to_string(), "nested".to_string()];
+        let nested_resolved = resolve_command(&config, &nested_args).expect("resolve nested");
+        assert_eq!(nested_resolved.consumed, 2);
+        assert!(nested_resolved.command.is_runnable());
+        assert!(
+            detect_terminal_command_collision(&config, &nested_args, nested_resolved.consumed)
+                .is_ok()
+        );
     }
 }

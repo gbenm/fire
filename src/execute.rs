@@ -372,8 +372,7 @@ fn compute_expression_value(
                 RenderMode::Shell,
                 &mut RenderStats::default(),
             );
-            run_shell_command_capture(&rendered_command, &context.dir)
-                .map(trim_trailing_newlines)
+            run_shell_command_capture(&rendered_command, &context.dir).map(trim_trailing_newlines)
         }
     }
 }
@@ -407,7 +406,9 @@ fn parse_compute_expression<'a>(
             }
             if runtimes.contains_key(prefix) {
                 if code.is_empty() {
-                    eprintln!("[fire] Invalid compute expression `{expr}`. Runtime code is required.");
+                    eprintln!(
+                        "[fire] Invalid compute expression `{expr}`. Runtime code is required."
+                    );
                     process::exit(1);
                 }
                 return ComputeExpression::Runtime { key: prefix, code };
@@ -1563,7 +1564,9 @@ fn run_shell_command_capture(command: &str, dir: &Path) -> Result<String, String
         let code = output.status.code().unwrap_or(1);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.trim().is_empty() {
-            return Err(format!("Compute command `{command}` failed with exit code {code}"));
+            return Err(format!(
+                "Compute command `{command}` failed with exit code {code}"
+            ));
         }
         return Err(format!(
             "Compute command `{command}` failed with exit code {code}: {}",
@@ -2039,7 +2042,11 @@ mod tests {
         let mut context = ExecutionContext::default();
         context.placeholder = Some("{{n}}".to_string());
         let mut stats = RenderStats::default();
-        let args = vec!["first".to_string(), "second".to_string(), "third".to_string()];
+        let args = vec![
+            "first".to_string(),
+            "second".to_string(),
+            "third".to_string(),
+        ];
         render_runtime_string(
             "py:print({1}, ...{{n}})",
             &context,
@@ -2091,7 +2098,10 @@ mod tests {
         };
 
         let computed = compute_arguments(&resolved, &context, &original);
-        assert_eq!(computed, vec!["second value".to_string(), "first".to_string()]);
+        assert_eq!(
+            computed,
+            vec!["second value".to_string(), "first".to_string()]
+        );
     }
 
     #[test]

@@ -13,7 +13,7 @@ use completion::{completion_suggestions, render_values_only, render_with_descrip
 use config::load_config;
 use execute::execute_resolved_command;
 use help::{print_command_help, print_root_help, print_scope_help};
-use resolve::resolve_command;
+use resolve::{detect_terminal_command_collision, resolve_command};
 
 pub fn setup_cli() {
     let mut args: Vec<String> = env::args().collect();
@@ -81,6 +81,12 @@ pub fn setup_cli() {
         if !resolved.command.is_runnable() {
             print_command_help(command_path, resolved.command);
             return;
+        }
+        if let Err(message) =
+            detect_terminal_command_collision(&config, command_args, resolved.consumed)
+        {
+            eprintln!("[fire] {message}");
+            process::exit(1);
         }
         execute_resolved_command(resolved);
     }
