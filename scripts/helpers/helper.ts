@@ -8,8 +8,10 @@ export function getServiceNameById(id: string): string {
 }
 
 export const getEcho = () => [
+	"cd schemas",
 	"echo Hello from helper.ts!",
 	"pwd",
 	"ls",
+	"docker run --rm -it alpine:latest sh",
 ];
 

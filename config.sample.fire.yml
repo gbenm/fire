@@ -64,7 +64,7 @@ commands:
   npm:
     dir: . # default (relative to project root)
     check: npm -v # if this fails, fallback_runner will be used
-    fallback_runner: docker run --rm -it node:lts-alpine /bin/bash # fallback
+    fallback_runner: docker run --rm -it node:lts-alpine sh # fallback
     exec: npm
 
   docker-node:
@@ -174,5 +174,4 @@ commands:
     exec: "echo argument 1: @1, argument @2"
 
   echo-eval:
-    dir: schemas
     eval: ts:getEcho()

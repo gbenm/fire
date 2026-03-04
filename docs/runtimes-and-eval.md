@@ -63,6 +63,7 @@ For each runtime key, Fire starts a session, loads files matching `paths`, and r
 - `void` / `undefined` / `None`: no implicit output.
 - `string`: printed as command output (same behavior as today).
 - `string[]` (array/list of strings): each item is executed as a shell command, in order.
+  - Those commands run in the same shell session (state carries across items).
 - Any other return type: converted to string and printed.
 
 Notes:

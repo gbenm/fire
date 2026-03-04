@@ -134,22 +134,12 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     let tail_args = unresolved_args_for_tail(&context, &original_args, &render_stats);
     let commands_to_run = commands_with_remaining_args(&rendered_commands_to_run, &tail_args);
 
-    let mut exit_code = 0;
-    match selected_runner {
+    let exit_code = match selected_runner {
         RunnerMode::Runner(runner) | RunnerMode::Fallback(runner) => {
-            exit_code = run_with_runner(&runner, &context.dir, &commands_to_run);
+            run_with_runner(&runner, &context.dir, &commands_to_run)
         }
-        RunnerMode::Direct => {
-            for command in &commands_to_run {
-                let status = run_shell_command(command, &context.dir);
-                let code = status.code().unwrap_or(1);
-                exit_code = code;
-                if code != 0 {
-                    break;
-                }
-            }
-        }
-    }
+        RunnerMode::Direct => run_in_single_shell(&context.dir, &commands_to_run),
+    };
 
     process::exit(exit_code);
 }
@@ -227,6 +217,7 @@ fn run_evals_with_runtime(
     enforce_unused_args_policy(context, args, &render_stats);
 
     let mut engines: BTreeMap<String, RuntimeEngine> = BTreeMap::new();
+    let mut commands_to_run = Vec::new();
     for (runtime_key, code) in &parsed {
         if !engines.contains_key(runtime_key) {
             let engine =
@@ -238,16 +229,16 @@ fn run_evals_with_runtime(
             eprintln!("[fire] Runtime engine `{runtime_key}` not available.");
             process::exit(1);
         });
-        let commands = engine.eval(code);
-        for command in commands {
-            let status = run_shell_command(&command, &context.dir);
-            let code = status.code().unwrap_or(1);
-            if code != 0 {
-                for (_, mut engine) in engines {
-                    engine.close();
-                }
-                process::exit(code);
+        commands_to_run.extend(engine.eval(code));
+    }
+
+    if !commands_to_run.is_empty() {
+        let code = run_in_single_shell(&context.dir, &commands_to_run);
+        if code != 0 {
+            for (_, mut engine) in engines {
+                engine.close();
             }
+            process::exit(code);
         }
     }
 
@@ -1638,6 +1629,29 @@ fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
     status.code().unwrap_or(0)
 }
 
+fn run_in_single_shell(dir: &Path, commands: &[String]) -> i32 {
+    if commands.is_empty() {
+        return 0;
+    }
+    let mut script = String::from("set -e\n");
+    for command in commands {
+        script.push_str(command);
+        script.push('\n');
+    }
+
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(&script)
+        .current_dir(dir)
+        .status()
+        .unwrap_or_else(|err| {
+            eprintln!("[fire] Failed to execute command script: {err}");
+            process::exit(1);
+        });
+
+    status.code().unwrap_or(1)
+}
+
 fn commands_with_remaining_args(commands: &[String], remaining_args: &[String]) -> Vec<String> {
     let mut out = commands.to_vec();
     if out.is_empty() || remaining_args.is_empty() {
@@ -1887,6 +1901,34 @@ mod tests {
             ..CommandSpec::default()
         });
         assert!(entry.spec().is_some());
+    }
+
+    #[test]
+    fn direct_shell_array_runs_in_same_shell_session() {
+        let dir = std::env::temp_dir().join(format!("fire-shell-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("schemas")).expect("create schemas");
+
+        let status = run_in_single_shell(
+            &dir,
+            &[
+                "cd schemas".to_string(),
+                "pwd > ../pwd.txt".to_string(),
+                "ls > ../ls.txt".to_string(),
+            ],
+        );
+        assert_eq!(status, 0);
+
+        let pwd = fs::read_to_string(dir.join("pwd.txt")).expect("pwd output");
+        assert!(
+            pwd.trim_end().ends_with("/schemas"),
+            "pwd should stay inside schemas, got: {pwd}"
+        );
+
+        let ls = fs::read_to_string(dir.join("ls.txt")).expect("ls output");
+        assert!(ls.trim().is_empty(), "schemas dir should be empty");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
