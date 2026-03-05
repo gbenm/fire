@@ -10,7 +10,7 @@ A command spec supports:
 - `eval`: runtime expression(s) (see `runtimes` guide).
   - Return handling: `void` = no output, `string` = printed, `string[]` = each string executed as a shell command.
 - `commands`: nested subcommands. Resolution is greedy—the deepest valid path wins.
-- `before`: shell command that runs only when using a primary runner (not fallback).
+- `before`: shell command that runs before execution unless `fallback_runner` is selected.
 - `dir`: working directory for this command (overrides file-level `dir`).
 - `runner`: prefix to execute commands inside another environment (e.g., container shell).
 - `fallback_runner`: alternative runner used when `check` fails.
@@ -49,7 +49,7 @@ commands:
       - npm run build
       - npm run start
 ```
-- `before` runs once, only on the primary runner path.
+- `before` runs once before execution on direct mode or primary runner mode; it is skipped on fallback.
 - `runner` pipes commands through another process.
 - `fallback_runner` engages when `check` is defined and fails.
 

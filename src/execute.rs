@@ -1063,7 +1063,7 @@ for await (const chunk of Deno.stdin.readable) {
 }
 
 fn should_execute_before(mode: &RunnerMode) -> bool {
-    matches!(mode, RunnerMode::Runner(_))
+    !matches!(mode, RunnerMode::Fallback(_))
 }
 
 #[derive(Debug, Default)]
@@ -1960,14 +1960,14 @@ mod tests {
     }
 
     #[test]
-    fn before_runs_only_for_primary_runner() {
+    fn before_runs_for_direct_and_primary_runner_but_not_fallback() {
         assert!(should_execute_before(&RunnerMode::Runner(
             "bash".to_string()
         )));
         assert!(!should_execute_before(&RunnerMode::Fallback(
             "bash".to_string()
         )));
-        assert!(!should_execute_before(&RunnerMode::Direct));
+        assert!(should_execute_before(&RunnerMode::Direct));
     }
 
     #[test]

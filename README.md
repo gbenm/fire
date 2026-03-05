@@ -1,4 +1,4 @@
-# Fire CLI
+# Fire CLI 🔥
 
 Configuration-first CLI with dynamic completion, runtime eval, and container-friendly runners.
 
