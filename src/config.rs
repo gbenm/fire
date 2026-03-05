@@ -39,11 +39,13 @@ pub(crate) enum FileScope {
     },
     Group {
         group: String,
+        group_description: String,
     },
     NamespaceGroup {
         namespace: String,
         namespace_description: String,
         group: String,
+        group_description: String,
     },
 }
 
@@ -111,6 +113,8 @@ pub(crate) enum CommandAction {
 struct FireFileRaw {
     #[serde(default)]
     group: String,
+    #[serde(default)]
+    description: String,
     #[serde(default)]
     namespace: Option<NamespaceRaw>,
     #[serde(default)]
@@ -537,6 +541,7 @@ fn scope_from_raw(
     forced_namespace: Option<&NamespaceScope>,
 ) -> FileScope {
     let group = raw.group.trim();
+    let group_description = raw.description.trim();
     let (namespace_prefix, namespace_description) = if let Some(namespace) = forced_namespace {
         (namespace.prefix.as_str(), namespace.description.clone())
     } else {
@@ -564,11 +569,13 @@ fn scope_from_raw(
         },
         (true, false) => FileScope::Group {
             group: group.to_string(),
+            group_description: group_description.to_string(),
         },
         (false, false) => FileScope::NamespaceGroup {
             namespace: namespace_prefix.to_string(),
             namespace_description,
             group: group.to_string(),
+            group_description: group_description.to_string(),
         },
     }
 }
@@ -804,6 +811,7 @@ mod tests {
     fn included_file_uses_forced_root_namespace() {
         let raw = FireFileRaw {
             group: "backend".to_string(),
+            description: "Backend commands".to_string(),
             namespace: Some(NamespaceRaw {
                 prefix: "custom".to_string(),
                 description: "Custom".to_string(),
@@ -825,12 +833,35 @@ mod tests {
                 namespace,
                 namespace_description,
                 group,
+                group_description,
             } => {
                 assert_eq!(namespace, "ex");
                 assert_eq!(namespace_description, "Example");
                 assert_eq!(group, "backend");
+                assert_eq!(group_description, "Backend commands");
             }
             _ => panic!("expected namespace group scope"),
+        }
+    }
+
+    #[test]
+    fn file_level_description_applies_to_group_scope() {
+        let raw = FireFileRaw {
+            group: "backend".to_string(),
+            description: "Backend commands".to_string(),
+            ..FireFileRaw::default()
+        };
+
+        let scope = scope_from_raw(&raw, None, None);
+        match scope {
+            FileScope::Group {
+                group,
+                group_description,
+            } => {
+                assert_eq!(group, "backend");
+                assert_eq!(group_description, "Backend commands");
+            }
+            _ => panic!("expected group scope"),
         }
     }
 
@@ -906,6 +937,7 @@ commands:
                 namespace,
                 namespace_description,
                 group,
+                group_description: _,
             } => {
                 assert_eq!(namespace, "ex");
                 assert_eq!(namespace_description, "Example");

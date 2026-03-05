@@ -32,7 +32,17 @@ Paths are relative to the current directory. Included files follow the same scop
 ## Scopes: namespace and group
 - `namespace.prefix` and `namespace.description` define a logical namespace.
 - `group` provides an additional path segment, often for team/area partitioning.
+- `description` at file root describes that `group` in help/completion.
 - Files in the same directory inherit `namespace.prefix` from a peer file if they do not set one.
+
+Example:
+```yaml
+group: backend
+description: Backend services
+commands:
+  deploy:
+    exec: ./deploy.sh
+```
 
 ### Command path shapes
 Depending on scope, users call commands as:

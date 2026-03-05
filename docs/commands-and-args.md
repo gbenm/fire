@@ -2,6 +2,18 @@
 
 This guide shows how to author commands, chain hooks, and work with positional arguments and placeholders.
 
+## File-level metadata
+- `group`: adds a path prefix for all commands in the file.
+- `description`: file-level label used for the group in help/completion.
+
+```yaml
+group: backend
+description: Backend commands
+commands:
+  build:
+    exec: npm run build
+```
+
 ## Command shapes
 A command spec supports:
 - `description`: short help text shown in listings/completion.

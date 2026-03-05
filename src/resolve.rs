@@ -141,7 +141,7 @@ fn scope_match_consumed(
                 None
             }
         }
-        crate::config::FileScope::Group { group } => {
+        crate::config::FileScope::Group { group, .. } => {
             if args.first().map(String::as_str) == Some(group.as_str())
                 && args.get(1).map(String::as_str) == Some(command_name)
             {
@@ -277,6 +277,7 @@ commands:
                     namespace: "ex".to_string(),
                     namespace_description: String::new(),
                     group: "backend".to_string(),
+                    group_description: String::new(),
                 },
                 runtimes: BTreeMap::new(),
                 commands: parse_commands(yaml),
@@ -312,6 +313,7 @@ commands:
                     namespace: "ex".to_string(),
                     namespace_description: String::new(),
                     group: "backend".to_string(),
+                    group_description: String::new(),
                 },
                 runtimes: BTreeMap::new(),
                 commands: parse_commands(yaml),
@@ -349,6 +351,7 @@ commands:
                         namespace: "ex".to_string(),
                         namespace_description: String::new(),
                         group: "backend".to_string(),
+                        group_description: String::new(),
                     },
                     runtimes: BTreeMap::new(),
                     commands: parse_commands(yaml),
@@ -393,6 +396,7 @@ commands:
                     config_path: PathBuf::from("/tmp/a.fire.yml"),
                     scope: FileScope::Group {
                         group: "common".to_string(),
+                        group_description: String::new(),
                     },
                     runtimes: BTreeMap::new(),
                     commands: parse_commands(yaml),
@@ -403,6 +407,7 @@ commands:
                     config_path: PathBuf::from("/tmp/b.fire.yml"),
                     scope: FileScope::Group {
                         group: "common".to_string(),
+                        group_description: String::new(),
                     },
                     runtimes: BTreeMap::new(),
                     commands: parse_commands(yaml),
@@ -438,6 +443,7 @@ commands:
                     config_path: PathBuf::from("/tmp/a.fire.yml"),
                     scope: FileScope::Group {
                         group: "common".to_string(),
+                        group_description: String::new(),
                     },
                     runtimes: BTreeMap::new(),
                     commands: parse_commands(yaml),
@@ -448,6 +454,7 @@ commands:
                     config_path: PathBuf::from("/tmp/b.fire.yml"),
                     scope: FileScope::Group {
                         group: "common".to_string(),
+                        group_description: String::new(),
                     },
                     runtimes: BTreeMap::new(),
                     commands: parse_commands(yaml),
@@ -490,6 +497,7 @@ commands:
                         namespace: "ex".to_string(),
                         namespace_description: String::new(),
                         group: "common".to_string(),
+                        group_description: String::new(),
                     },
                     runtimes: BTreeMap::new(),
                     commands: parse_commands(yaml),
@@ -500,6 +508,7 @@ commands:
                     config_path: PathBuf::from("/tmp/global-group.fire.yml"),
                     scope: FileScope::Group {
                         group: "common".to_string(),
+                        group_description: String::new(),
                     },
                     runtimes: BTreeMap::new(),
                     commands: parse_commands(yaml),

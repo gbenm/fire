@@ -316,22 +316,26 @@ fn global_namespaces(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSugge
 }
 
 fn global_groups(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggestion> {
-    let mut groups = BTreeSet::new();
+    let mut groups = BTreeMap::new();
     for file in &config.files {
         if file.source != SourceKind::Global {
             continue;
         }
-        if let FileScope::Group { group } = &file.scope {
+        if let FileScope::Group {
+            group,
+            group_description,
+        } = &file.scope
+        {
             if group.starts_with(prefix) {
-                groups.insert(group.clone());
+                groups.insert(group.clone(), non_empty(group_description));
             }
         }
     }
     groups
         .into_iter()
-        .map(|group| CompletionSuggestion {
+        .map(|(group, description)| CompletionSuggestion {
             value: group,
-            description: None,
+            description,
         })
         .collect()
 }
@@ -386,31 +390,37 @@ fn local_namespaces(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSugges
 }
 
 fn local_groups(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggestion> {
-    let mut set = BTreeSet::new();
+    let mut map = BTreeMap::new();
     let implicit_namespace = local_implicit_namespace(config);
     for file in &config.files {
         match &file.scope {
-            FileScope::Group { group } => {
+            FileScope::Group {
+                group,
+                group_description,
+            } => {
                 if file.source == SourceKind::Local && group.starts_with(prefix) {
-                    set.insert(group.clone());
+                    map.insert(group.clone(), non_empty(group_description));
                 }
             }
             FileScope::NamespaceGroup {
-                namespace, group, ..
+                namespace,
+                group,
+                group_description,
+                ..
             } => {
                 if implicit_namespace.as_deref() == Some(namespace.as_str())
                     && group.starts_with(prefix)
                 {
-                    set.insert(group.clone());
+                    map.insert(group.clone(), non_empty(group_description));
                 }
             }
             _ => {}
         }
     }
-    set.into_iter()
-        .map(|group| CompletionSuggestion {
+    map.into_iter()
+        .map(|(group, description)| CompletionSuggestion {
             value: group,
-            description: None,
+            description,
         })
         .collect()
 }
@@ -454,24 +464,25 @@ fn namespace_groups(
     namespace: &str,
     prefix: &str,
 ) -> Vec<CompletionSuggestion> {
-    let mut groups = BTreeSet::new();
+    let mut groups = BTreeMap::new();
     for file in &config.files {
         if let FileScope::NamespaceGroup {
             namespace: ns_alias,
             group,
+            group_description,
             ..
         } = &file.scope
         {
             if ns_alias == namespace && group.starts_with(prefix) {
-                groups.insert(group.clone());
+                groups.insert(group.clone(), non_empty(group_description));
             }
         }
     }
     groups
         .into_iter()
-        .map(|group| CompletionSuggestion {
+        .map(|(group, description)| CompletionSuggestion {
             value: group,
-            description: None,
+            description,
         })
         .collect()
 }
@@ -481,7 +492,9 @@ fn group_children(config: &LoadedConfig, group: &str, prefix: &str) -> Vec<Compl
     let implicit_namespace = local_implicit_namespace(config);
     for file in &config.files {
         match &file.scope {
-            FileScope::Group { group: file_alias } => {
+            FileScope::Group {
+                group: file_alias, ..
+            } => {
                 if file_alias == group {
                     for (name, entry) in &file.commands {
                         if name.starts_with(prefix) {
@@ -592,7 +605,9 @@ fn nested_from_group_scope(
     let implicit_namespace = local_implicit_namespace(config);
     let entries = config.files.iter().filter_map(|file| {
         let matches = match &file.scope {
-            FileScope::Group { group: file_alias } => file_alias == group,
+            FileScope::Group {
+                group: file_alias, ..
+            } => file_alias == group,
             FileScope::NamespaceGroup {
                 namespace,
                 group: file_alias,
@@ -815,6 +830,7 @@ commands:
                     config_path: PathBuf::from("/tmp/fire-test.yml"),
                     scope: FileScope::Group {
                         group: "backend".to_string(),
+                        group_description: "Backend group".to_string(),
                     },
                     runtimes: BTreeMap::new(),
                     commands: commands(
@@ -849,6 +865,7 @@ commands:
                         namespace: "ex".to_string(),
                         namespace_description: String::new(),
                         group: "ops".to_string(),
+                        group_description: String::new(),
                     },
                     runtimes: BTreeMap::new(),
                     commands: commands(
@@ -870,6 +887,17 @@ commands:
         let values = completion_suggestions(&config, &[]);
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
         assert_eq!(names, vec!["cli", "dev", "run", "ex", "backend", "ping"]);
+    }
+
+    #[test]
+    fn root_group_suggestion_includes_description() {
+        let config = config_with_scopes();
+        let values = completion_suggestions(&config, &[]);
+        let backend = values
+            .into_iter()
+            .find(|it| it.value == "backend")
+            .expect("backend group exists");
+        assert_eq!(backend.description, Some("Backend group".to_string()));
     }
 
     #[test]
@@ -920,6 +948,7 @@ commands:
                     namespace: "ex".to_string(),
                     namespace_description: String::new(),
                     group: "ops".to_string(),
+                    group_description: String::new(),
                 },
                 runtimes: BTreeMap::new(),
                 commands: commands(
@@ -1039,6 +1068,7 @@ commands:
                         namespace: "ex".to_string(),
                         namespace_description: String::new(),
                         group: "backend".to_string(),
+                        group_description: String::new(),
                     },
                     runtimes: BTreeMap::new(),
                     commands: commands(

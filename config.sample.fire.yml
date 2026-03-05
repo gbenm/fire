@@ -3,9 +3,11 @@ dir: . # default working directory "."
 
 namespace:
   description: Example
+
   prefix: ex
 
 group: backend
+description: Backend related commands
 
 runtimes:
   ts:

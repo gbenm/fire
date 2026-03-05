@@ -19,6 +19,10 @@
       "type": "string",
       "description": "Optional file-level group used as a command prefix for all commands in this file."
     },
+    "description": {
+      "type": "string",
+      "description": "Optional file-level description. When `group` is set, this description is shown for that group in help and completion."
+    },
     "runtimes": {
       "type": "object",
       "description": "Runtime definitions keyed by alias (for example: deno, py).",
