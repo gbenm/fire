@@ -25,7 +25,10 @@ pub(crate) fn completion_suggestions(
             .iter()
             .find(|suggestion| suggestion.value == prefix)
         {
-            return children_for_root_exact(config, &exact.value);
+            let children = children_for_root_exact(config, &exact.value);
+            if !children.is_empty() {
+                return children;
+            }
         }
         return suggestions;
     }
@@ -37,7 +40,10 @@ pub(crate) fn completion_suggestions(
     {
         let mut exact_path = path.to_vec();
         exact_path.push(exact.value.clone());
-        return children_for_exact_path(config, &exact_path);
+        let children = children_for_exact_path(config, &exact_path);
+        if !children.is_empty() {
+            return children;
+        }
     }
     suggestions
 }
@@ -925,6 +931,45 @@ commands:
         );
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
         assert_eq!(names, vec!["deploy"]);
+    }
+
+    #[test]
+    fn exact_prefix_keeps_siblings_when_exact_has_no_children() {
+        fn commands(yaml: &str) -> BTreeMap<String, CommandEntry> {
+            #[derive(serde::Deserialize)]
+            struct Wrapper {
+                commands: BTreeMap<String, CommandEntry>,
+            }
+            yaml_serde::from_str::<Wrapper>(yaml)
+                .expect("valid yaml")
+                .commands
+        }
+
+        let config = LoadedConfig {
+            files: vec![FileConfig {
+                source: SourceKind::Local,
+                project_dir: PathBuf::from("."),
+                config_path: PathBuf::from("/tmp/fire-test.yml"),
+                scope: FileScope::Group {
+                    group: "backend".to_string(),
+                    group_description: String::new(),
+                },
+                runtimes: BTreeMap::new(),
+                commands: commands(
+                    r#"
+commands:
+  echo: echo "hello"
+  echo-eval:
+    eval: ts:getEcho()
+"#,
+                ),
+            }],
+        };
+
+        let values =
+            completion_suggestions(&config, &["backend".to_string(), "echo".to_string()]);
+        let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
+        assert_eq!(names, vec!["echo", "echo-eval"]);
     }
 
     #[test]

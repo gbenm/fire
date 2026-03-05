@@ -181,6 +181,7 @@ commands:
     exec: "echo argument 1: @1, argument @2"
 
   echo-eval:
+    description: "Example of eval that returns a string to be executed"
     eval: ts:getEcho()
 
   echo:
