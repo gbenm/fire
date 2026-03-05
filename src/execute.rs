@@ -2,11 +2,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{BufRead, BufReader, IsTerminal, Write},
+    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process,
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{Child, Command, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde::Deserialize;
@@ -167,8 +168,8 @@ struct RuntimeEngine {
 
 struct RuntimeSession {
     child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    writer: TcpStream,
+    reader: BufReader<TcpStream>,
 }
 
 struct RuntimeRequest<'a> {
@@ -318,11 +319,10 @@ fn start_runtime_engine_for_key(
         }
     };
 
-    let normalized_runner = normalize_runner_for_piped_stdin(&runtime_runner);
-    log_runtime(&format!("{runtime_key} -> {normalized_runner}"));
+    log_runtime(&format!("{runtime_key} -> {runtime_runner}"));
     let launch = format!(
         "{} {}",
-        normalized_runner,
+        runtime_runner,
         runtime_bootstrap_invocation(&runtime.sdk)
     );
     let mut engine = RuntimeEngine::start(&launch, &context.dir);
@@ -481,32 +481,80 @@ fn trim_trailing_newlines(mut value: String) -> String {
 
 impl RuntimeEngine {
     fn start(command: &str, dir: &Path) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| {
+            eprintln!("[fire] Failed to bind runtime control channel: {err}");
+            process::exit(1);
+        });
+        let addr = listener.local_addr().unwrap_or_else(|err| {
+            eprintln!("[fire] Failed to inspect runtime control channel: {err}");
+            process::exit(1);
+        });
+        listener.set_nonblocking(true).unwrap_or_else(|err| {
+            eprintln!("[fire] Failed to configure runtime control channel: {err}");
+            process::exit(1);
+        });
+
         let mut child = Command::new("sh")
             .arg("-c")
             .arg(command)
             .current_dir(dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .env("FIRE_RUNTIME_RPC_ADDR", addr.to_string())
             .spawn()
             .unwrap_or_else(|err| {
                 eprintln!("[fire] Failed to start runtime runner `{command}`: {err}");
                 process::exit(1);
             });
 
-        let stdin = child.stdin.take().unwrap_or_else(|| {
-            eprintln!("[fire] Runtime runner has no stdin.");
-            process::exit(1);
-        });
-        let stdout = child.stdout.take().unwrap_or_else(|| {
-            eprintln!("[fire] Runtime runner has no stdout.");
+        let started = Instant::now();
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).unwrap_or_else(|err| {
+                        let _ = child.kill();
+                        eprintln!(
+                            "[fire] Failed to configure runtime control stream: {err}"
+                        );
+                        process::exit(1);
+                    });
+                    break stream;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if let Ok(Some(status)) = child.try_wait() {
+                        eprintln!(
+                            "[fire] Runtime runner exited before connecting (status: {}).",
+                            status
+                        );
+                        process::exit(status.code().unwrap_or(1));
+                    }
+                    if started.elapsed() > Duration::from_secs(5) {
+                        let _ = child.kill();
+                        eprintln!("[fire] Runtime runner did not establish control channel.");
+                        process::exit(1);
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(err) => {
+                    let _ = child.kill();
+                    eprintln!("[fire] Runtime control channel accept failed: {err}");
+                    process::exit(1);
+                }
+            }
+        };
+
+        let writer = stream.try_clone().unwrap_or_else(|err| {
+            let _ = child.kill();
+            eprintln!("[fire] Runtime control channel clone failed: {err}");
             process::exit(1);
         });
 
         Self {
             session: RuntimeSession {
                 child,
-                stdin,
-                stdout: BufReader::new(stdout),
+                writer,
+                reader: BufReader::new(stream),
             },
             next_id: 1,
         }
@@ -622,9 +670,9 @@ fn run_runtime_request(
     request: &RuntimeRequest<'_>,
 ) -> Result<RuntimeResponse, String> {
     let payload = format_runtime_request_json(request);
-    writeln!(session.stdin, "{payload}").map_err(|err| format!("Cannot write request: {err}"))?;
+    writeln!(session.writer, "{payload}").map_err(|err| format!("Cannot write request: {err}"))?;
     session
-        .stdin
+        .writer
         .flush()
         .map_err(|err| format!("Cannot flush request: {err}"))?;
 
@@ -637,7 +685,7 @@ fn run_runtime_request(
     loop {
         let mut line = String::new();
         let bytes = session
-            .stdout
+            .reader
             .read_line(&mut line)
             .map_err(|err| format!("Cannot read runtime output: {err}"))?;
         if bytes == 0 {
@@ -926,9 +974,21 @@ fn enforce_unused_args_policy(
 }
 
 fn python_runtime_bootstrap_script() -> &'static str {
-    r#"import json, sys
+    r#"import json, os, socket, sys
 ctx = globals()
-for raw in sys.stdin:
+addr = os.environ.get("FIRE_RUNTIME_RPC_ADDR", "")
+if ":" not in addr:
+    sys.stderr.write("Missing FIRE_RUNTIME_RPC_ADDR\n")
+    sys.stderr.flush()
+    sys.exit(1)
+host, port = addr.rsplit(":", 1)
+sock = socket.create_connection((host, int(port)))
+reader = sock.makefile("r", encoding="utf-8", newline="\n")
+writer = sock.makefile("w", encoding="utf-8", newline="\n")
+def send(line):
+    writer.write(line + "\n")
+    writer.flush()
+for raw in reader:
     raw = raw.strip()
     if not raw:
         continue
@@ -939,7 +999,7 @@ for raw in sys.stdin:
         if op == "load":
             with open(msg["path"], "r", encoding="utf-8") as handle:
                 exec(handle.read(), ctx)
-            print(f"__FIRE_DONE__{rid}", flush=True)
+            send(f"__FIRE_DONE__{rid}")
         elif op == "eval":
             code = msg["code"]
             try:
@@ -949,28 +1009,33 @@ for raw in sys.stdin:
                 value = None
             if isinstance(value, list) and all(isinstance(item, str) for item in value):
                 payload = json.dumps({"kind": "commands", "commands": value}, ensure_ascii=False)
-                print(f"__FIRE_RESULT__{rid}:{payload}", flush=True)
+                send(f"__FIRE_RESULT__{rid}:{payload}")
             elif isinstance(value, str):
                 payload = json.dumps({"kind": "text", "text": value}, ensure_ascii=False)
-                print(f"__FIRE_RESULT__{rid}:{payload}", flush=True)
+                send(f"__FIRE_RESULT__{rid}:{payload}")
             elif value is not None:
                 payload = json.dumps({"kind": "text", "text": str(value)}, ensure_ascii=False)
-                print(f"__FIRE_RESULT__{rid}:{payload}", flush=True)
-            print(f"__FIRE_DONE__{rid}", flush=True)
+                send(f"__FIRE_RESULT__{rid}:{payload}")
+            send(f"__FIRE_DONE__{rid}")
         elif op == "exit":
-            print(f"__FIRE_DONE__{rid}", flush=True)
+            send(f"__FIRE_DONE__{rid}")
             break
     except Exception as err:
-        print(f"__FIRE_ERROR__{rid}:{err}", flush=True)
-        print(f"__FIRE_DONE__{rid}", flush=True)"#
+        send(f"__FIRE_ERROR__{rid}:{err}")
+        send(f"__FIRE_DONE__{rid}")"#
 }
 
 fn node_runtime_bootstrap_script() -> &'static str {
-    r#"const readline = require("node:readline");
+    r#"const net = require("node:net");
+const readline = require("node:readline");
 const { pathToFileURL } = require("node:url");
-const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-const done = (id) => process.stdout.write(`__FIRE_DONE__${id}\n`);
-const result = (id, payload) => process.stdout.write(`__FIRE_RESULT__${id}:${JSON.stringify(payload)}\n`);
+const addr = process.env.FIRE_RUNTIME_RPC_ADDR || "";
+const [host, portRaw] = addr.split(":");
+if (!host || !portRaw) process.exit(1);
+const socket = net.createConnection({ host, port: Number(portRaw) });
+const rl = readline.createInterface({ input: socket, crlfDelay: Infinity });
+const done = (id) => socket.write(`__FIRE_DONE__${id}\n`);
+const result = (id, payload) => socket.write(`__FIRE_RESULT__${id}:${JSON.stringify(payload)}\n`);
 rl.on("line", async (line) => {
   const trimmed = line.trim();
   if (!trimmed) return;
@@ -1005,7 +1070,7 @@ rl.on("line", async (line) => {
       process.exit(0);
     }
   } catch (err) {
-    process.stdout.write(`__FIRE_ERROR__${id}:${err && err.message ? err.message : String(err)}\n`);
+    socket.write(`__FIRE_ERROR__${id}:${err && err.message ? err.message : String(err)}\n`);
     done(id);
   }
 });"#
@@ -1014,9 +1079,13 @@ rl.on("line", async (line) => {
 fn deno_runtime_bootstrap_script() -> &'static str {
     r#"const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const addr = Deno.env.get("FIRE_RUNTIME_RPC_ADDR") ?? "";
+const [host, portRaw] = addr.split(":");
+if (!host || !portRaw) Deno.exit(1);
+const conn = await Deno.connect({ hostname: host, port: Number(portRaw) });
 let buffer = "";
 const writeLine = async (value) => {
-  await Deno.stdout.write(encoder.encode(value + "\n"));
+  await conn.write(encoder.encode(value + "\n"));
 };
 const done = async (id) => writeLine(`__FIRE_DONE__${id}`);
 const result = async (id, payload) => writeLine(`__FIRE_RESULT__${id}:${JSON.stringify(payload)}`);
@@ -1059,7 +1128,7 @@ const handle = async (line) => {
     await done(id);
   }
 };
-for await (const chunk of Deno.stdin.readable) {
+for await (const chunk of conn.readable) {
   buffer += decoder.decode(chunk, { stream: true });
   let idx = buffer.indexOf("\n");
   while (idx >= 0) {
@@ -1589,6 +1658,20 @@ fn select_runner_mode(
 }
 
 fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
+    if commands.is_empty() {
+        return 0;
+    }
+
+    if can_use_attached_runner_mode() {
+        if let Some(invocation) = build_attached_shell_runner_invocation(runner, commands) {
+            log_runner_start(runner);
+            for command in commands {
+                log_command(command);
+            }
+            return run_shell_command_passthrough(&invocation, dir);
+        }
+    }
+
     let normalized_runner = normalize_runner_for_piped_stdin(runner);
     log_runner_start(&normalized_runner);
     let mut child = Command::new("sh")
@@ -1623,10 +1706,6 @@ fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
                 process::exit(1);
             }
         }
-        if execution_logging_enabled() && !commands.is_empty() {
-            eprintln!();
-        }
-
         let _ = writeln!(stdin, "exit");
     }
 
@@ -1653,10 +1732,6 @@ fn run_in_single_shell(dir: &Path, commands: &[String]) -> i32 {
         script.push_str(command);
         script.push('\n');
     }
-    if execution_logging_enabled() {
-        eprintln!();
-    }
-
     let status = Command::new("sh")
         .arg("-c")
         .arg(&script)
@@ -1668,6 +1743,24 @@ fn run_in_single_shell(dir: &Path, commands: &[String]) -> i32 {
         });
 
     status.code().unwrap_or(1)
+}
+
+fn run_shell_command_passthrough(command: &str, dir: &Path) -> i32 {
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(dir)
+        .status()
+        .unwrap_or_else(|err| {
+            eprintln!("[fire] Failed to execute command script: {err}");
+            process::exit(1);
+        });
+
+    status.code().unwrap_or(1)
+}
+
+fn can_use_attached_runner_mode() -> bool {
+    std::io::stdin().is_terminal()
 }
 
 fn commands_with_remaining_args(commands: &[String], remaining_args: &[String]) -> Vec<String> {
@@ -1827,6 +1920,44 @@ fn non_empty(value: &str) -> Option<&str> {
     } else {
         Some(trimmed)
     }
+}
+
+fn build_attached_shell_runner_invocation(runner: &str, commands: &[String]) -> Option<String> {
+    if commands.is_empty() {
+        return None;
+    }
+
+    let tokens = runner.split_whitespace().collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let shell_token = tokens.iter().rev().find(|token| !token.starts_with('-'))?;
+    let shell_name = Path::new(shell_token.trim_matches(['"', '\'']))
+        .file_name()
+        .and_then(|value| value.to_str())?;
+    if !is_supported_interactive_shell(shell_name) {
+        return None;
+    }
+
+    let script = build_runner_script(commands);
+    Some(format!("{runner} -c {}", shell_escape(&script)))
+}
+
+fn is_supported_interactive_shell(value: &str) -> bool {
+    matches!(
+        value,
+        "sh" | "bash" | "zsh" | "ash" | "dash" | "ksh" | "mksh" | "fish"
+    )
+}
+
+fn build_runner_script(commands: &[String]) -> String {
+    let mut script = String::from("set -e\n");
+    for command in commands {
+        script.push_str(command);
+        script.push('\n');
+    }
+    script
 }
 
 fn normalize_runner_for_piped_stdin(runner: &str) -> String {
@@ -2036,6 +2167,35 @@ mod tests {
         let runner = "docker compose exec -T linux sh";
         let normalized = normalize_runner_for_piped_stdin(runner);
         assert_eq!(normalized, runner);
+    }
+
+    #[test]
+    fn builds_attached_runner_invocation_for_shell_runner() {
+        let runner = "docker exec -it db bash";
+        let invocation = build_attached_shell_runner_invocation(
+            runner,
+            &["mysql -u laravel -p".to_string()],
+        );
+        assert_eq!(
+            invocation,
+            Some("docker exec -it db bash -c 'set -e\nmysql -u laravel -p\n'".to_string())
+        );
+    }
+
+    #[test]
+    fn builds_attached_runner_invocation_for_plain_shell_runner() {
+        let runner = "bash";
+        let invocation =
+            build_attached_shell_runner_invocation(runner, &["echo hi".to_string()]);
+        assert_eq!(invocation, Some("bash -c 'set -e\necho hi\n'".to_string()));
+    }
+
+    #[test]
+    fn does_not_build_attached_invocation_without_shell_runner() {
+        let runner = "docker compose exec linux";
+        let invocation =
+            build_attached_shell_runner_invocation(runner, &["echo hi".to_string()]);
+        assert_eq!(invocation, None);
     }
 
     #[test]

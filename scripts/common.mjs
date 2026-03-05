@@ -3,5 +3,9 @@ import { sayHello } from "./helpers/test.mjs";
 export function getCurrentTimestamp() {
     sayHello();
     console.log("Getting current timestamp...");
-    return new Date().toISOString();
+    console.log(new Date().toISOString());
+    return [
+        "ls",
+        "pwd"
+    ];
 }

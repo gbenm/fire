@@ -59,6 +59,8 @@ computed3:
 ## Library loading and sessions
 For each runtime key, Fire starts a session, loads files matching `paths`, and reuses the same process for multiple `eval` statements.
 
+Runtime sessions keep stdin/stdout interactive. This means runtime code can prompt/read user input (for example `input()`, `prompt()`, `readline`) while still being reused within the same Fire invocation.
+
 `eval` return handling:
 - `void` / `undefined` / `None`: no implicit output.
 - `string`: printed as command output (same behavior as today).

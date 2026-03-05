@@ -64,6 +64,7 @@ commands:
 - `before` runs once before execution on direct mode or primary runner mode; it is skipped on fallback.
 - `runner` pipes commands through another process.
 - `fallback_runner` engages when `check` is defined and fails.
+- For shell-based runners (for example `docker exec -it <container> bash` or plain `bash`), Fire uses attached shell mode when a TTY is available so interactive prompts (passwords) work correctly.
 
 ## Execution logs
 By default, Fire prints each shell command before executing it:

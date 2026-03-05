@@ -1,6 +1,7 @@
 // @ts-nocheck
 // Deno script utilities for Fire CLI (offline-safe, no remote imports)
 export function makeHash(value: string, algorithm: string = "sha256"): string {
+	console.log(prompt("Please enter your name:"))
 	const normalized = algorithm.trim().toLowerCase();
 	const outputLength = hashOutputLength(normalized);
 

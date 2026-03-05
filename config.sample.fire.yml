@@ -182,3 +182,20 @@ commands:
 
   echo-eval:
     eval: ts:getEcho()
+
+  echo:
+    exec:
+      - cd schemas
+      - pwd
+      - ls
+
+  docker:
+    runner: docker exec -it magoo_database_1 bash
+    exec: mysql -u laravel -D laravel -p
+
+  tty:
+    exec:
+      - echo "hello"
+      - read -p "Press enter to continue..."
+      - echo "goodbye"
+
