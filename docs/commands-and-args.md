@@ -65,6 +65,24 @@ commands:
 - `runner` pipes commands through another process.
 - `fallback_runner` engages when `check` is defined and fails.
 
+## Execution logs
+By default, Fire prints each shell command before executing it:
+- Direct execution (`exec` / shorthand)
+- Array commands (each item)
+- `before`
+- Runner mode commands
+- Shell-based `compute`
+- `check` commands used for runner selection
+
+Logs are label-based for readability (`cmd`, `runner`, `check`, `before`, `compute`), and use subtle ANSI colors when stderr is a TTY. Set `NO_COLOR=1` to force plain output.
+
+To disable this and keep output behavior like before:
+```bash
+export FIRE_LOG_COMMANDS=false
+```
+
+Only the literal value `false` disables execution logs.
+
 ## Positional placeholders
 Placeholders are **opt-in**: nothing is substituted unless you set `placeholder` on the command (or via an anchor like `x-arg-config`).
 

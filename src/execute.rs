@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, IsTerminal, Write},
     path::{Path, PathBuf},
     process,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
@@ -229,7 +229,15 @@ fn run_evals_with_runtime(
             eprintln!("[fire] Runtime engine `{runtime_key}` not available.");
             process::exit(1);
         });
-        commands_to_run.extend(engine.eval(code));
+        log_runtime(&format!("{runtime_key} eval: {code}"));
+        let runtime_commands = engine.eval(code);
+        if !runtime_commands.is_empty() {
+            log_runtime(&format!(
+                "{runtime_key} emitted {} command(s)",
+                runtime_commands.len()
+            ));
+        }
+        commands_to_run.extend(runtime_commands);
     }
 
     if !commands_to_run.is_empty() {
@@ -311,6 +319,7 @@ fn start_runtime_engine_for_key(
     };
 
     let normalized_runner = normalize_runner_for_piped_stdin(&runtime_runner);
+    log_runtime(&format!("{runtime_key} -> {normalized_runner}"));
     let launch = format!(
         "{} {}",
         normalized_runner,
@@ -1581,6 +1590,7 @@ fn select_runner_mode(
 
 fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
     let normalized_runner = normalize_runner_for_piped_stdin(runner);
+    log_runner_start(&normalized_runner);
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(&normalized_runner)
@@ -1606,11 +1616,15 @@ fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
         }
 
         for command in commands {
+            log_command(command);
             if writeln!(stdin, "{command}").is_err() {
                 eprintln!("[fire] Failed to send command to runner: `{command}`");
                 let _ = child.kill();
                 process::exit(1);
             }
+        }
+        if execution_logging_enabled() && !commands.is_empty() {
+            eprintln!();
         }
 
         let _ = writeln!(stdin, "exit");
@@ -1635,8 +1649,12 @@ fn run_in_single_shell(dir: &Path, commands: &[String]) -> i32 {
     }
     let mut script = String::from("set -e\n");
     for command in commands {
+        log_command(command);
         script.push_str(command);
         script.push('\n');
+    }
+    if execution_logging_enabled() {
+        eprintln!();
     }
 
     let status = Command::new("sh")
@@ -1667,6 +1685,7 @@ fn commands_with_remaining_args(commands: &[String], remaining_args: &[String]) 
 }
 
 fn run_shell_command(command: &str, dir: &Path) -> process::ExitStatus {
+    log_before(command);
     Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -1679,6 +1698,7 @@ fn run_shell_command(command: &str, dir: &Path) -> process::ExitStatus {
 }
 
 fn run_shell_command_capture(command: &str, dir: &Path) -> Result<String, String> {
+    log_compute(command);
     let output = Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -1704,6 +1724,7 @@ fn run_shell_command_capture(command: &str, dir: &Path) -> Result<String, String
 }
 
 fn run_shell_command_silent(command: &str, dir: &Path) -> process::ExitStatus {
+    log_check(command);
     Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -1724,6 +1745,64 @@ fn join_shell_args(args: &[String]) -> String {
         .map(shell_escape)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn log_command(command: impl AsRef<str>) {
+    log_step("cmd", command.as_ref());
+}
+
+fn log_runner_start(runner: &str) {
+    log_step("runner", runner);
+}
+
+fn log_check(command: &str) {
+    log_step("check", command);
+}
+
+fn log_before(command: &str) {
+    log_step("before", command);
+}
+
+fn log_compute(command: &str) {
+    log_step("compute", command);
+}
+
+fn log_runtime(message: &str) {
+    log_step("runtime", message);
+}
+
+fn log_step(label: &str, command: &str) {
+    if !execution_logging_enabled() {
+        return;
+    }
+
+    if log_color_enabled() {
+        eprintln!(
+            "\x1b[2m[fire]\x1b[0m \x1b[36m{:<8}\x1b[0m \x1b[2m{}\x1b[0m",
+            label, command
+        );
+        return;
+    }
+
+    eprintln!("[fire] {:<8} {}", label, command);
+}
+
+fn log_color_enabled() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    std::io::stderr().is_terminal()
+}
+
+fn execution_logging_enabled() -> bool {
+    match std::env::var("FIRE_LOG_COMMANDS") {
+        Ok(raw) => !is_disabled_flag(raw.trim()),
+        Err(_) => true,
+    }
+}
+
+fn is_disabled_flag(value: &str) -> bool {
+    value == "false"
 }
 
 fn shell_escape(value: &str) -> String {
@@ -1968,6 +2047,21 @@ mod tests {
             "bash".to_string()
         )));
         assert!(should_execute_before(&RunnerMode::Direct));
+    }
+
+    #[test]
+    fn disabled_flag_accepts_only_false() {
+        assert!(is_disabled_flag("false"));
+    }
+
+    #[test]
+    fn disabled_flag_rejects_non_false_values() {
+        assert!(!is_disabled_flag(""));
+        assert!(!is_disabled_flag("FALSE"));
+        assert!(!is_disabled_flag("1"));
+        assert!(!is_disabled_flag("true"));
+        assert!(!is_disabled_flag("off"));
+        assert!(!is_disabled_flag("no"));
     }
 
     #[test]
