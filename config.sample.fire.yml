@@ -195,8 +195,11 @@ commands:
     exec: mysql -u laravel -D laravel -p
 
   tty:
+    <<: *arg-config
+    compute:
+      $name: "echo {1}"
     exec:
-      - echo "hello"
+      - echo "hello" $name
       - read -p "Press enter to continue..."
       - echo "goodbye"
 
