@@ -1662,6 +1662,15 @@ fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
         return 0;
     }
 
+    if execution_dry_run_enabled() {
+        let normalized_runner = normalize_runner_for_piped_stdin(runner);
+        log_runner_start(&normalized_runner);
+        for command in commands {
+            log_command(command);
+        }
+        return 0;
+    }
+
     if can_use_attached_runner_mode() {
         if let Some(invocation) = build_attached_shell_runner_invocation(runner, commands) {
             log_runner_start(runner);
@@ -1732,6 +1741,11 @@ fn run_in_single_shell(dir: &Path, commands: &[String]) -> i32 {
         script.push_str(command);
         script.push('\n');
     }
+
+    if execution_dry_run_enabled() {
+        return 0;
+    }
+
     let status = Command::new("sh")
         .arg("-c")
         .arg(&script)
@@ -1779,6 +1793,9 @@ fn commands_with_remaining_args(commands: &[String], remaining_args: &[String]) 
 
 fn run_shell_command(command: &str, dir: &Path) -> process::ExitStatus {
     log_before(command);
+    if execution_dry_run_enabled() {
+        return success_exit_status();
+    }
     Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -1818,6 +1835,9 @@ fn run_shell_command_capture(command: &str, dir: &Path) -> Result<String, String
 
 fn run_shell_command_silent(command: &str, dir: &Path) -> process::ExitStatus {
     log_check(command);
+    if execution_dry_run_enabled() {
+        return success_exit_status();
+    }
     Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -1896,6 +1916,31 @@ fn execution_logging_enabled() -> bool {
 
 fn is_disabled_flag(value: &str) -> bool {
     value == "false"
+}
+
+fn execution_dry_run_enabled() -> bool {
+    match std::env::var("FIRE_DRY_RUN") {
+        Ok(raw) => is_enabled_flag(raw.trim()),
+        Err(_) => false,
+    }
+}
+
+fn is_enabled_flag(value: &str) -> bool {
+    value == "true"
+}
+
+fn success_exit_status() -> process::ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        process::ExitStatus::from_raw(0)
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+        process::ExitStatus::from_raw(0)
+    }
 }
 
 fn shell_escape(value: &str) -> String {
@@ -2222,6 +2267,14 @@ mod tests {
         assert!(!is_disabled_flag("true"));
         assert!(!is_disabled_flag("off"));
         assert!(!is_disabled_flag("no"));
+    }
+
+    #[test]
+    fn enabled_flag_accepts_only_true() {
+        assert!(is_enabled_flag("true"));
+        assert!(!is_enabled_flag("TRUE"));
+        assert!(!is_enabled_flag("1"));
+        assert!(!is_enabled_flag("false"));
     }
 
     #[test]

@@ -84,6 +84,19 @@ export FIRE_LOG_COMMANDS=false
 
 Only the literal value `false` disables execution logs.
 
+## Dry run (log only)
+Set this variable to avoid executing shell commands while still showing what Fire would run:
+
+```bash
+export FIRE_DRY_RUN=true
+```
+
+Behavior:
+- Fire logs commands as usual.
+- Fire does **not** execute shell commands (`exec`, `before`, runner/fallback shell commands, and command arrays returned by `eval`).
+- `compute` still runs normally.
+- Runtime `eval` still runs normally; only shell command execution is skipped.
+
 ## Positional placeholders
 Placeholders are **opt-in**: nothing is substituted unless you set `placeholder` on the command (or via an anchor like `x-arg-config`).
 
