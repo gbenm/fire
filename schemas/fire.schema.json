@@ -9,8 +9,11 @@
   },
   "properties": {
     "dir": {
-      "type": "string",
-      "description": "Project working directory. Defaults to '.'."
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Project working directory. Defaults to '.'. Use null to run from the current process directory."
     },
     "namespace": {
       "$ref": "#/$defs/namespace"
@@ -142,8 +145,11 @@
           "description": "YAML merge key used to reuse anchored blocks."
         },
         "dir": {
-          "type": "string",
-          "description": "Command-specific working directory. Overrides top-level `dir`."
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Command-specific working directory. Overrides top-level `dir`; null runs from the current process directory."
         },
         "check": {
           "type": "string",

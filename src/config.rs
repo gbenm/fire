@@ -5,7 +5,10 @@ use std::{
     process::Command,
 };
 
-use serde::Deserialize;
+use serde::{
+    de::{self, Visitor},
+    Deserialize, Deserializer,
+};
 
 use crate::registry::load_installed_directories;
 
@@ -71,7 +74,7 @@ pub(crate) struct CommandSpec {
     #[serde(default)]
     pub(crate) macros: BTreeMap<String, String>,
     #[serde(default)]
-    pub(crate) dir: String,
+    pub(crate) dir: DirSetting,
     #[serde(default)]
     pub(crate) check: String,
     #[serde(default)]
@@ -128,7 +131,7 @@ struct FireFileRaw {
     #[serde(default)]
     macros: BTreeMap<String, String>,
     #[serde(default)]
-    dir: String,
+    dir: DirSetting,
     #[serde(default)]
     check: String,
     #[serde(default)]
@@ -163,6 +166,92 @@ struct NamespaceScope {
 struct ParsedFireFile {
     path: PathBuf,
     raw: FireFileRaw,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum DirSetting {
+    #[default]
+    Unset,
+    Null,
+    Path(String),
+}
+
+impl<'de> Deserialize<'de> for DirSetting {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct DirSettingVisitor;
+
+        impl<'de> Visitor<'de> for DirSettingVisitor {
+            type Value = DirSetting;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a string path or null")
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(DirSetting::Null)
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(DirSetting::Null)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                DirSetting::deserialize(deserializer)
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(DirSetting::Path(value.to_string()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(DirSetting::Path(value))
+            }
+        }
+
+        deserializer.deserialize_any(DirSettingVisitor)
+    }
+}
+
+impl DirSetting {
+    pub(crate) fn non_empty_path(&self) -> Option<&str> {
+        match self {
+            DirSetting::Path(value) => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            }
+            DirSetting::Unset | DirSetting::Null => None,
+        }
+    }
+
+    fn is_effectively_empty(&self) -> bool {
+        match self {
+            DirSetting::Unset => true,
+            DirSetting::Path(value) => value.trim().is_empty(),
+            DirSetting::Null => false,
+        }
+    }
 }
 
 impl FireFileRaw {
@@ -481,12 +570,24 @@ fn apply_file_defaults_to_entry(entry: CommandEntry, defaults: &CommandSpec) -> 
             if spec.on_unused_args.trim().is_empty() {
                 spec.on_unused_args = defaults.on_unused_args.clone();
             }
-            if !defaults.dir.trim().is_empty() {
-                if spec.dir.trim().is_empty() {
-                    spec.dir = defaults.dir.clone();
-                } else if !Path::new(spec.dir.trim()).is_absolute() {
-                    spec.dir = join_dir_fragments(&defaults.dir, &spec.dir);
+            match (&defaults.dir, &spec.dir) {
+                (DirSetting::Unset, _) => {}
+                (DirSetting::Null, DirSetting::Unset) => {
+                    spec.dir = DirSetting::Null;
                 }
+                (DirSetting::Path(default_dir), DirSetting::Unset) => {
+                    if !default_dir.trim().is_empty() {
+                        spec.dir = defaults.dir.clone();
+                    }
+                }
+                (DirSetting::Path(default_dir), DirSetting::Path(spec_dir))
+                    if !default_dir.trim().is_empty()
+                        && !spec_dir.trim().is_empty()
+                        && !Path::new(spec_dir.trim()).is_absolute() =>
+                {
+                    spec.dir = DirSetting::Path(join_dir_fragments(default_dir, spec_dir));
+                }
+                _ => {}
             }
             if spec.check.trim().is_empty() {
                 spec.check = defaults.check.clone();
@@ -529,7 +630,7 @@ fn command_defaults_empty(defaults: &CommandSpec) -> bool {
         && defaults.on_unused_args.trim().is_empty()
         && defaults.compute.is_empty()
         && defaults.macros.is_empty()
-        && defaults.dir.trim().is_empty()
+        && defaults.dir.is_effectively_empty()
         && defaults.check.trim().is_empty()
         && defaults.runner.trim().is_empty()
         && defaults.fallback_runner.trim().is_empty()
@@ -1030,7 +1131,7 @@ commands:
     #[test]
     fn file_level_dir_applies_to_top_level_commands() {
         let raw = FireFileRaw {
-            dir: "./schemas".to_string(),
+            dir: DirSetting::Path("./schemas".to_string()),
             commands: BTreeMap::from([(
                 "hello".to_string(),
                 CommandEntry::Shorthand("echo hi".to_string()),
@@ -1042,20 +1143,62 @@ commands:
             path: PathBuf::from("/tmp/project/fire.yml"),
             raw,
         }];
-        let files = to_file_configs(&parsed, SourceKind::Local, Path::new("/tmp/project"), None, None);
+        let files = to_file_configs(
+            &parsed,
+            SourceKind::Local,
+            Path::new("/tmp/project"),
+            None,
+            None,
+        );
         let command = files[0].commands.get("hello").expect("hello command");
         let spec = command.spec().expect("spec command");
-        assert_eq!(spec.dir, "./schemas");
+        assert_eq!(spec.dir, DirSetting::Path("./schemas".to_string()));
+    }
+
+    #[test]
+    fn yaml_null_dir_is_supported_at_file_and_command_level() {
+        let yaml = r#"
+dir: null
+
+commands:
+  inherited: echo hi
+  explicit:
+    dir: null
+    exec: echo hi
+"#;
+        let raw: FireFileRaw = yaml_serde::from_str(yaml).expect("deserialize");
+        assert_eq!(raw.dir, DirSetting::Null);
+
+        let parsed = vec![ParsedFireFile {
+            path: PathBuf::from("/tmp/project/fire.yml"),
+            raw,
+        }];
+        let files = to_file_configs(
+            &parsed,
+            SourceKind::Local,
+            Path::new("/tmp/project"),
+            None,
+            None,
+        );
+
+        let inherited = files[0]
+            .commands
+            .get("inherited")
+            .expect("inherited command");
+        assert_eq!(inherited.spec().expect("spec").dir, DirSetting::Null);
+
+        let explicit = files[0].commands.get("explicit").expect("explicit command");
+        assert_eq!(explicit.spec().expect("spec").dir, DirSetting::Null);
     }
 
     #[test]
     fn command_level_dir_overrides_file_level_dir() {
         let raw = FireFileRaw {
-            dir: "./schemas".to_string(),
+            dir: DirSetting::Path("./schemas".to_string()),
             commands: BTreeMap::from([(
                 "hello".to_string(),
                 CommandEntry::Spec(CommandSpec {
-                    dir: "custom".to_string(),
+                    dir: DirSetting::Path("custom".to_string()),
                     exec: Some(CommandAction::Single("echo hi".to_string())),
                     ..CommandSpec::default()
                 }),
@@ -1067,20 +1210,26 @@ commands:
             path: PathBuf::from("/tmp/project/fire.yml"),
             raw,
         }];
-        let files = to_file_configs(&parsed, SourceKind::Local, Path::new("/tmp/project"), None, None);
+        let files = to_file_configs(
+            &parsed,
+            SourceKind::Local,
+            Path::new("/tmp/project"),
+            None,
+            None,
+        );
         let command = files[0].commands.get("hello").expect("hello command");
         let spec = command.spec().expect("spec command");
-        assert_eq!(spec.dir, "./schemas/custom");
+        assert_eq!(spec.dir, DirSetting::Path("./schemas/custom".to_string()));
     }
 
     #[test]
     fn absolute_command_dir_does_not_chain_with_file_level_dir() {
         let raw = FireFileRaw {
-            dir: "./schemas".to_string(),
+            dir: DirSetting::Path("./schemas".to_string()),
             commands: BTreeMap::from([(
                 "hello".to_string(),
                 CommandEntry::Spec(CommandSpec {
-                    dir: "/tmp/absolute".to_string(),
+                    dir: DirSetting::Path("/tmp/absolute".to_string()),
                     exec: Some(CommandAction::Single("echo hi".to_string())),
                     ..CommandSpec::default()
                 }),
@@ -1092,10 +1241,16 @@ commands:
             path: PathBuf::from("/tmp/project/fire.yml"),
             raw,
         }];
-        let files = to_file_configs(&parsed, SourceKind::Local, Path::new("/tmp/project"), None, None);
+        let files = to_file_configs(
+            &parsed,
+            SourceKind::Local,
+            Path::new("/tmp/project"),
+            None,
+            None,
+        );
         let command = files[0].commands.get("hello").expect("hello command");
         let spec = command.spec().expect("spec command");
-        assert_eq!(spec.dir, "/tmp/absolute");
+        assert_eq!(spec.dir, DirSetting::Path("/tmp/absolute".to_string()));
     }
 
     #[test]

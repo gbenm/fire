@@ -12,7 +12,7 @@ use std::{
 
 use serde::Deserialize;
 
-use crate::config::RuntimeConfig;
+use crate::config::{DirSetting, RuntimeConfig};
 use crate::resolve::ResolvedCommand;
 
 pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
@@ -524,9 +524,7 @@ impl RuntimeEngine {
                 Ok((stream, _)) => {
                     stream.set_nonblocking(false).unwrap_or_else(|err| {
                         let _ = child.kill();
-                        eprintln!(
-                            "[fire] Failed to configure runtime control stream: {err}"
-                        );
+                        eprintln!("[fire] Failed to configure runtime control stream: {err}");
                         process::exit(1);
                     });
                     break stream;
@@ -1204,9 +1202,7 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
             continue;
         };
 
-        if let Some(next_dir) = non_empty(&spec.dir) {
-            context.dir = resolve_next_dir(&context.dir, next_dir);
-        }
+        context.dir = resolve_next_dir(&context.dir, &spec.dir);
         if let Some(before) = non_empty(&spec.before) {
             context.before = Some(before.to_string());
         }
@@ -1611,7 +1607,14 @@ fn json_quote(value: &str) -> String {
     out
 }
 
-fn resolve_next_dir(current: &Path, next: &str) -> PathBuf {
+fn resolve_next_dir(current: &Path, next: &DirSetting) -> PathBuf {
+    let Some(next) = next.non_empty_path() else {
+        return match next {
+            DirSetting::Null => std::env::current_dir().unwrap_or_else(|_| current.to_path_buf()),
+            DirSetting::Unset | DirSetting::Path(_) => current.to_path_buf(),
+        };
+    };
+
     let next_path = Path::new(next);
     if next_path.is_absolute() {
         next_path.to_path_buf()
@@ -2112,16 +2115,23 @@ mod tests {
     #[test]
     fn nested_relative_dirs_are_resolved_from_parent() {
         let root = PathBuf::from("/tmp/project");
-        let child = resolve_next_dir(&root, "services");
-        let nested = resolve_next_dir(&child, "api");
+        let child = resolve_next_dir(&root, &DirSetting::Path("services".to_string()));
+        let nested = resolve_next_dir(&child, &DirSetting::Path("api".to_string()));
         assert_eq!(nested, PathBuf::from("/tmp/project/services/api"));
     }
 
     #[test]
     fn absolute_dir_overrides_parent_dir() {
         let root = PathBuf::from("/tmp/project");
-        let nested = resolve_next_dir(&root, "/opt/workspace");
+        let nested = resolve_next_dir(&root, &DirSetting::Path("/opt/workspace".to_string()));
         assert_eq!(nested, PathBuf::from("/opt/workspace"));
+    }
+
+    #[test]
+    fn null_dir_resolves_to_current_working_directory() {
+        let root = PathBuf::from("/tmp/project");
+        let nested = resolve_next_dir(&root, &DirSetting::Null);
+        assert_eq!(nested, std::env::current_dir().expect("cwd"));
     }
 
     #[test]
@@ -2162,7 +2172,7 @@ mod tests {
     #[test]
     fn command_entry_spec_is_available_for_spec_variant() {
         let entry = CommandEntry::Spec(CommandSpec {
-            dir: "api".to_string(),
+            dir: DirSetting::Path("api".to_string()),
             ..CommandSpec::default()
         });
         assert!(entry.spec().is_some());
@@ -2227,10 +2237,8 @@ mod tests {
     #[test]
     fn builds_attached_runner_invocation_for_shell_runner() {
         let runner = "docker exec -it db bash";
-        let invocation = build_attached_shell_runner_invocation(
-            runner,
-            &["mysql -u laravel -p".to_string()],
-        );
+        let invocation =
+            build_attached_shell_runner_invocation(runner, &["mysql -u laravel -p".to_string()]);
         assert_eq!(
             invocation,
             Some("docker exec -it db bash -c 'set -e\nmysql -u laravel -p\n'".to_string())
@@ -2240,16 +2248,14 @@ mod tests {
     #[test]
     fn builds_attached_runner_invocation_for_plain_shell_runner() {
         let runner = "bash";
-        let invocation =
-            build_attached_shell_runner_invocation(runner, &["echo hi".to_string()]);
+        let invocation = build_attached_shell_runner_invocation(runner, &["echo hi".to_string()]);
         assert_eq!(invocation, Some("bash -c 'set -e\necho hi\n'".to_string()));
     }
 
     #[test]
     fn does_not_build_attached_invocation_without_shell_runner() {
         let runner = "docker compose exec linux";
-        let invocation =
-            build_attached_shell_runner_invocation(runner, &["echo hi".to_string()]);
+        let invocation = build_attached_shell_runner_invocation(runner, &["echo hi".to_string()]);
         assert_eq!(invocation, None);
     }
 
@@ -2613,7 +2619,10 @@ mod tests {
         };
 
         let computed = compute_values(&resolved, &context, &original);
-        assert_eq!(computed.values.get("{left}"), Some(&"second value".to_string()));
+        assert_eq!(
+            computed.values.get("{left}"),
+            Some(&"second value".to_string())
+        );
         assert_eq!(computed.values.get("{right}"), Some(&"first".to_string()));
     }
 
@@ -2719,17 +2728,17 @@ mod tests {
     #[test]
     fn nested_dirs_are_resolved_relative_to_parent_command() {
         let nested2 = CommandEntry::Spec(CommandSpec {
-            dir: "sub".to_string(),
+            dir: DirSetting::Path("sub".to_string()),
             exec: Some(CommandAction::Single("echo nested2".to_string())),
             ..CommandSpec::default()
         });
         let nested = CommandEntry::Spec(CommandSpec {
-            dir: "sub".to_string(),
+            dir: DirSetting::Path("sub".to_string()),
             commands: BTreeMap::from([("nested2".to_string(), nested2.clone())]),
             ..CommandSpec::default()
         });
         let root = CommandEntry::Spec(CommandSpec {
-            dir: "schemas".to_string(),
+            dir: DirSetting::Path("schemas".to_string()),
             commands: BTreeMap::from([("nested".to_string(), nested.clone())]),
             ..CommandSpec::default()
         });
@@ -2748,5 +2757,29 @@ mod tests {
 
         let context = build_execution_context(&resolved);
         assert_eq!(context.dir, PathBuf::from("/tmp/project/schemas/sub/sub"));
+    }
+
+    #[test]
+    fn null_dir_in_command_context_resolves_to_current_working_directory() {
+        let command = CommandEntry::Spec(CommandSpec {
+            dir: DirSetting::Null,
+            exec: Some(CommandAction::Single("pwd".to_string())),
+            ..CommandSpec::default()
+        });
+
+        let runtimes = BTreeMap::new();
+        let args = Vec::<String>::new();
+        let resolved = ResolvedCommand {
+            project_dir: Path::new("/tmp/project"),
+            runtime_paths_base_dir: Path::new("/tmp/project"),
+            runtimes: &runtimes,
+            command: &command,
+            command_chain: vec![&command],
+            consumed: 1,
+            remaining_args: &args,
+        };
+
+        let context = build_execution_context(&resolved);
+        assert_eq!(context.dir, std::env::current_dir().expect("cwd"));
     }
 }
