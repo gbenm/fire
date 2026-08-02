@@ -5,6 +5,7 @@ mod completion;
 mod config;
 mod execute;
 mod help;
+mod mcp;
 mod registry;
 mod resolve;
 

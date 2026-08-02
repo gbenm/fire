@@ -13,6 +13,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
         [cli, install] if cli == "cli" && install == "install" => run_install(),
         [cli, init] if cli == "cli" && init == "init" => run_init(),
         [cli, upgrade] if cli == "cli" && upgrade == "upgrade" => run_upgrade(),
+        [cli, mcp] if cli == "cli" && mcp == "mcp" => run_mcp(),
         [cli, completion] if cli == "cli" && completion == "completion" => {
             print_completion_help();
         }
@@ -41,8 +42,24 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("  fire cli init");
             eprintln!("  fire cli upgrade");
             eprintln!("  fire cli completion install [bash|zsh|all]");
+            eprintln!("  fire cli mcp");
             process::exit(1);
         }
+    }
+}
+
+fn run_mcp() {
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("[fire] Failed to start async runtime: {err}");
+            process::exit(1);
+        }
+    };
+
+    if let Err(err) = runtime.block_on(crate::mcp::serve_stdio()) {
+        eprintln!("[fire] MCP server error: {err}");
+        process::exit(1);
     }
 }
 
@@ -117,6 +134,7 @@ fn print_cli_help() {
     println!("  init     Create a minimal fire config file with guided prompts");
     println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");
     println!("  completion  Manage shell completion scripts");
+    println!("  mcp      Start an MCP server (stdio) exposing fire's command tree to agents");
 }
 
 fn print_completion_help() {

@@ -51,11 +51,19 @@ Associate your YAML with https://raw.githubusercontent.com/gbenm/fire/main/schem
 - Add `$schema` to the first line: `# yaml-language-server: $schema=https://raw.githubusercontent.com/gbenm/fire/main/schemas/fire.schema.json`
 - Or map file names in `.vscode/settings.json` (`yaml.schemas`).
 
+## MCP server for agents
+Expose every available `fire` command to an AI agent:
+```bash
+fire cli mcp
+```
+Details: see [docs/mcp.md](./docs/mcp.md).
+
 ## Documentation map
 - [Overview](./docs/overview.md)
 - [Commands & arguments](./docs/commands-and-args.md)
 - [Runtimes & eval](./docs/runtimes-and-eval.md)
 - [Shell completion](./docs/completion.md)
+- [MCP server](./docs/mcp.md)
 - [Progressive examples](./docs/examples.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 
