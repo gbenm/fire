@@ -34,6 +34,7 @@ Paths are relative to the current directory. Included files follow the same scop
 - `group` provides an additional path segment, often for team/area partitioning.
 - `description` at file root describes that `group` in help/completion.
 - Files in the same directory inherit `namespace.prefix` from a peer file if they do not set one.
+- If `group` is omitted, it's inferred from the filename (`tracking.fire.yml` → `group: tracking`). An explicit `group` always wins; set `group: null` to keep the file ungrouped. See [Writing Commands](./commands-and-args.md#inferring-group-from-the-filename) for details.
 
 Example:
 ```yaml

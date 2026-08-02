@@ -19,8 +19,11 @@
       "$ref": "#/$defs/namespace"
     },
     "group": {
-      "type": "string",
-      "description": "Optional file-level group used as a command prefix for all commands in this file."
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "File-level group used as a command prefix for all commands in this file. If omitted, the group is inferred from the filename (e.g. tracking.fire.yml -> 'tracking'; the base fire.yml/fire.yaml files never infer a group). Use null to keep the file ungrouped."
     },
     "description": {
       "type": "string",

@@ -115,7 +115,7 @@ pub(crate) enum CommandAction {
 #[derive(Debug, Deserialize, Clone, Default)]
 struct FireFileRaw {
     #[serde(default)]
-    group: String,
+    group: GroupSetting,
     #[serde(default)]
     description: String,
     #[serde(default)]
@@ -227,6 +227,68 @@ impl<'de> Deserialize<'de> for DirSetting {
         }
 
         deserializer.deserialize_any(DirSettingVisitor)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+enum GroupSetting {
+    #[default]
+    Unset,
+    Null,
+    Value(String),
+}
+
+impl<'de> Deserialize<'de> for GroupSetting {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct GroupSettingVisitor;
+
+        impl<'de> Visitor<'de> for GroupSettingVisitor {
+            type Value = GroupSetting;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a group name or null")
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(GroupSetting::Null)
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(GroupSetting::Null)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                GroupSetting::deserialize(deserializer)
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(GroupSetting::Value(value.to_string()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(GroupSetting::Value(value))
+            }
+        }
+
+        deserializer.deserialize_any(GroupSettingVisitor)
     }
 }
 
@@ -526,7 +588,12 @@ fn to_file_configs(
                 source,
                 project_dir: project_dir.to_path_buf(),
                 config_path: parsed.path.clone(),
-                scope: scope_from_raw(&parsed.raw, default_namespace_prefix, forced_namespace),
+                scope: scope_from_raw(
+                    &parsed.raw,
+                    default_namespace_prefix,
+                    forced_namespace,
+                    infer_group_from_filename(&parsed.path).as_deref(),
+                ),
                 runtimes: parsed.raw.runtimes.clone(),
                 commands: apply_file_defaults_to_commands(&parsed.raw.commands, &defaults),
             }
@@ -636,12 +703,26 @@ fn command_defaults_empty(defaults: &CommandSpec) -> bool {
         && defaults.fallback_runner.trim().is_empty()
 }
 
+fn infer_group_from_filename(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let stem = name
+        .strip_suffix(".fire.yml")
+        .or_else(|| name.strip_suffix(".fire.yaml"))?;
+    let trimmed = stem.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 fn scope_from_raw(
     raw: &FireFileRaw,
     default_namespace_prefix: Option<&str>,
     forced_namespace: Option<&NamespaceScope>,
+    inferred_group: Option<&str>,
 ) -> FileScope {
-    let group = raw.group.trim();
+    let group = match &raw.group {
+        GroupSetting::Value(value) => value.trim(),
+        GroupSetting::Null => "",
+        GroupSetting::Unset => inferred_group.unwrap_or("").trim(),
+    };
     let group_description = raw.description.trim();
     let (namespace_prefix, namespace_description) = if let Some(namespace) = forced_namespace {
         (namespace.prefix.as_str(), namespace.description.clone())
@@ -845,7 +926,7 @@ mod tests {
     #[test]
     fn missing_namespace_uses_directory_explicit_prefix() {
         let raw = FireFileRaw::default();
-        let scope = scope_from_raw(&raw, Some("ex"), None);
+        let scope = scope_from_raw(&raw, Some("ex"), None, None);
         match scope {
             FileScope::Namespace { namespace, .. } => assert_eq!(namespace, "ex"),
             _ => panic!("expected namespace scope"),
@@ -855,7 +936,7 @@ mod tests {
     #[test]
     fn missing_namespace_without_directory_prefix_stays_root() {
         let raw = FireFileRaw::default();
-        let scope = scope_from_raw(&raw, None, None);
+        let scope = scope_from_raw(&raw, None, None, None);
         match scope {
             FileScope::Root => {}
             _ => panic!("expected root scope"),
@@ -868,7 +949,7 @@ mod tests {
             ParsedFireFile {
                 path: PathBuf::from("/tmp/one.fire.yml"),
                 raw: FireFileRaw {
-                    group: String::new(),
+                    group: GroupSetting::Unset,
                     namespace: Some(NamespaceRaw {
                         prefix: "ex".to_string(),
                         description: String::new(),
@@ -883,7 +964,7 @@ mod tests {
             ParsedFireFile {
                 path: PathBuf::from("/tmp/two.fire.yml"),
                 raw: FireFileRaw {
-                    group: String::new(),
+                    group: GroupSetting::Unset,
                     namespace: None,
                     include: Vec::new(),
                     runtimes: BTreeMap::new(),
@@ -911,7 +992,7 @@ mod tests {
     #[test]
     fn included_file_uses_forced_root_namespace() {
         let raw = FireFileRaw {
-            group: "backend".to_string(),
+            group: GroupSetting::Value("backend".to_string()),
             description: "Backend commands".to_string(),
             namespace: Some(NamespaceRaw {
                 prefix: "custom".to_string(),
@@ -928,7 +1009,7 @@ mod tests {
             description: "Example".to_string(),
         };
 
-        let scope = scope_from_raw(&raw, None, Some(&forced));
+        let scope = scope_from_raw(&raw, None, Some(&forced), None);
         match scope {
             FileScope::NamespaceGroup {
                 namespace,
@@ -948,12 +1029,12 @@ mod tests {
     #[test]
     fn file_level_description_applies_to_group_scope() {
         let raw = FireFileRaw {
-            group: "backend".to_string(),
+            group: GroupSetting::Value("backend".to_string()),
             description: "Backend commands".to_string(),
             ..FireFileRaw::default()
         };
 
-        let scope = scope_from_raw(&raw, None, None);
+        let scope = scope_from_raw(&raw, None, None, None);
         match scope {
             FileScope::Group {
                 group,
@@ -962,6 +1043,97 @@ mod tests {
                 assert_eq!(group, "backend");
                 assert_eq!(group_description, "Backend commands");
             }
+            _ => panic!("expected group scope"),
+        }
+    }
+
+    #[test]
+    fn omitted_group_is_inferred_from_filename() {
+        let raw = FireFileRaw::default();
+        let scope = scope_from_raw(&raw, None, None, Some("tracking"));
+        match scope {
+            FileScope::Group { group, .. } => assert_eq!(group, "tracking"),
+            _ => panic!("expected group scope"),
+        }
+    }
+
+    #[test]
+    fn null_group_stays_ungrouped() {
+        let raw = FireFileRaw {
+            group: GroupSetting::Null,
+            ..FireFileRaw::default()
+        };
+        let scope = scope_from_raw(&raw, None, None, Some("tracking"));
+        match scope {
+            FileScope::Root => {}
+            _ => panic!("expected root scope"),
+        }
+    }
+
+    #[test]
+    fn explicit_group_overrides_inferred() {
+        let raw = FireFileRaw {
+            group: GroupSetting::Value("backend".to_string()),
+            ..FireFileRaw::default()
+        };
+        let scope = scope_from_raw(&raw, None, None, Some("tracking"));
+        match scope {
+            FileScope::Group { group, .. } => assert_eq!(group, "backend"),
+            _ => panic!("expected group scope"),
+        }
+    }
+
+    #[test]
+    fn base_fire_file_does_not_infer_group() {
+        assert_eq!(infer_group_from_filename(Path::new("/tmp/fire.yml")), None);
+        assert_eq!(infer_group_from_filename(Path::new("/tmp/fire.yaml")), None);
+    }
+
+    #[test]
+    fn infer_group_from_filename_uses_verbatim_stem() {
+        assert_eq!(
+            infer_group_from_filename(Path::new("/tmp/tracking.fire.yml")),
+            Some("tracking".to_string())
+        );
+        assert_eq!(
+            infer_group_from_filename(Path::new("/tmp/instance.fire.yaml")),
+            Some("instance".to_string())
+        );
+        assert_eq!(
+            infer_group_from_filename(Path::new("/tmp/config.sample.fire.yml")),
+            Some("config.sample".to_string())
+        );
+    }
+
+    #[test]
+    fn group_yaml_deserialization_states() {
+        let unset: FireFileRaw = yaml_serde::from_str("commands: {}").expect("deserialize");
+        assert_eq!(unset.group, GroupSetting::Unset);
+
+        let null: FireFileRaw =
+            yaml_serde::from_str("group: null\ncommands: {}").expect("deserialize");
+        assert_eq!(null.group, GroupSetting::Null);
+
+        let value: FireFileRaw =
+            yaml_serde::from_str("group: backend\ncommands: {}").expect("deserialize");
+        assert_eq!(value.group, GroupSetting::Value("backend".to_string()));
+    }
+
+    #[test]
+    fn to_file_configs_infers_group_from_filename() {
+        let parsed = vec![ParsedFireFile {
+            path: PathBuf::from("/tmp/project/tracking.fire.yml"),
+            raw: FireFileRaw::default(),
+        }];
+        let files = to_file_configs(
+            &parsed,
+            SourceKind::Local,
+            Path::new("/tmp/project"),
+            None,
+            None,
+        );
+        match &files[0].scope {
+            FileScope::Group { group, .. } => assert_eq!(group, "tracking"),
             _ => panic!("expected group scope"),
         }
     }

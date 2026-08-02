@@ -3,7 +3,7 @@
 This guide shows how to author commands, chain hooks, and work with positional arguments and placeholders.
 
 ## File-level metadata
-- `group`: adds a path prefix for all commands in the file.
+- `group`: adds a path prefix for all commands in the file. If omitted, it's inferred from the filename (see below). Set it to `null` to keep the file ungrouped regardless of filename.
 - `description`: file-level label used for the group in help/completion.
 
 ```yaml
@@ -13,6 +13,16 @@ commands:
   build:
     exec: npm run build
 ```
+
+### Inferring `group` from the filename
+When `group` is omitted in a `*.fire.yml` / `*.fire.yaml` file, Fire infers it from the filename (the part before `.fire.yml`/`.fire.yaml`), verbatim:
+- `tracking.fire.yml` → `group: tracking`
+- `instance.fire.yaml` → `group: instance`
+
+Rules:
+- An explicit `group` in the YAML always takes precedence over the inferred value.
+- Set `group: null` to opt out and keep the file ungrouped (the pre-inference default behavior).
+- The base `fire.yml` / `fire.yaml` files never infer a group, since they have no prefix before the extension.
 
 ## Command shapes
 A command spec supports:
