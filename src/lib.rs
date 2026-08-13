@@ -1,8 +1,9 @@
-use std::{env, path::Path, process};
+use std::{env as std_env, path::Path, process};
 
 mod cli;
 mod completion;
 mod config;
+mod env;
 mod execute;
 mod help;
 mod mcp;
@@ -19,7 +20,7 @@ use resolve::{detect_terminal_command_collision, resolve_command};
 pub const FIRE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn setup_cli() {
-    let mut args: Vec<String> = env::args().collect();
+    let mut args: Vec<String> = std_env::args().collect();
     let bin_name = args
         .first()
         .and_then(|value| Path::new(value).file_name())
@@ -126,8 +127,8 @@ fn extract_help_target<'a>(command_args: &'a [String]) -> Option<&'a [String]> {
 }
 
 fn completion_words_from_env(bin_name: &str) -> Option<Vec<String>> {
-    let line = env::var("COMP_LINE").ok()?;
-    let point = env::var("COMP_POINT")
+    let line = std_env::var("COMP_LINE").ok()?;
+    let point = std_env::var("COMP_POINT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(line.len());

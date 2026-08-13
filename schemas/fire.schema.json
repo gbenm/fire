@@ -29,6 +29,14 @@
       "type": "string",
       "description": "Optional file-level description. When `group` is set, this description is shown for that group in help and completion."
     },
+    "env_file": {
+      "$ref": "#/$defs/envFile",
+      "description": "Environment file(s) for this Fire file. null disables automatic .env loading."
+    },
+    "environment": {
+      "$ref": "#/$defs/environment",
+      "description": "Inline environment values for this Fire file."
+    },
     "runtimes": {
       "type": "object",
       "description": "Runtime definitions keyed by alias (for example: deno, py).",
@@ -129,6 +137,17 @@
         }
       ]
     },
+    "envFile": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } },
+        { "type": "null" }
+      ]
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
     "commandEntry": {
       "description": "Command shorthand string or full command object.",
       "oneOf": [
@@ -186,6 +205,14 @@
             "warn",
             "error"
           ]
+        },
+        "env_file": {
+          "$ref": "#/$defs/envFile",
+          "description": "Environment file(s) for this command. Replaces the file-level setting; null disables loading."
+        },
+        "environment": {
+          "$ref": "#/$defs/environment",
+          "description": "Inline environment values for this command. Replaces the file-level map."
         },
         "exec": {
           "$ref": "#/$defs/stringOrStringArray",

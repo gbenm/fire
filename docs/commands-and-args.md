@@ -44,6 +44,26 @@ A command spec supports:
 
 String shorthand (`commands.foo: "npm test"`) is equivalent to a spec with `exec: "npm test"`.
 
+## Environment
+
+Every Fire file automatically loads a `.env` beside that file; a missing automatic `.env` is ignored. An included file also receives the including directory's `.env`, then its own `.env` (its values win on duplicates). Base-file commands never inherit included files' environments.
+
+Use `env_file` to replace automatic loading for a file or command. It accepts a path, a list (loaded in order), or `null` to disable loading. Missing explicit files emit a warning and execution continues. Command-level `env_file` replaces the file-level setting.
+
+```yaml
+env_file: [.env, .env.prod]
+environment:
+  NODE_ENV: production
+  DATABASE_URL: postgres://${DB_USER:-postgres}:${DB_PASS:-secret}@localhost/app
+commands:
+  deploy:
+    environment:
+      NODE_ENV: production
+    exec: ./deploy.sh
+```
+
+`environment` is an inline key/value map. A command-level map replaces the file-level map. Values in `.env` files and `environment` support `${VAR}`, `${VAR:-default}`, and `${VAR:?message}`. The invoking shell has highest precedence, followed by inline `environment`, then `env_file` values. The resolved environment is available to hooks, checks, runners, shell compute, runtime eval, and command execution.
+
 ### Reusing arg settings
 Use `x-arg-config` at the file root to share `placeholder` and `on_unused_args`, then merge with `<<`:
 ```yaml

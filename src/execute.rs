@@ -12,7 +12,8 @@ use std::{
 
 use serde::Deserialize;
 
-use crate::config::{DirSetting, RuntimeConfig};
+use crate::config::{DirSetting, EnvFileSetting, RuntimeConfig};
+use crate::env;
 use crate::resolve::ResolvedCommand;
 
 pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
@@ -93,6 +94,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
 
     let selected_runner = select_runner_mode(
         &context.dir,
+        &context.environment,
         rendered_check.as_deref(),
         rendered_runner.as_deref(),
         rendered_fallback_runner.as_deref(),
@@ -109,7 +111,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
                 RenderMode::Shell,
                 &mut ignored_stats,
             );
-            let status = run_shell_command(&rendered_before, &context.dir);
+            let status = run_shell_command(&rendered_before, &context.dir, &context.environment);
             let code = status.code().unwrap_or(1);
             if code != 0 {
                 process::exit(code);
@@ -137,10 +139,15 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     let commands_to_run = commands_with_remaining_args(&rendered_commands_to_run, &tail_args);
 
     let exit_code = match selected_runner {
-        RunnerMode::Runner(runner) | RunnerMode::Fallback(runner) => {
-            run_with_runner(&runner, &context.dir, &commands_to_run)
+        RunnerMode::Runner(runner) | RunnerMode::Fallback(runner) => run_with_runner(
+            &runner,
+            &context.dir,
+            &commands_to_run,
+            &context.environment,
+        ),
+        RunnerMode::Direct => {
+            run_in_single_shell(&context.dir, &commands_to_run, &context.environment)
         }
-        RunnerMode::Direct => run_in_single_shell(&context.dir, &commands_to_run),
     };
 
     process::exit(exit_code);
@@ -249,7 +256,7 @@ fn run_evals_with_runtime(
     }
 
     if !commands_to_run.is_empty() {
-        let code = run_in_single_shell(&context.dir, &commands_to_run);
+        let code = run_in_single_shell(&context.dir, &commands_to_run, &context.environment);
         if code != 0 {
             for (_, mut engine) in engines {
                 engine.close();
@@ -313,6 +320,7 @@ fn start_runtime_engine_for_key(
 
     let selected = select_runner_mode(
         &context.dir,
+        &context.environment,
         rendered_check.as_deref(),
         Some(rendered_runner.as_str()),
         rendered_fallback.as_deref(),
@@ -332,7 +340,7 @@ fn start_runtime_engine_for_key(
         runtime_runner,
         runtime_bootstrap_invocation(&runtime.sdk)
     );
-    let mut engine = RuntimeEngine::start(&launch, &context.dir);
+    let mut engine = RuntimeEngine::start(&launch, &context.dir, &context.environment);
 
     let library_paths =
         resolve_runtime_library_paths(resolved.runtime_paths_base_dir, &runtime.paths);
@@ -436,7 +444,8 @@ fn compute_expression_value(
                 RenderMode::Shell,
                 stats,
             );
-            run_shell_command_capture(&rendered_command, &context.dir).map(trim_trailing_newlines)
+            run_shell_command_capture(&rendered_command, &context.dir, &context.environment)
+                .map(trim_trailing_newlines)
         }
     }
 }
@@ -490,7 +499,7 @@ fn trim_trailing_newlines(mut value: String) -> String {
 }
 
 impl RuntimeEngine {
-    fn start(command: &str, dir: &Path) -> Self {
+    fn start(command: &str, dir: &Path, environment: &BTreeMap<String, String>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| {
             eprintln!("[fire] Failed to bind runtime control channel: {err}");
             process::exit(1);
@@ -508,6 +517,7 @@ impl RuntimeEngine {
             .arg("-c")
             .arg(command)
             .current_dir(dir)
+            .envs(environment)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -1163,6 +1173,9 @@ struct ExecutionContext {
     on_unused_args: Option<UnusedArgsMode>,
     macros: BTreeMap<String, String>,
     compute: BTreeMap<String, String>,
+    env_file: EnvFileSetting,
+    inline_environment: BTreeMap<String, String>,
+    environment: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1231,7 +1244,26 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
                 .macros
                 .insert(macro_key.clone(), macro_value.clone());
         }
+        if !matches!(spec.env_file, EnvFileSetting::Unset) {
+            context.env_file = spec.env_file.clone();
+        }
+        if let Some(environment) = &spec.environment {
+            context.inline_environment = environment.clone();
+        }
     }
+
+    let include_base_dir =
+        (resolved.runtime_paths_base_dir != resolved.project_dir).then_some(resolved.project_dir);
+    context.environment = env::resolve(
+        resolved.runtime_paths_base_dir,
+        include_base_dir,
+        &context.env_file,
+        &context.inline_environment,
+    )
+    .unwrap_or_else(|err| {
+        eprintln!("[fire] {err}");
+        process::exit(1);
+    });
 
     context
 }
@@ -1639,12 +1671,13 @@ fn ensure_working_directory(dir: &Path) {
 
 fn select_runner_mode(
     dir: &Path,
+    environment: &BTreeMap<String, String>,
     check: Option<&str>,
     runner: Option<&str>,
     fallback_runner: Option<&str>,
 ) -> RunnerMode {
     let check_passed = check
-        .map(|command| run_shell_command_silent(command, dir).success())
+        .map(|command| run_shell_command_silent(command, dir, environment).success())
         .unwrap_or(true);
 
     if check_passed {
@@ -1670,7 +1703,12 @@ fn select_runner_mode(
     RunnerMode::Direct
 }
 
-fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
+fn run_with_runner(
+    runner: &str,
+    dir: &Path,
+    commands: &[String],
+    environment: &BTreeMap<String, String>,
+) -> i32 {
     if commands.is_empty() {
         return 0;
     }
@@ -1690,7 +1728,7 @@ fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
             for command in commands {
                 log_command(command);
             }
-            return run_shell_command_passthrough(&invocation, dir);
+            return run_shell_command_passthrough(&invocation, dir, environment);
         }
     }
 
@@ -1700,6 +1738,7 @@ fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
         .arg("-c")
         .arg(&normalized_runner)
         .current_dir(dir)
+        .envs(environment)
         .stdin(Stdio::piped())
         .spawn()
         .unwrap_or_else(|err| {
@@ -1744,7 +1783,11 @@ fn run_with_runner(runner: &str, dir: &Path, commands: &[String]) -> i32 {
     status.code().unwrap_or(0)
 }
 
-fn run_in_single_shell(dir: &Path, commands: &[String]) -> i32 {
+fn run_in_single_shell(
+    dir: &Path,
+    commands: &[String],
+    environment: &BTreeMap<String, String>,
+) -> i32 {
     if commands.is_empty() {
         return 0;
     }
@@ -1763,6 +1806,7 @@ fn run_in_single_shell(dir: &Path, commands: &[String]) -> i32 {
         .arg("-c")
         .arg(&script)
         .current_dir(dir)
+        .envs(environment)
         .status()
         .unwrap_or_else(|err| {
             eprintln!("[fire] Failed to execute command script: {err}");
@@ -1772,11 +1816,16 @@ fn run_in_single_shell(dir: &Path, commands: &[String]) -> i32 {
     status.code().unwrap_or(1)
 }
 
-fn run_shell_command_passthrough(command: &str, dir: &Path) -> i32 {
+fn run_shell_command_passthrough(
+    command: &str,
+    dir: &Path,
+    environment: &BTreeMap<String, String>,
+) -> i32 {
     let status = Command::new("sh")
         .arg("-c")
         .arg(command)
         .current_dir(dir)
+        .envs(environment)
         .status()
         .unwrap_or_else(|err| {
             eprintln!("[fire] Failed to execute command script: {err}");
@@ -1804,7 +1853,11 @@ fn commands_with_remaining_args(commands: &[String], remaining_args: &[String]) 
     out
 }
 
-fn run_shell_command(command: &str, dir: &Path) -> process::ExitStatus {
+fn run_shell_command(
+    command: &str,
+    dir: &Path,
+    environment: &BTreeMap<String, String>,
+) -> process::ExitStatus {
     log_before(command);
     if execution_dry_run_enabled() {
         return success_exit_status();
@@ -1813,6 +1866,7 @@ fn run_shell_command(command: &str, dir: &Path) -> process::ExitStatus {
         .arg("-c")
         .arg(command)
         .current_dir(dir)
+        .envs(environment)
         .status()
         .unwrap_or_else(|err| {
             eprintln!("[fire] Failed to execute `{command}`: {err}");
@@ -1820,12 +1874,17 @@ fn run_shell_command(command: &str, dir: &Path) -> process::ExitStatus {
         })
 }
 
-fn run_shell_command_capture(command: &str, dir: &Path) -> Result<String, String> {
+fn run_shell_command_capture(
+    command: &str,
+    dir: &Path,
+    environment: &BTreeMap<String, String>,
+) -> Result<String, String> {
     log_compute(command);
     let output = Command::new("sh")
         .arg("-c")
         .arg(command)
         .current_dir(dir)
+        .envs(environment)
         .output()
         .map_err(|err| format!("Failed to execute `{command}`: {err}"))?;
 
@@ -1846,7 +1905,11 @@ fn run_shell_command_capture(command: &str, dir: &Path) -> Result<String, String
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn run_shell_command_silent(command: &str, dir: &Path) -> process::ExitStatus {
+fn run_shell_command_silent(
+    command: &str,
+    dir: &Path,
+    environment: &BTreeMap<String, String>,
+) -> process::ExitStatus {
     log_check(command);
     if execution_dry_run_enabled() {
         return success_exit_status();
@@ -1855,6 +1918,7 @@ fn run_shell_command_silent(command: &str, dir: &Path) -> process::ExitStatus {
         .arg("-c")
         .arg(command)
         .current_dir(dir)
+        .envs(environment)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -2151,21 +2215,33 @@ mod tests {
     #[test]
     fn select_runner_uses_fallback_when_check_fails() {
         let dir = std::env::current_dir().expect("cwd");
-        let selected = select_runner_mode(&dir, Some("false"), Some("bash"), Some("sh"));
+        let selected = select_runner_mode(
+            &dir,
+            &BTreeMap::new(),
+            Some("false"),
+            Some("bash"),
+            Some("sh"),
+        );
         assert_eq!(selected, RunnerMode::Fallback("sh".to_string()));
     }
 
     #[test]
     fn select_runner_uses_primary_when_check_passes() {
         let dir = std::env::current_dir().expect("cwd");
-        let selected = select_runner_mode(&dir, Some("true"), Some("bash"), Some("sh"));
+        let selected = select_runner_mode(
+            &dir,
+            &BTreeMap::new(),
+            Some("true"),
+            Some("bash"),
+            Some("sh"),
+        );
         assert_eq!(selected, RunnerMode::Runner("bash".to_string()));
     }
 
     #[test]
     fn select_runner_returns_direct_when_no_runner() {
         let dir = std::env::current_dir().expect("cwd");
-        let selected = select_runner_mode(&dir, None, None, None);
+        let selected = select_runner_mode(&dir, &BTreeMap::new(), None, None, None);
         assert_eq!(selected, RunnerMode::Direct);
     }
 
@@ -2191,6 +2267,7 @@ mod tests {
                 "pwd > ../pwd.txt".to_string(),
                 "ls > ../ls.txt".to_string(),
             ],
+            &BTreeMap::new(),
         );
         assert_eq!(status, 0);
 

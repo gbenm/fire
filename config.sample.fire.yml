@@ -9,6 +9,11 @@ namespace:
 group: backend
 description: Backend related commands
 
+# Optional: replace automatic .env loading and add inline values.
+# env_file: [.env, .env.local]
+# environment:
+#   NODE_ENV: development
+
 runtimes:
   ts:
     sdk: deno
@@ -45,7 +50,7 @@ x-arg-config: &arg-config
 
 # Example: running `fire hello other args` executes `echo hello world other args...`
 commands:
-  hello: echo hello world
+  hello: echo hello world ${HELLO}
 
   pwd: pwd
 
@@ -202,4 +207,3 @@ commands:
       - echo "hello" $name
       - read -p "Press enter to continue..."
       - echo "goodbye"
-

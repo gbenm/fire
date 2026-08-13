@@ -82,6 +82,10 @@ pub(crate) struct CommandSpec {
     #[serde(default)]
     pub(crate) fallback_runner: String,
     #[serde(default)]
+    pub(crate) env_file: EnvFileSetting,
+    #[serde(default)]
+    pub(crate) environment: Option<BTreeMap<String, String>>,
+    #[serde(default)]
     pub(crate) exec: Option<CommandAction>,
     #[serde(default)]
     pub(crate) run: Option<CommandAction>,
@@ -139,6 +143,10 @@ struct FireFileRaw {
     #[serde(default)]
     fallback_runner: String,
     #[serde(default)]
+    env_file: EnvFileSetting,
+    #[serde(default)]
+    environment: Option<BTreeMap<String, String>>,
+    #[serde(default)]
     include: Vec<String>,
     #[serde(default)]
     runtimes: BTreeMap<String, RuntimeConfig>,
@@ -146,6 +154,33 @@ struct FireFileRaw {
     commands: BTreeMap<String, CommandEntry>,
     #[serde(flatten)]
     _extra: BTreeMap<String, serde::de::IgnoredAny>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum EnvFileSetting {
+    #[default]
+    Unset,
+    Null,
+    Paths(Vec<String>),
+}
+
+impl<'de> Deserialize<'de> for EnvFileSetting {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            One(String),
+            Many(Vec<String>),
+        }
+        match Option::<Raw>::deserialize(deserializer)? {
+            None => Ok(Self::Null),
+            Some(Raw::One(value)) => Ok(Self::Paths(vec![value])),
+            Some(Raw::Many(values)) => Ok(Self::Paths(values)),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -328,6 +363,8 @@ impl FireFileRaw {
             check: self.check.clone(),
             runner: self.runner.clone(),
             fallback_runner: self.fallback_runner.clone(),
+            env_file: self.env_file.clone(),
+            environment: self.environment.clone(),
             ..CommandSpec::default()
         }
     }
@@ -665,6 +702,12 @@ fn apply_file_defaults_to_entry(entry: CommandEntry, defaults: &CommandSpec) -> 
             if spec.fallback_runner.trim().is_empty() {
                 spec.fallback_runner = defaults.fallback_runner.clone();
             }
+            if matches!(spec.env_file, EnvFileSetting::Unset) {
+                spec.env_file = defaults.env_file.clone();
+            }
+            if spec.environment.is_none() {
+                spec.environment = defaults.environment.clone();
+            }
 
             if !defaults.compute.is_empty() {
                 let mut merged = defaults.compute.clone();
@@ -701,6 +744,8 @@ fn command_defaults_empty(defaults: &CommandSpec) -> bool {
         && defaults.check.trim().is_empty()
         && defaults.runner.trim().is_empty()
         && defaults.fallback_runner.trim().is_empty()
+        && matches!(defaults.env_file, EnvFileSetting::Unset)
+        && defaults.environment.is_none()
 }
 
 fn infer_group_from_filename(path: &Path) -> Option<String> {

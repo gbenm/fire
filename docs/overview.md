@@ -29,6 +29,10 @@ include:
 ```
 Paths are relative to the current directory. Included files follow the same scope rules described below. When running from an installed path, includes are resolved relative to that installed directory.
 
+### Environment files
+
+Each Fire file loads its adjacent `.env` automatically. For included files, Fire merges the including directory's `.env` with the included directory's `.env`, with the included file taking precedence. Configure `env_file` (string, list, or `null`) and inline `environment` values at file or command scope when a command needs a different environment. See [Writing Commands](./commands-and-args.md#environment) for interpolation and precedence details.
+
 ## Scopes: namespace and group
 - `namespace.prefix` and `namespace.description` define a logical namespace.
 - `group` provides an additional path segment, often for team/area partitioning.
