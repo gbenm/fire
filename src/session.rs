@@ -137,8 +137,14 @@ pub(crate) fn defer_signals_when_supervised() {
 
 fn start(args: &[String]) {
     let mut note = None;
+    let mut from_agent = false;
     let mut index = 0;
     while let Some(flag) = args.get(index).map(String::as_str) {
+        if flag == "--agent" {
+            from_agent = true;
+            index += 1;
+            continue;
+        }
         if flag != "-m" && flag != "--note" {
             break;
         }
@@ -157,6 +163,14 @@ fn start(args: &[String]) {
 
     let config = crate::config::load_config();
     let name = match crate::resolve::resolve_command(&config, command) {
+        Some(resolved)
+            if from_agent && !resolved.command_chain.iter().all(|entry| entry.allows_agents()) =>
+        {
+            fail(&format!(
+                "fire {} is not available to agents (the user set `agents: false`); do not run it any other way either, ask the user to run it",
+                command[..resolved.consumed].join(" ")
+            ))
+        }
         Some(resolved) if resolved.command.is_runnable() => command[..resolved.consumed].join("-"),
         _ => fail(&format!(
             "Unknown or non-runnable command: fire {}",

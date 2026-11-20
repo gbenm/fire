@@ -76,6 +76,10 @@ pub(crate) fn print_command_help(command_path: &[String], command: &CommandEntry
         }
     }
 
+    if !command.allows_agents() {
+        println!("Agents: not available (agents: false)");
+    }
+
     let subcommands = command_subcommands(command);
     print_section("Commands", &subcommands);
     println!();
@@ -461,8 +465,17 @@ fn namespace_group_description(config: &LoadedConfig, namespace: &str, group: &s
 }
 
 fn optional_description(entry: &CommandEntry) -> Option<String> {
-    non_empty(entry.description().unwrap_or_default())
+    let description = non_empty(entry.description().unwrap_or_default());
+    if entry.allows_agents() {
+        return description;
+    }
+    Some(match description {
+        Some(description) => format!("{NO_AGENTS_MARK} {description}"),
+        None => NO_AGENTS_MARK.to_string(),
+    })
 }
+
+const NO_AGENTS_MARK: &str = "[no agents]";
 
 fn non_empty(value: &str) -> Option<String> {
     let trimmed = value.trim();

@@ -41,6 +41,7 @@ A command spec supports:
 - `compute`: define computed variables (see below).
 - `placeholder`: placeholder pattern. If absent, no interpolation or spreads occur.
 - `on_unused_args`: behavior for unused args in **eval** (default: `ignore`).
+- `agents`: set to `false` to keep the command (and its subcommands) away from agents using the [MCP server](./mcp.md#keeping-commands-away-from-agents) (default: `true`).
 
 String shorthand (`commands.foo: "npm test"`) is equivalent to a spec with `exec: "npm test"`.
 

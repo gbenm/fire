@@ -1,6 +1,6 @@
 [package]
 name = "fire-cli"
-version = "2.7.1"
+version = "2.8.0"
 edition = "2021"
 description = "command management"
 license-file = "LICENSE"

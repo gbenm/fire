@@ -35,6 +35,38 @@ Example host config (adjust to your tool's format):
 }
 ```
 
+## Keeping commands away from agents
+Some commands should stay human-only: production deploys, destructive database tasks, anything
+that spends money. Mark them with `agents: false`:
+```yaml
+commands:
+  deploy:
+    description: Deploy to production
+    agents: false
+    commands:
+      prod: ./scripts/deploy prod
+  db:
+    commands:
+      migrate: ./scripts/migrate
+      drop:
+        agents: false
+        exec: ./scripts/drop-db
+```
+- The command, and everything under it, is left out of `list_commands` and `search_commands`. A
+  subcommand can't opt back in under a group marked `agents: false`.
+- `start_session` refuses to run it, with an error telling the agent not to run it any other way
+  and to ask you instead.
+- The server's instructions tell agents that these commands are off-limits, including from their
+  own shell.
+- `fire` help marks them as `[no agents]`, so you can see what's restricted without opening the
+  YAML.
+
+You can still run these commands yourself, including with `fire cli bg`.
+
+This steers well-behaved agents. It is not a sandbox: an agent with shell access can still read
+your config or type `fire deploy prod`. To hard-block that, also add a deny rule to your agent's
+own permissions (for example, in Claude Code: `"deny": ["Bash(fire deploy:*)"]`).
+
 ## Tools
 
 ### `list_commands`
@@ -66,7 +98,8 @@ Takes an `id` and optional `lines` (default 100). Returns the session plus the l
 ### `start_session`
 Takes `command` (the fire path plus arguments as a token array, without `fire`, e.g.
 `["api", "dev"]`), a required short `note`, and an optional `cwd` (project directory, defaulting to
-the server's). Same as `fire cli bg -m "<note>" <command...>`. Returns the session id in `stdout`.
+the server's). Same as `fire cli bg -m "<note>" <command...>`, except that it refuses commands
+marked `agents: false`. Returns the session id in `stdout`.
 
 ### `send_input`
 Takes `id` and `text`, and writes the text plus a newline to the session's stdin (`fire cli send`).

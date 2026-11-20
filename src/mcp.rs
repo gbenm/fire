@@ -55,6 +55,9 @@ pub(crate) fn build_command_context(config: &LoadedConfig) -> CommandContext {
         let scope_prefix: Vec<String> = namespace.iter().chain(group.iter()).cloned().collect();
 
         for (name, entry) in &file.commands {
+            if !entry.allows_agents() {
+                continue;
+            }
             let mut path_tokens = scope_prefix.clone();
             path_tokens.push(name.clone());
             commands.push(build_node(
@@ -104,6 +107,7 @@ fn build_node(
         .subcommands()
         .map(|map| {
             map.iter()
+                .filter(|(_, sub_entry)| sub_entry.allows_agents())
                 .map(|(sub_name, sub_entry)| {
                     let mut sub_path = path_tokens.to_vec();
                     sub_path.push(sub_name.clone());
@@ -335,13 +339,13 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. `command` must be a configured fire command (find it with `search_commands`). Check `list_sessions` first to avoid duplicates. Returns the session id in `stdout`; then confirm it came up with `session_output`."
+        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. `command` must be a configured fire command (find it with `search_commands`). Check `list_sessions` first to avoid duplicates. Returns the session id in `stdout`; then confirm it came up with `session_output`. Fails for commands the user reserved for humans (`agents: false`)."
     )]
     fn start_session(
         &self,
         Parameters(StartSessionRequest { command, note, cwd }): Parameters<StartSessionRequest>,
     ) -> String {
-        let mut args = vec!["bg", "-m", note.as_str()];
+        let mut args = vec!["bg", "--agent", "-m", note.as_str()];
         args.extend(command.iter().map(String::as_str));
         run_fire_cli(&args, cwd.as_deref())
     }
@@ -379,6 +383,8 @@ const INSTRUCTIONS: &str = "Run long-running fire commands (servers, `start`/`de
 workers, tunnels) with the `start_session` tool, never in your own shell, and call `list_sessions` \
 first to reuse what is already running; find the user's configured commands with \
 `search_commands` (an app or service name you don't recognize is probably one) before writing your own. Details: these MCP tools beat running fire ad hoc. \
+Commands the user marked `agents: false` are not listed and are off-limits: never run them, not \
+even through your own shell. \
 Sessions are shared with the user and other agents across projects, so give `start_session` a \
 short `note` saying why; read output with `session_output`, write stdin with `send_input`, \
 signal or stop with `signal_session`; the user can attach with `fire cli fg <id>`. \
@@ -423,6 +429,44 @@ mod tests {
     fn instructions_are_one_line_with_critical_rule_first() {
         assert!(!INSTRUCTIONS.contains('\n'));
         assert!(INSTRUCTIONS[..120].contains("start_session"));
+    }
+
+    #[test]
+    fn agents_false_hides_command_and_its_subcommands() {
+        let config = LoadedConfig {
+            files: vec![FileConfig {
+                source: SourceKind::Local,
+                project_dir: PathBuf::from("."),
+                config_path: PathBuf::from("/tmp/fire-test.yml"),
+                scope: FileScope::Root,
+                runtimes: BTreeMap::new(),
+                commands: parse_commands(
+                    r#"
+commands:
+  build: cargo build
+  deploy:
+    agents: false
+    commands:
+      prod: ./deploy prod
+  db:
+    commands:
+      migrate: ./migrate
+      drop:
+        agents: false
+        exec: ./drop
+"#,
+                ),
+            }],
+        };
+
+        let context = build_command_context(&config);
+        let names: Vec<_> = context.commands.iter().map(|node| node.name.as_str()).collect();
+        assert_eq!(names, vec!["build", "db"]);
+        let db = &context.commands[1];
+        let subs: Vec<_> = db.subcommands.iter().map(|node| node.name.as_str()).collect();
+        assert_eq!(subs, vec!["migrate"]);
+        assert!(search_context(&context, "deploy").is_empty());
+        assert!(search_context(&context, "drop").is_empty());
     }
 
     #[test]

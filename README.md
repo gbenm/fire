@@ -57,6 +57,7 @@ managed sessions you can inspect, signal, and attach to:
 ```bash
 fire cli mcp
 ```
+Mark commands agents shouldn't touch (deploys, destructive DB tasks) with `agents: false`.
 Details: see [docs/mcp.md](./docs/mcp.md).
 
 ## Detached sessions

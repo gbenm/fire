@@ -93,6 +93,9 @@ pub(crate) struct CommandSpec {
     pub(crate) eval: Option<CommandAction>,
     #[serde(default)]
     pub(crate) commands: BTreeMap<String, CommandEntry>,
+    /// `false` keeps the command (and its subcommands) away from agents using the MCP server.
+    #[serde(default)]
+    pub(crate) agents: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -396,6 +399,12 @@ impl CommandEntry {
                 spec.exec.is_some() || spec.run.is_some() || spec.eval.is_some()
             }
         }
+    }
+
+    /// Whether this entry itself allows agents. Callers must also check ancestors: `agents: false`
+    /// on a group applies to everything below it.
+    pub(crate) fn allows_agents(&self) -> bool {
+        self.spec().and_then(|spec| spec.agents) != Some(false)
     }
 
     pub(crate) fn subcommands(&self) -> Option<&BTreeMap<String, CommandEntry>> {

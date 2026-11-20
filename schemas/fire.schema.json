@@ -197,6 +197,11 @@
           "type": "string",
           "description": "Placeholder template for this command."
         },
+        "agents": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set to false to keep this command, and every subcommand under it, away from agents: the MCP server does not list it and `start_session` refuses to run it. Help marks it as `[no agents]`. This guides well-behaved agents; to hard-block an agent's shell, also add a deny rule in your agent's permissions."
+        },
         "on_unused_args": {
           "type": "string",
           "description": "Behavior for unused args at this command level.",
