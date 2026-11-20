@@ -1,16 +1,14 @@
 use serde::Serialize;
 
 use rmcp::{
-    ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
     schemars, serve_server, tool, tool_handler, tool_router,
     transport::io::stdio,
+    ServerHandler,
 };
 
-use crate::config::{
-    local_implicit_namespace, CommandEntry, FileScope, LoadedConfig, SourceKind,
-};
+use crate::config::{local_implicit_namespace, CommandEntry, FileScope, LoadedConfig, SourceKind};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct CommandContext {
@@ -194,6 +192,84 @@ struct SearchCommandsRequest {
     query: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SessionOutputRequest {
+    /// Session id, as returned by `list_sessions` or `fire cli bg`.
+    id: String,
+    /// How many trailing lines of each stream to return (default 100).
+    lines: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct StartSessionRequest {
+    /// The fire command path plus its arguments, one token per item, without the leading `fire`,
+    /// e.g. `["api", "dev", "--port", "3000"]` for `fire api dev --port 3000`.
+    command: Vec<String>,
+    /// Very short context about why you are starting it (e.g. "api for auth e2e tests"). Other
+    /// agents and the user see it in `list_sessions`.
+    note: String,
+    /// Project directory to resolve and run the command from. Defaults to the server's cwd.
+    cwd: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SendInputRequest {
+    /// Session id.
+    id: String,
+    /// Line of text written to the process's stdin (a newline is appended).
+    text: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SignalSessionRequest {
+    /// Session id.
+    id: String,
+    /// Signal name or number (INT, TERM, HUP, USR1, USR2, QUIT, KILL, STOP, CONT, 9...). Omit to
+    /// stop the session gracefully (TERM, then KILL after 5s) or to remove an exited session.
+    signal: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CliResult {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+}
+
+/// Session management reuses the CLI (`fire cli bg|send|kill`) so both paths behave the same.
+fn run_fire_cli(args: &[&str], cwd: Option<&str>) -> String {
+    let exe = std::env::current_exe().unwrap_or_else(|_| "fire".into());
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg("cli")
+        .args(args)
+        .stdin(std::process::Stdio::null());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let result = match command.output() {
+        Ok(output) => CliResult {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        },
+        Err(err) => CliResult {
+            ok: false,
+            stdout: String::new(),
+            stderr: format!("failed to run fire: {err}"),
+        },
+    };
+    to_json(&result)
+}
+
+#[derive(Debug, Serialize)]
+struct SessionOutput {
+    #[serde(flatten)]
+    session: crate::session::SessionInfo,
+    stdout: String,
+    stderr: String,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FireMcpServer {
     tool_router: ToolRouter<Self>,
@@ -210,7 +286,7 @@ impl FireMcpServer {
 #[tool_router]
 impl FireMcpServer {
     #[tool(
-        description = "List the full tree of `fire` commands available, including their invocation paths, descriptions, and exec/eval templates."
+        description = "List the full tree of `fire` commands the user configured (builds, tests, dev servers, deploys...), with invocation paths, descriptions, and exec/eval templates. Prefer these over ad-hoc shell commands."
     )]
     fn list_commands(&self) -> String {
         let config = crate::config::load_config();
@@ -219,7 +295,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Search `fire` commands by a case-insensitive substring match against path, description, and exec/eval templates."
+        description = "Search the user's configured `fire` commands (case-insensitive substring over path, description, and exec/eval templates). Use it before writing your own build/test/run/deploy commands."
     )]
     fn search_commands(
         &self,
@@ -228,6 +304,67 @@ impl FireMcpServer {
         let config = crate::config::load_config();
         let context = build_command_context(&config);
         to_json(&search_context(&context, &query))
+    }
+
+    #[tool(
+        description = "List detached `fire` sessions across all projects (started with `fire cli bg`, by any agent or the user): id, command, note (why it was started), cwd, status, pid and exit code. Check this before starting or restarting servers to avoid duplicates."
+    )]
+    fn list_sessions(&self) -> String {
+        let sessions: Vec<_> = crate::session::list_sessions()
+            .into_iter()
+            .map(crate::session::Session::info)
+            .collect();
+        to_json(&sessions)
+    }
+
+    #[tool(
+        description = "Read the last lines of a detached session's stdout and stderr, plus its status."
+    )]
+    fn session_output(
+        &self,
+        Parameters(SessionOutputRequest { id, lines }): Parameters<SessionOutputRequest>,
+    ) -> String {
+        match crate::session::read_output(&id, lines.unwrap_or(100)) {
+            Some((session, stdout, stderr)) => to_json(&SessionOutput {
+                session: session.info(),
+                stdout,
+                stderr,
+            }),
+            None => format!("{{\"error\": \"no session `{id}`\"}}"),
+        }
+    }
+
+    #[tool(
+        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. Check `list_sessions` first to avoid duplicates. Returns the session id in `stdout`."
+    )]
+    fn start_session(
+        &self,
+        Parameters(StartSessionRequest { command, note, cwd }): Parameters<StartSessionRequest>,
+    ) -> String {
+        let mut args = vec!["bg", "-m", note.as_str()];
+        args.extend(command.iter().map(String::as_str));
+        run_fire_cli(&args, cwd.as_deref())
+    }
+
+    #[tool(description = "Write a line of text to a running session's stdin.")]
+    fn send_input(
+        &self,
+        Parameters(SendInputRequest { id, text }): Parameters<SendInputRequest>,
+    ) -> String {
+        run_fire_cli(&["send", &id, &text], None)
+    }
+
+    #[tool(
+        description = "Send a signal to a session's process group (e.g. INT, HUP, USR1), or omit `signal` to stop it (TERM, then KILL after 5s). On an already-exited session, removes its record."
+    )]
+    fn signal_session(
+        &self,
+        Parameters(SignalSessionRequest { id, signal }): Parameters<SignalSessionRequest>,
+    ) -> String {
+        match signal {
+            Some(signal) => run_fire_cli(&["kill", &id, &signal], None),
+            None => run_fire_cli(&["kill", &id], None),
+        }
     }
 }
 
@@ -240,11 +377,19 @@ fn to_json<T: Serialize>(value: &T) -> String {
 impl ServerHandler for FireMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "Provides context about the `fire` CLI's available commands \
-             (https://github.com/gbenm/fire). Call `list_commands` for the full command tree, or \
-             `search_commands` to filter it. Each command's `path` field is the exact shell \
-             invocation, e.g. `fire backend logs`. This server only provides context; to actually \
-             run a command, invoke `fire <path>` directly in a shell.",
+            "fire (https://github.com/gbenm/fire) is the user's command launcher. Two rules:\n\n\
+             1. Look for commands the user already configured before writing your own. Call \
+             `search_commands` (or `list_commands`) for builds, tests, dev servers, migrations, \
+             deploys, logs, etc. Each result's `path` is the exact invocation (e.g. `fire backend \
+             test`). Run short commands in your shell as `fire <path> [args]`. `exec`/`eval` show \
+             what a command does, for context only.\n\n\
+             2. Always launch long-running processes (dev servers, watchers, workers, tunnels) \
+             through `start_session` with a short `note` explaining why, so they can be managed. \
+             Never background them in your own shell. The user and other agents, possibly working \
+             in other projects, share these sessions: call `list_sessions` first to see what is \
+             already running and why, and reuse it instead of starting a duplicate or a port \
+             clash. Use `session_output` to read stdout/stderr, `send_input` for stdin, and \
+             `signal_session` to send signals or stop. The user can attach with `fire cli fg <id>`.",
         )
     }
 }
@@ -411,7 +556,10 @@ commands:
             .iter()
             .find(|node| node.name == "computed")
             .expect("computed command");
-        assert_eq!(computed.eval, Some(vec!["py:sayHello(\"{1}\")".to_string()]));
+        assert_eq!(
+            computed.eval,
+            Some(vec!["py:sayHello(\"{1}\")".to_string()])
+        );
         assert_eq!(computed.exec, None);
     }
 

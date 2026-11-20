@@ -52,11 +52,22 @@ Associate your YAML with https://raw.githubusercontent.com/gbenm/fire/main/schem
 - Or map file names in `.vscode/settings.json` (`yaml.schemas`).
 
 ## MCP server for agents
-Expose every available `fire` command to an AI agent:
+Let AI agents use the commands you already configured, and launch long-running processes as
+managed sessions you can inspect, signal, and attach to:
 ```bash
 fire cli mcp
 ```
 Details: see [docs/mcp.md](./docs/mcp.md).
+
+## Detached sessions
+Run long-lived commands in the background with a short note so you and your agents can find them
+from any project, read their output, send input or signals, attach (Ctrl+Z detaches) or stop them:
+```bash
+fire cli bg -m "api for auth tests" api dev
+fire cli ps
+fire cli fg <id>
+```
+Details: see [docs/sessions.md](./docs/sessions.md).
 
 ## Documentation map
 - [Overview](./docs/overview.md)
@@ -64,6 +75,7 @@ Details: see [docs/mcp.md](./docs/mcp.md).
 - [Runtimes & eval](./docs/runtimes-and-eval.md)
 - [Shell completion](./docs/completion.md)
 - [MCP server](./docs/mcp.md)
+- [Detached sessions](./docs/sessions.md)
 - [Progressive examples](./docs/examples.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 

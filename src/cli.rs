@@ -14,6 +14,15 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
         [cli, init] if cli == "cli" && init == "init" => run_init(),
         [cli, upgrade] if cli == "cli" && upgrade == "upgrade" => run_upgrade(),
         [cli, mcp] if cli == "cli" && mcp == "mcp" => run_mcp(),
+        [cli, sub, ..]
+            if cli == "cli"
+                && matches!(
+                    sub.as_str(),
+                    "bg" | "ps" | "logs" | "fg" | "kill" | "send" | "__supervise"
+                ) =>
+        {
+            crate::session::handle(command_args)
+        }
         [cli, completion] if cli == "cli" && completion == "completion" => {
             print_completion_help();
         }
@@ -43,6 +52,8 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("  fire cli upgrade");
             eprintln!("  fire cli completion install [bash|zsh|all]");
             eprintln!("  fire cli mcp");
+            eprintln!("  fire cli bg [-m \"note\"] <command> [args...]");
+            eprintln!("  fire cli ps | logs <id> [lines] | fg <id> | send <id> <text> | kill <id> [SIGNAL]");
             process::exit(1);
         }
     }
@@ -135,6 +146,14 @@ fn print_cli_help() {
     println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");
     println!("  completion  Manage shell completion scripts");
     println!("  mcp      Start an MCP server (stdio) exposing fire's command tree to agents");
+    println!(
+        "  bg [-m \"note\"] <command>  Run a fire command detached, with a short context note"
+    );
+    println!("  ps       List detached sessions (all projects)");
+    println!("  logs <id> [lines]  Show the last stdout/stderr lines of a session");
+    println!("  fg <id>  Attach to a session (Ctrl+Z detaches, Ctrl+C interrupts)");
+    println!("  send <id> <text>  Write a line to a session's stdin");
+    println!("  kill <id> [SIGNAL]  Stop a session (TERM, then KILL), or send SIGNAL (INT, HUP, USR1...)");
 }
 
 fn print_completion_help() {

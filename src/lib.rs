@@ -9,6 +9,7 @@ mod help;
 mod mcp;
 mod registry;
 mod resolve;
+mod session;
 
 use cli::handle_cli_command;
 use completion::{completion_suggestions, render_values_only, render_with_descriptions};
@@ -20,6 +21,7 @@ use resolve::{detect_terminal_command_collision, resolve_command};
 pub const FIRE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn setup_cli() {
+    session::defer_signals_when_supervised();
     let mut args: Vec<String> = std_env::args().collect();
     let bin_name = args
         .first()

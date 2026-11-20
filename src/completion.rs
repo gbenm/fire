@@ -196,6 +196,30 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
             value: "mcp".to_string(),
             description: Some("Start an MCP server exposing fire's command tree".to_string()),
         },
+        CompletionSuggestion {
+            value: "bg".to_string(),
+            description: Some("Run a fire command detached".to_string()),
+        },
+        CompletionSuggestion {
+            value: "ps".to_string(),
+            description: Some("List detached sessions".to_string()),
+        },
+        CompletionSuggestion {
+            value: "logs".to_string(),
+            description: Some("Show a session's output".to_string()),
+        },
+        CompletionSuggestion {
+            value: "fg".to_string(),
+            description: Some("Attach to a session".to_string()),
+        },
+        CompletionSuggestion {
+            value: "send".to_string(),
+            description: Some("Write a line to a session's stdin".to_string()),
+        },
+        CompletionSuggestion {
+            value: "kill".to_string(),
+            description: Some("Stop or signal a session".to_string()),
+        },
     ];
 
     suggestions
@@ -1039,7 +1063,19 @@ commands:
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
         assert_eq!(
             names,
-            vec!["install", "init", "completion", "upgrade", "mcp"]
+            vec![
+                "install",
+                "init",
+                "completion",
+                "upgrade",
+                "mcp",
+                "bg",
+                "ps",
+                "logs",
+                "fg",
+                "send",
+                "kill"
+            ]
         );
     }
 
