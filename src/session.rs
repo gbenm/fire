@@ -157,7 +157,7 @@ fn start(args: &[String]) {
 
     let config = crate::config::load_config();
     let name = match crate::resolve::resolve_command(&config, command) {
-        Some(resolved) if resolved.command.is_runnable() => command[resolved.consumed - 1].clone(),
+        Some(resolved) if resolved.command.is_runnable() => command[..resolved.consumed].join("-"),
         _ => fail(&format!(
             "Unknown or non-runnable command: fire {}",
             command.join(" ")
@@ -698,6 +698,8 @@ mod tests {
 
     #[test]
     fn id_is_slugged_with_suffix() {
+        let id = new_id("web-start");
+        assert!(id.starts_with("web-start-"), "{id}");
         let id = new_id("API_Dev");
         assert!(id.starts_with("api-dev-"), "{id}");
         assert_eq!(id.len(), "api-dev-".len() + 4);

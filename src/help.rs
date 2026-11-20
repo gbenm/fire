@@ -20,10 +20,23 @@ pub(crate) fn print_root_help(config: &LoadedConfig) {
     print_section("Built-in Commands", &builtin_commands);
 
     println!();
+    println!("{SESSION_HINT}");
     println!("Docs: https://github.com/gbenm/fire");
 }
 
+/// Agents often discover commands through help output, so point them at managed sessions here.
+const SESSION_HINT: &str = "Long-running (servers, watchers)? Run detached: fire cli bg -m \"why\" <command> (see: fire cli ps)";
+
 pub(crate) fn print_scope_help(config: &LoadedConfig, path: &[String]) -> bool {
+    let printed = print_scope_help_inner(config, path);
+    if printed {
+        println!();
+        println!("{SESSION_HINT}");
+    }
+    printed
+}
+
+fn print_scope_help_inner(config: &LoadedConfig, path: &[String]) -> bool {
     match path {
         [namespace] => {
             if !has_namespace(config, namespace) {
@@ -65,6 +78,8 @@ pub(crate) fn print_command_help(command_path: &[String], command: &CommandEntry
 
     let subcommands = command_subcommands(command);
     print_section("Commands", &subcommands);
+    println!();
+    println!("{SESSION_HINT}");
 }
 
 fn print_namespace_help(config: &LoadedConfig, namespace: &str) {

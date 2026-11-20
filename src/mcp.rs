@@ -295,7 +295,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Search the user's configured `fire` commands (case-insensitive substring over path, description, and exec/eval templates). Use it before writing your own build/test/run/deploy commands."
+        description = "Search the user's configured `fire` commands (case-insensitive substring over path, description, and exec/eval templates). First stop when the user names an app, service or task you don't recognize (\"start X\", \"run the Y tests\"): it is likely a fire command. Also use it before writing your own build/test/run/deploy commands."
     )]
     fn search_commands(
         &self,
@@ -307,7 +307,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "List detached `fire` sessions across all projects (started with `fire cli bg`, by any agent or the user): id, command, note (why it was started), cwd, status, pid and exit code. Check this before starting or restarting servers to avoid duplicates."
+        description = "List detached `fire` sessions across all projects (started with `fire cli bg`, by any agent or the user): id, command, note (why it was started), cwd, status, pid and exit code. Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `session_output` first: it usually shows why it failed (e.g. port in use)."
     )]
     fn list_sessions(&self) -> String {
         let sessions: Vec<_> = crate::session::list_sessions()
@@ -335,7 +335,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. Check `list_sessions` first to avoid duplicates. Returns the session id in `stdout`."
+        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. `command` must be a configured fire command (find it with `search_commands`). Check `list_sessions` first to avoid duplicates. Returns the session id in `stdout`; then confirm it came up with `session_output`."
     )]
     fn start_session(
         &self,
@@ -378,7 +378,7 @@ fn to_json<T: Serialize>(value: &T) -> String {
 const INSTRUCTIONS: &str = "Run long-running fire commands (servers, `start`/`dev`/`watch` commands, \
 workers, tunnels) with the `start_session` tool, never in your own shell, and call `list_sessions` \
 first to reuse what is already running; find the user's configured commands with \
-`search_commands` before writing your own. Details: these MCP tools beat running fire ad hoc. \
+`search_commands` (an app or service name you don't recognize is probably one) before writing your own. Details: these MCP tools beat running fire ad hoc. \
 Sessions are shared with the user and other agents across projects, so give `start_session` a \
 short `note` saying why; read output with `session_output`, write stdin with `send_input`, \
 signal or stop with `signal_session`; the user can attach with `fire cli fg <id>`. \
