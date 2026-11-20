@@ -373,23 +373,24 @@ fn to_json<T: Serialize>(value: &T) -> String {
         .unwrap_or_else(|err| format!("{{\"error\": \"failed to serialize response: {err}\"}}"))
 }
 
+/// Single line on purpose: some MCP clients only show the first line, or a truncated prefix,
+/// of a server's instructions. The critical rule therefore comes first.
+const INSTRUCTIONS: &str = "Run long-running fire commands (servers, `start`/`dev`/`watch` commands, \
+workers, tunnels) with the `start_session` tool, never in your own shell, and call `list_sessions` \
+first to reuse what is already running; find the user's configured commands with \
+`search_commands` before writing your own. Details: these MCP tools beat running fire ad hoc. \
+Sessions are shared with the user and other agents across projects, so give `start_session` a \
+short `note` saying why; read output with `session_output`, write stdin with `send_input`, \
+signal or stop with `signal_session`; the user can attach with `fire cli fg <id>`. \
+`search_commands`/`list_commands` return each command's exact `path` (e.g. `fire backend test`); \
+run short ones in your shell as `fire <path> [args]`. `exec`/`eval` are context only. \
+https://github.com/gbenm/fire";
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FireMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "fire (https://github.com/gbenm/fire) is the user's command launcher. Two rules:\n\n\
-             1. Look for commands the user already configured before writing your own. Call \
-             `search_commands` (or `list_commands`) for builds, tests, dev servers, migrations, \
-             deploys, logs, etc. Each result's `path` is the exact invocation (e.g. `fire backend \
-             test`). Run short commands in your shell as `fire <path> [args]`. `exec`/`eval` show \
-             what a command does, for context only.\n\n\
-             2. Always launch long-running processes (dev servers, watchers, workers, tunnels) \
-             through `start_session` with a short `note` explaining why, so they can be managed. \
-             Never background them in your own shell. The user and other agents, possibly working \
-             in other projects, share these sessions: call `list_sessions` first to see what is \
-             already running and why, and reuse it instead of starting a duplicate or a port \
-             clash. Use `session_output` to read stdout/stderr, `send_input` for stdin, and \
-             `signal_session` to send signals or stop. The user can attach with `fire cli fg <id>`.",
+            INSTRUCTIONS,
         )
     }
 }
@@ -416,6 +417,12 @@ mod tests {
         yaml_serde::from_str::<Wrapper>(yaml)
             .expect("valid yaml")
             .commands
+    }
+
+    #[test]
+    fn instructions_are_one_line_with_critical_rule_first() {
+        assert!(!INSTRUCTIONS.contains('\n'));
+        assert!(INSTRUCTIONS[..120].contains("start_session"));
     }
 
     #[test]
