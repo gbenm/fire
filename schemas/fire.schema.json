@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/gbenm/fire/main/schemas/fire.schema.json",
   "title": "Fire Config",
+  "description": "JSON Schema for authoring and validating Fire configuration files.",
   "type": "object",
   "additionalProperties": false,
   "patternProperties": {

@@ -156,6 +156,9 @@ Mark servers and watchers with `long_running: true` so they detach on their own 
 script runs them without a terminal. Flags like `--bg`, `--fg`, `--dry-run` and `--no-log` go before the command ([global flags](./docs/commands-and-args.md#global-flags)). Details: see [docs/sessions.md](./docs/sessions.md).
 
 ## Documentation map
+Run `fire cli docs` to list the same documentation embedded in your installed version, then
+`fire cli docs <topic>` to read one topic (`$PAGER` is used in a terminal).
+
 - [Overview](./docs/overview.md)
 - [Fire compared to make, just, Task, mise and npm scripts](./docs/comparison.md)
 - [Commands & arguments](./docs/commands-and-args.md)

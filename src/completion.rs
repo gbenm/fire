@@ -211,6 +211,21 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         return Some(core_cli_global_children(&path[2..], prefix));
     }
 
+    if path.len() >= 2 && path[1] == "docs" {
+        return Some(if path.len() == 2 {
+            crate::docs::all()
+                .iter()
+                .filter(|doc| doc.id.starts_with(prefix))
+                .map(|doc| CompletionSuggestion {
+                    value: doc.id.to_string(),
+                    description: Some(doc.summary.to_string()),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        });
+    }
+
     if path.len() >= 2 && ["fg", "send", "kill", "logs"].contains(&path[1].as_str()) {
         let suggestions = core_cli_session_args(
             &path[1],
@@ -259,6 +274,10 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
         CompletionSuggestion {
             value: "init".to_string(),
             description: Some("Create a minimal fire config file".to_string()),
+        },
+        CompletionSuggestion {
+            value: "docs".to_string(),
+            description: Some("Read version-matched embedded documentation".to_string()),
         },
         CompletionSuggestion {
             value: "completion".to_string(),
@@ -1318,6 +1337,7 @@ commands:
             vec![
                 "global",
                 "init",
+                "docs",
                 "completion",
                 "upgrade",
                 "mcp",

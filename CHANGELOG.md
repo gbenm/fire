@@ -14,6 +14,8 @@ reconstructed from the git history.
   [troubleshooting](https://github.com/gbenm/fire/blob/main/docs/troubleshooting.md#the-input-device-is-not-a-tty). (#21)
 
 ### Added
+- Version-matched embedded docs through `fire cli docs [topic]`, topic completion, and the MCP
+  `get_docs` tool, including the Fire config schema. (#33)
 - MCP `run_command` runs finite configured commands with structured exit code and output, a
   timeout, and refusals for `long_running` or `agents: false` commands. (#38)
 - `{fire.exec}` in a command `runner`: replaced by the commands as one quoted argument, leaving

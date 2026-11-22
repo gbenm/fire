@@ -8,6 +8,15 @@ Fire is a configuration-driven CLI. Commands, completion, and runtime execution 
 - **Runtime-aware**: evaluate JS/TS (node/deno) or Python snippets directly from YAML.
 - **Containers and runners**: route commands through runners or fallback runners with health checks.
 
+## Embedded documentation
+
+The installed binary contains this documentation and the Fire config schema, so the material you
+read always matches that version. `fire cli docs` lists every topic with a summary, and
+`fire cli docs <topic>` prints the selected Markdown document (`schema` prints the JSON schema).
+Topic completion includes the same summaries. When stdout is a terminal and `$PAGER` is non-empty,
+Fire passes the document to that shell command; arguments and quoting in `$PAGER` follow the usual
+shell-command convention. Redirected output is printed directly.
+
 ## File discovery and merge order
 Fire loads YAML files from the current working directory using these patterns:
 - `fire.yaml`

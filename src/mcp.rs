@@ -244,6 +244,12 @@ struct SearchCommandsRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetDocsRequest {
+    /// Documentation topic to read. Omit it to return the full topic index.
+    topic: Option<crate::docs::DocsTopic>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct RunCommandRequest {
     /// Exact command path returned by `search_commands`, including the leading `fire`.
     path: String,
@@ -614,14 +620,31 @@ pub(crate) struct FireMcpServer {
 
 impl FireMcpServer {
     pub(crate) fn new() -> Self {
-        Self {
-            tool_router: Self::tool_router(),
-        }
+        let mut tool_router = Self::tool_router();
+        tool_router
+            .map
+            .get_mut("get_docs")
+            .expect("get_docs tool route")
+            .attr
+            .description = Some(crate::docs::MCP_TOOL_DESCRIPTION.into());
+        Self { tool_router }
     }
 }
 
 #[tool_router]
 impl FireMcpServer {
+    #[tool(description = "Read Fire's version-matched embedded documentation.")]
+    fn get_docs(&self, Parameters(GetDocsRequest { topic }): Parameters<GetDocsRequest>) -> String {
+        match topic {
+            Some(topic) => crate::docs::find(topic.id())
+                .map(|doc| doc.content.to_string())
+                .unwrap_or_else(|| {
+                    "Documentation topic is not embedded in this build.".to_string()
+                }),
+            None => crate::docs::index(),
+        }
+    }
+
     #[tool(
         description = "Discover the user's configured `fire` commands. Pass your working directory as `cwd` to see that project's local commands; omit it to use the server's directory. `path` is the exact command to run. Omit `query` or pass an empty string to list everything; otherwise it is a case-insensitive substring over paths, descriptions, and exec/eval templates. Underlying templates are hidden by default; request `include_exec` only for context, and never copy or run them directly. Use this first when the user names an app, service or task you don't recognize, and before writing your own build/test/run/deploy commands."
     )]
@@ -826,6 +849,7 @@ const INSTRUCTIONS: &str = "Run long-running fire commands (servers, `start`/`de
 workers, tunnels) with the `start_session` tool, never in your own shell, and call `list_sessions` \
 first to reuse what is already running; find the user's configured commands with \
 `search_commands` (an app or service name you don't recognize is probably one) before writing your own. Details: these MCP tools beat running fire ad hoc. \
+To write or edit fire configs, use `get_docs`. \
 Pass your working directory as `cwd` to discover and run that project's local commands when the server was started elsewhere. \
 Commands the user marked `agents: false` are not listed and are off-limits: never run them, not \
 even through your own shell. \
@@ -874,6 +898,7 @@ mod tests {
     fn instructions_are_one_line_with_critical_rule_first() {
         assert!(!INSTRUCTIONS.contains('\n'));
         assert!(INSTRUCTIONS[..120].contains("start_session"));
+        assert!(INSTRUCTIONS.contains("fire configs, use `get_docs`"));
     }
 
     #[test]

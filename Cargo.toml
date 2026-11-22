@@ -8,7 +8,16 @@ documentation = "https://github.com/gbenm/fire/tree/main/docs"
 readme = "README.md"
 keywords = ["task-runner", "cli", "yaml", "mcp", "make"]
 categories = ["command-line-utilities", "development-tools"]
-include = ["src/**", "Cargo.toml", "Cargo.lock", "LICENSE", "README.md"]
+include = [
+  "src/**",
+  "docs/*.md",
+  "schemas/fire.schema.json",
+  "build.rs",
+  "Cargo.toml",
+  "Cargo.lock",
+  "LICENSE",
+  "README.md",
+]
 homepage = "https://github.com/gbenm/fire"
 repository = "https://github.com/gbenm/fire"
 
@@ -25,6 +34,9 @@ yaml_serde = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 rmcp = { version = "3.1.0", features = ["macros", "server", "transport-io"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-std"] }
+serde_json = "1.0.151"
+
+[build-dependencies]
 serde_json = "1.0.151"
 
 [dev-dependencies]

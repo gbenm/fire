@@ -308,6 +308,18 @@ commands:
     let tools = mcp.request("tools/list", json!({}));
     let tools = tools["tools"].as_array().expect("tools array");
     assert!(tools.iter().all(|tool| tool["name"] != "list_commands"));
+    let get_docs = tools
+        .iter()
+        .find(|tool| tool["name"] == "get_docs")
+        .expect("get_docs tool");
+    let docs_description = get_docs["description"].as_str().unwrap();
+    assert!(docs_description.contains("`commands-and-args`"));
+    assert!(docs_description.contains("`schema`"));
+    let topics = get_docs["inputSchema"]["$defs"]["DocsTopic"]["enum"]
+        .as_array()
+        .expect("topic enum");
+    assert!(topics.iter().any(|topic| topic == "overview"));
+    assert!(topics.iter().any(|topic| topic == "schema"));
     let start = tools
         .iter()
         .find(|tool| tool["name"] == "start_session")
@@ -324,6 +336,21 @@ commands:
         .expect("required fields")
         .iter()
         .any(|field| field == "signal"));
+
+    let docs_index = mcp.call("get_docs", json!({}));
+    let docs_index = docs_index["content"][0]["text"].as_str().unwrap();
+    assert!(docs_index.contains("overview\t"), "{docs_index}");
+    assert!(docs_index.contains("schema\t"), "{docs_index}");
+    let overview = mcp.call("get_docs", json!({ "topic": "overview" }));
+    assert_eq!(
+        overview["content"][0]["text"],
+        include_str!("../docs/overview.md")
+    );
+    let schema = mcp.call("get_docs", json!({ "topic": "schema" }));
+    assert_eq!(
+        schema["content"][0]["text"],
+        include_str!("../schemas/fire.schema.json")
+    );
 
     let found = text_json(&mcp.call("search_commands", json!({})));
     assert_eq!(found.as_array().expect("command matches").len(), 2);

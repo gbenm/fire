@@ -4,6 +4,7 @@ mod cli;
 mod completion;
 mod config;
 mod container;
+mod docs;
 mod env;
 mod execute;
 mod flags;

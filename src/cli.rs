@@ -15,6 +15,10 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             crate::global::handle(rest)
         }
         [cli, init] if cli == "cli" && init == "init" => run_init(),
+        [cli, docs] if cli == "cli" && docs == "docs" => crate::docs::handle_cli(None),
+        [cli, docs, topic] if cli == "cli" && docs == "docs" => {
+            crate::docs::handle_cli(Some(topic))
+        }
         [cli, upgrade] if cli == "cli" && upgrade == "upgrade" => run_upgrade(),
         [cli, mcp] if cli == "cli" && mcp == "mcp" => run_mcp(),
         [cli, sub, ..]
@@ -52,6 +56,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("Usage:");
             eprintln!("  fire cli global add|remove|list|prune|edit");
             eprintln!("  fire cli init");
+            eprintln!("  fire cli docs [topic]");
             eprintln!("  fire cli upgrade");
             eprintln!("  fire cli completion install [bash|zsh|all]");
             eprintln!("  fire cli mcp");
@@ -135,6 +140,7 @@ fn print_cli_help() {
     println!("Commands:");
     println!("  global   Register directories so their commands load from anywhere (add, remove, list, prune, edit)");
     println!("  init     Create a minimal fire config file with guided prompts");
+    println!("  docs     List or read the documentation embedded in this fire version");
     println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");
     println!("  completion  Manage shell completion scripts");
     println!("  mcp      Start an MCP server (stdio) exposing fire's command tree to agents");

@@ -1,7 +1,10 @@
 # MCP server
 
 `fire cli mcp` starts a [Model Context Protocol](https://modelcontextprotocol.io) server over
-stdio. It gives agents two things:
+stdio, exposing configured commands, managed long-running sessions, and version-matched Fire
+documentation to agents.
+
+It gives agents three things:
 
 1. **The commands you already configured.** Every available `fire` command, with its exact
    invocation path and description, so the agent uses `run_command` instead of guessing or
@@ -11,6 +14,9 @@ stdio. It gives agents two things:
    as [detached sessions](./sessions.md), each with a short note explaining why. You and every
    other agent can then see them from that project (or explicitly list every project), read their
    output, send input or signals, and stop them, and you can attach with `fire cli fg <id>`.
+3. **Version-matched Fire documentation.** The `get_docs` tool exposes its full topic index in the
+   tool description and lets an agent read any embedded guide or the config schema, so it can
+   author configuration without relying on documentation for a different release.
 
 The server's instructions tell agents to do both: search configured commands first, run finite
 ones through `run_command`, and always launch long-running processes through `start_session`
@@ -111,6 +117,12 @@ your config or type `fire deploy prod`. To hard-block that, also add a deny rule
 own permissions (for example, in Claude Code: `"deny": ["Bash(fire deploy:*)"]`).
 
 ## Tools
+
+### `get_docs`
+Omit `topic` to return the complete index of embedded documentation. Pass one of the topic ids
+shown in the tool description and its `topic` enum to return that Markdown document; `schema`
+returns `fire.schema.json`. The index, topic enum, completion, and CLI all come from the same
+embedded files.
 
 ### `search_commands`
 The single command-discovery tool. Omit `query` (or pass an empty string) to return every command,
