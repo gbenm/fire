@@ -102,7 +102,7 @@ commands:
 ```
 - **The default is `sh`**, on purpose: fire files are shared, and `$SHELL` changes between users (fish isn't even POSIX), CI, agents and background sessions.
 - Accepts any executable, optionally with arguments (`zsh`, `/bin/zsh`, `bash -l`), or a variable such as `$SHELL` / `${SHELL}`. Variables are read from the command's [environment](#environment) first, then from fire's own; an unset variable is an error.
-- For your personal commands, put `shell: $SHELL` at the top of the fire files in the directories you registered with `fire cli install`: it only affects those commands, never shared repos.
+- For your personal commands, put `shell: $SHELL` at the top of the fire files in the directories you registered with `fire cli global add`: it only affects those commands, never shared repos.
 - Non-interactive shells don't load `.zshrc` / `.bashrc`, so aliases and functions defined there aren't available. Use `bash -l` / `zsh -l` if you need your login profile.
 - Fire runs `<shell> [args] -c '<script>'`, so the shell must accept `-c` (sh, bash, zsh, dash, ksh, fish, nu, elvish, xonsh, tcsh, pwsh all do). It's meant for shells: interpreters such as `node` or `python` belong in [`runtimes`](./runtimes-and-eval.md).
 - Commands in an `exec` array stop at the first failure (`set -e`) with sh, bash, zsh, dash, ash, ksh, mksh and yash. With `fish`, which has no `set -e`, they are chained with `and` instead. Other shells (nu, tcsh, …) run every line and don't stop on failure.

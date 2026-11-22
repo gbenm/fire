@@ -590,10 +590,7 @@ impl CommandAction {
 
 pub(crate) fn load_config() -> LoadedConfig {
     let mut loaded = LoadedConfig::default();
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-    // Attempt git root detection FIRST
-    let project_root = detect_git_root(&cwd).unwrap_or(cwd.clone());
+    let project_root = local_project_root();
 
     // Local project commands.
     loaded
@@ -613,6 +610,33 @@ pub(crate) fn load_config() -> LoadedConfig {
     }
 
     loaded
+}
+
+/// Directory whose files load as local commands: the git root when its config sets a
+/// namespace, else the current directory.
+pub(crate) fn local_project_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    detect_git_root(&cwd).unwrap_or(cwd)
+}
+
+/// Files a registered directory contributes, scoped as when loaded globally.
+pub(crate) fn global_directory_files(directory: &Path) -> Vec<FileConfig> {
+    load_global_file_configs(directory, SourceKind::Global)
+}
+
+/// The `fire.y(a)ml` / `*.fire.y(a)ml` files directly in `directory`.
+pub(crate) fn directory_config_files(directory: &Path) -> Vec<PathBuf> {
+    discover_config_files(directory)
+}
+
+impl FileScope {
+    pub(crate) fn namespace(&self) -> Option<&str> {
+        match self {
+            FileScope::Namespace { namespace, .. }
+            | FileScope::NamespaceGroup { namespace, .. } => Some(namespace),
+            FileScope::Root | FileScope::Group { .. } => None,
+        }
+    }
 }
 
 pub(crate) fn local_implicit_namespace(config: &LoadedConfig) -> Option<String> {

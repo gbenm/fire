@@ -6,6 +6,7 @@ mod config;
 mod container;
 mod env;
 mod execute;
+mod global;
 mod help;
 mod mcp;
 mod registry;
@@ -99,6 +100,7 @@ pub fn setup_cli() {
             eprintln!("[fire] {message}");
             process::exit(1);
         }
+        global::offer_registration(&config);
         session::run_in_session_if_enabled(command_args, &resolved);
         execute_resolved_command(resolved);
     }

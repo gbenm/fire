@@ -15,7 +15,7 @@ stdio. It gives agents two things:
 The server's instructions tell agents to do both: search configured commands first, and always
 launch long-running processes through `start_session` (checking `list_sessions` first to avoid
 duplicates). Commands resolve against the same merged config Fire uses (local `fire.yaml` /
-`*.fire.yaml` plus installed global directories; see
+`*.fire.yaml` plus registered global directories; see
 [Overview](./overview.md#file-discovery-and-merge-order)).
 
 ## Usage

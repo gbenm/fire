@@ -46,6 +46,9 @@ impl Project {
             .env("XDG_CONFIG_HOME", self.dir.join("home/.config"))
             .env("XDG_DATA_HOME", self.dir.join("home/.local/share"))
             .env("NO_COLOR", "1")
+            // Keeps the first-use "register this directory?" prompt out of terminal tests;
+            // tests/global.rs removes it to exercise the prompt.
+            .env("CI", "1")
             .env_remove("FIRE_DRY_RUN")
             .env_remove("FIRE_LOG_COMMANDS")
             .env_remove("FIRE_SESSION")

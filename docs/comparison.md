@@ -10,7 +10,7 @@ what Fire adds, and when another tool is the better fit.
 |---|---|
 | **Config** | YAML (`fire.yaml`, `*.fire.yaml`, `.yml` also works), with a JSON Schema for editor validation |
 | **Completion** | Generated from your config, nested groups included, with descriptions (zsh) |
-| **Commands everywhere** | Register a directory once (`fire cli install`) and call its namespace from any directory |
+| **Commands everywhere** | Register a directory once (`fire cli global add`) and call its namespace from any directory |
 | **Long-running processes** | Every command runs on a pty you can detach (Ctrl+Z) and reattach from any terminal (`fire cli fg <id>`) |
 | **AI agents** | Built-in [MCP server](./mcp.md): agents discover your commands, start servers as shared sessions, and skip commands marked `agents: false` |
 | **Missing tools** | `check` + `fallback_runner`: run the command in a container when the tool isn't installed locally |

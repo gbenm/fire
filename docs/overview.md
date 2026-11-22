@@ -31,11 +31,37 @@ include:
   - samples/
   - tools/
 ```
-Paths are relative to the current directory. Included files follow the same scope rules described below. When running from an installed path, includes are resolved relative to that installed directory.
+Paths are relative to the current directory. Included files follow the same scope rules described below. For a [registered directory](#global-directories), includes are resolved relative to that directory.
 
 ### Environment files
 
 Each Fire file loads its adjacent `.env` automatically. For included files, Fire merges the including directory's `.env` with the included directory's `.env`, with the included file taking precedence. Configure `env_file` (string, list, or `null`) and inline `environment` values at file or command scope when a command needs a different environment. See [Writing Commands](./commands-and-args.md#environment) for interpolation and precedence details.
+
+## Global directories
+Register a directory to load its commands from anywhere. Its files are discovered the same way as local ones; files without namespace or group become direct global commands.
+
+```text
+fire cli global add [path]                    # register a directory (default: current)
+fire cli global remove [namespace|path]       # unregister it (default: current); never deletes files
+fire cli global list                          # registered directories, by namespace
+fire cli global prune                         # unregister directories that no longer exist
+fire cli global edit [namespace|path] [file]  # open a config file with $VISUAL / $EDITOR
+```
+
+`list` shows one row per namespace, with the directory and the files that contribute to it:
+
+```text
+api     ~/code/api      fire.yaml, db.fire.yaml
+tools   ~/code/tools    fire.yaml
+(root)  ~/code/scripts  fire.yaml
+-       ~/old/project   (missing)
+```
+
+`remove` and `edit` take a namespace or a path. An argument with `/`, `.`, `..` or a leading `~` is a path (`./api`, `~/code/api`); anything else is a namespace. A namespace found in several registered directories is an error that lists them, so pass the path instead. `edit` without a file opens the directory's only config file; with several, it asks which one in a terminal and otherwise lists them.
+
+The first time you run a command in an unregistered directory with fire files, Fire asks once whether to register it (`[y/N]`). The answer is remembered, and `fire cli global remove` counts as a "no". It only asks in an interactive terminal: never in sessions (`fire cli bg`, MCP), pipes, completion or when `CI` is set.
+
+The registry lives in Fire's config directory (`installed-dirs.yml`, and `declined-dirs.yml` for the answered prompts). `fire cli install` still works as a deprecated alias of `fire cli global add`.
 
 ## Scopes: namespace and group
 - `namespace.prefix` defines a logical namespace; `namespace.description` is optional and labels it in listings and completion. With only a prefix, `namespace: tools` is shorthand for `namespace: { prefix: tools }`.

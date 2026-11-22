@@ -24,6 +24,11 @@ reconstructed from the git history.
 - Interactive shell `compute`: stderr goes to the terminal and stdin is inherited from a terminal
   (including session ptys, answered with `fire cli send`), so a compute can prompt. Without a
   terminal stdin is closed and the compute never blocks. (#23)
+- `fire cli global add|remove|list|prune|edit` to manage the directories whose commands load
+  from anywhere: `list` groups them by namespace with their config files, `remove`/`edit` take a
+  namespace or a path, and completion suggests registered namespaces and directories. Fire also
+  offers once, in an interactive terminal, to register a directory the first time you run one of
+  its commands. See [global directories](https://github.com/gbenm/fire/blob/main/docs/overview.md#global-directories). (#43)
 - `namespace: tools` as shorthand for `namespace: { prefix: tools }`. (#32)
 - Container object for `runner` / `fallback_runner` (commands and runtimes), with Compose key
   names (`image`, `engine`, `tty`, `command`, `volumes`, `working_dir`, `environment`, `user`,
@@ -41,6 +46,10 @@ reconstructed from the git history.
   `---` after the schema comment, so linters like yamllint's `document-start` rule pass. It warns
   when the same file with the other extension already exists, since both get loaded. Existing
   `.yml` files keep working. (#48)
+
+### Deprecated
+- `fire cli install`: use `fire cli global add` (same behavior). The old name still works and
+  prints a hint. (#43)
 
 ### Fixed
 - node and deno runtimes print why they exit (`Missing FIRE_RUNTIME_RPC_ADDR`,

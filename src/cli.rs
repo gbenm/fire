@@ -6,11 +6,14 @@ use std::{
     process::Command,
 };
 
-use crate::registry::{install_directory, InstallResult};
-
 pub(crate) fn handle_cli_command(command_args: &[String]) {
     match command_args {
-        [cli, install] if cli == "cli" && install == "install" => run_install(),
+        [cli, install] if cli == "cli" && install == "install" => {
+            crate::global::deprecated_install()
+        }
+        [cli, global, rest @ ..] if cli == "cli" && global == "global" => {
+            crate::global::handle(rest)
+        }
         [cli, init] if cli == "cli" && init == "init" => run_init(),
         [cli, upgrade] if cli == "cli" && upgrade == "upgrade" => run_upgrade(),
         [cli, mcp] if cli == "cli" && mcp == "mcp" => run_mcp(),
@@ -47,7 +50,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
         _ => {
             eprintln!("[fire] Unknown cli command");
             eprintln!("Usage:");
-            eprintln!("  fire cli install");
+            eprintln!("  fire cli global add|remove|list|prune|edit");
             eprintln!("  fire cli init");
             eprintln!("  fire cli upgrade");
             eprintln!("  fire cli completion install [bash|zsh|all]");
@@ -71,22 +74,6 @@ fn run_mcp() {
     if let Err(err) = runtime.block_on(crate::mcp::serve_stdio()) {
         eprintln!("[fire] MCP server error: {err}");
         process::exit(1);
-    }
-}
-
-fn run_install() {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match install_directory(&cwd) {
-        Ok(InstallResult::Added) => {
-            println!("Installed directory: {}", cwd.display());
-        }
-        Ok(InstallResult::AlreadyInstalled) => {
-            println!("Directory already installed: {}", cwd.display());
-        }
-        Err(err) => {
-            eprintln!("[fire] Failed to install directory: {err}");
-            process::exit(1);
-        }
     }
 }
 
@@ -147,7 +134,7 @@ fn run_init() {
 fn print_cli_help() {
     println!("Fire CLI Management v{}", crate::FIRE_VERSION);
     println!("Commands:");
-    println!("  install  Register the current directory for global command loading");
+    println!("  global   Register directories so their commands load from anywhere (add, remove, list, prune, edit)");
     println!("  init     Create a minimal fire config file with guided prompts");
     println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");
     println!("  completion  Manage shell completion scripts");

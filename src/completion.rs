@@ -158,6 +158,10 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         return Some(core_cli_ps_flags(&path[2..], prefix));
     }
 
+    if path.len() >= 2 && path[1] == "global" {
+        return Some(core_cli_global_children(&path[2..], prefix));
+    }
+
     match path.len() {
         1 => Some(core_cli_children(prefix)),
         2 => {
@@ -181,8 +185,8 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
 fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
     let suggestions = vec![
         CompletionSuggestion {
-            value: "install".to_string(),
-            description: Some("Register current directory globally".to_string()),
+            value: "global".to_string(),
+            description: Some("Register directories so their commands load anywhere".to_string()),
         },
         CompletionSuggestion {
             value: "init".to_string(),
@@ -229,6 +233,31 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
     suggestions
         .into_iter()
         .filter(|suggestion| suggestion.value.starts_with(prefix))
+        .collect()
+}
+
+/// `fire cli global ...`: subcommands, then registered namespaces/directories, then files.
+fn core_cli_global_children(typed: &[String], prefix: &str) -> Vec<CompletionSuggestion> {
+    let pairs: Vec<(String, String)> = match typed {
+        [] => crate::global::SUBCOMMANDS
+            .iter()
+            .map(|(name, description)| (name.to_string(), description.to_string()))
+            .collect(),
+        [sub] if sub == "remove" || sub == "edit" => {
+            crate::global::target_suggestions(&crate::global::entries())
+        }
+        [sub, target] if sub == "edit" => {
+            crate::global::file_suggestions(&crate::global::entries(), target)
+        }
+        _ => Vec::new(),
+    };
+    pairs
+        .into_iter()
+        .filter(|(value, _)| value.starts_with(prefix))
+        .map(|(value, description)| CompletionSuggestion {
+            value,
+            description: Some(description),
+        })
         .collect()
 }
 
@@ -1069,6 +1098,16 @@ commands:
     }
 
     #[test]
+    fn core_cli_global_lists_subcommands() {
+        let config = config_with_scopes();
+        let values =
+            completion_suggestions(&config, &["cli".into(), "global".into(), String::new()]);
+        let names: Vec<String> = values.iter().map(|it| it.value.clone()).collect();
+        assert_eq!(names, vec!["add", "remove", "list", "prune", "edit"]);
+        assert!(values.iter().all(|it| it.description.is_some()));
+    }
+
+    #[test]
     fn core_cli_lists_subcommands() {
         let config = config_with_scopes();
         let values = completion_suggestions(&config, &["cli".to_string()]);
@@ -1076,7 +1115,7 @@ commands:
         assert_eq!(
             names,
             vec![
-                "install",
+                "global",
                 "init",
                 "completion",
                 "upgrade",
