@@ -270,6 +270,30 @@ struct CliResult {
     stderr: String,
 }
 
+#[derive(Debug, Serialize)]
+struct StartSessionResult {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    stdout: String,
+    stderr: String,
+}
+
+impl From<CliResult> for StartSessionResult {
+    fn from(result: CliResult) -> Self {
+        let session_id = result
+            .ok
+            .then(|| result.stdout.clone())
+            .filter(|id| !id.is_empty());
+        Self {
+            ok: result.ok,
+            session_id,
+            stdout: result.stdout,
+            stderr: result.stderr,
+        }
+    }
+}
+
 /// Session management reuses the CLI (`fire --bg`, `fire cli send|kill`) so both paths behave the same.
 fn run_fire_cli(args: &[&str], cwd: Option<&str>) -> String {
     let mut full = vec!["cli"];
@@ -278,13 +302,17 @@ fn run_fire_cli(args: &[&str], cwd: Option<&str>) -> String {
 }
 
 fn run_fire(args: &[&str], cwd: Option<&str>) -> String {
+    to_json(&run_fire_result(args, cwd))
+}
+
+fn run_fire_result(args: &[&str], cwd: Option<&str>) -> CliResult {
     let exe = std::env::current_exe().unwrap_or_else(|_| "fire".into());
     let mut command = std::process::Command::new(exe);
     command.args(args).stdin(std::process::Stdio::null());
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    let result = match command.output() {
+    match command.output() {
         Ok(output) => CliResult {
             ok: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
@@ -295,8 +323,7 @@ fn run_fire(args: &[&str], cwd: Option<&str>) -> String {
             stdout: String::new(),
             stderr: format!("failed to run fire: {err}"),
         },
-    };
-    to_json(&result)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -371,7 +398,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. `command` must be a configured fire command (find it with `search_commands`). One command in one cwd is one session: if it is already running, this returns its id and replaces its note instead of starting a duplicate; if it ended (crashed or stopped), it starts again under the same id with the new note. So to restart a server, stop it with `signal_session` and call this again. Returns the session id in `stdout`; then confirm it came up with `session_output`. Fails for commands the user reserved for humans (`agents: false`)."
+        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. `command` must be a configured fire command (find it with `search_commands`). One command in one cwd is one session: if it is already running, this returns its id and replaces its note instead of starting a duplicate; if it ended (crashed or stopped), it starts again under the same id with the new note. So to restart a server, stop it with `signal_session` and call this again. Returns the session id as `session_id`; then confirm it came up with `session_output`. Fails for commands the user reserved for humans (`agents: false`)."
     )]
     fn start_session(
         &self,
@@ -379,7 +406,10 @@ impl FireMcpServer {
     ) -> String {
         let mut args = vec!["--bg", "--agent", "-m", note.as_str()];
         args.extend(command.iter().map(String::as_str));
-        run_fire(&args, cwd.as_deref())
+        to_json(&StartSessionResult::from(run_fire_result(
+            &args,
+            cwd.as_deref(),
+        )))
     }
 
     #[tool(
@@ -466,6 +496,34 @@ mod tests {
     fn instructions_are_one_line_with_critical_rule_first() {
         assert!(!INSTRUCTIONS.contains('\n'));
         assert!(INSTRUCTIONS[..120].contains("start_session"));
+    }
+
+    #[test]
+    fn start_session_result_exposes_session_id() {
+        let result = StartSessionResult::from(CliResult {
+            ok: true,
+            stdout: "api-dev-a1b2c3".to_string(),
+            stderr: String::new(),
+        });
+
+        assert_eq!(result.session_id.as_deref(), Some("api-dev-a1b2c3"));
+        assert_eq!(result.stdout, "api-dev-a1b2c3");
+        assert_eq!(
+            serde_json::to_value(&result).expect("serializable result")["session_id"],
+            "api-dev-a1b2c3"
+        );
+    }
+
+    #[test]
+    fn failed_start_session_has_no_session_id() {
+        let result = StartSessionResult::from(CliResult {
+            ok: false,
+            stdout: String::new(),
+            stderr: "unknown command".to_string(),
+        });
+
+        assert_eq!(result.session_id, None);
+        assert_eq!(result.stderr, "unknown command");
     }
 
     #[test]

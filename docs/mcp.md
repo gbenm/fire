@@ -141,10 +141,23 @@ sequences removed and `\r` progress redraws collapsed.
 Takes `command` (the fire path plus arguments as a token array, without `fire`, e.g.
 `["api", "dev"]`), a required short `note`, and an optional `cwd` (project directory, defaulting to
 the server's). Same as `fire --bg -m "<note>" <command...>`, except that it refuses commands
-marked `agents: false`. Returns the session id in `stdout`. One command in one `cwd` is one
-session: if it is already running, the tool returns that id and replaces its note; if it ended, it
-starts again under the same id. So a restart is `signal_session` followed by `start_session`, and
-the session list doesn't fill up with copies of the same server.
+marked `agents: false`. Returns the session id in `session_id` (and, for compatibility, `stdout`).
+One command in one `cwd` is one session: if it is already running, the tool returns that id and
+replaces its note; if it ended, it starts again under the same id. So a restart is
+`signal_session` followed by `start_session`, and the session list doesn't fill up with copies of
+the same server.
+
+The result has the same CLI envelope as the other management tools, with `session_id` added on
+success:
+
+```json
+{
+  "ok": true,
+  "session_id": "api-dev-a1b2c3",
+  "stdout": "api-dev-a1b2c3",
+  "stderr": ""
+}
+```
 
 ### `send_input`
 Takes `id` and `text`, and types the text followed by Enter into the session's terminal
@@ -157,7 +170,8 @@ Takes `id` and an optional `signal` (name like `INT`, `HUP`, `USR1`, or a number
 the session's foreground process group, as a keyboard signal would be. Without `signal`, it stops the session (`TERM`, then `KILL` after 5s), or
 removes the record of an already-exited one (`fire cli kill`).
 
-Management tools return `{ ok, stdout, stderr }` from the equivalent CLI command.
+Management tools return `{ ok, stdout, stderr }` from the equivalent CLI command. `start_session`
+also returns `session_id` on success.
 
 ## Testing manually
 Use the [MCP inspector](https://github.com/modelcontextprotocol/inspector) to poke at the server

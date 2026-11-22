@@ -55,6 +55,7 @@ reconstructed from the git history.
 - Docs: comparison with other task runners, MCP setup per host, schema `$id`.
 
 ### Changed
+- The MCP `start_session` result exposes the session id as a `session_id` field. (#40)
 - The runtime `runner` and its `check` are launched through the command's `shell`. (#21)
 - Boolean environment variables (`FIRE_SESSIONS`, `FIRE_DRY_RUN`, `FIRE_LOG_COMMANDS`) all accept
   `1/true/yes/on` and `0/false/no/off`, any case; before, `FIRE_DRY_RUN` only took `true` and
