@@ -165,3 +165,41 @@ jobs:
       - name: Publish
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish --allow-dirty
+
+  homebrew:
+    name: Update Homebrew tap
+    runs-on: ubuntu-22.04
+    needs: release
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+    steps:
+      - name: Checkout
+        if: env.TAP_TOKEN != ''
+        uses: actions/checkout@v4
+
+      - name: Checkout tap
+        if: env.TAP_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          repository: gbenm/homebrew-labs
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update formula
+        if: env.TAP_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          gh release download "${RELEASE_TAG}" -R "${{ github.repository }}" -p checksums.txt -O checksums.txt
+          .github/scripts/homebrew-formula.sh "${VERSION}" checksums.txt > tap/Formula/fire.rb
+          cd tap
+          if git diff --quiet; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "bump fire to ${RELEASE_TAG}"
+          git push
