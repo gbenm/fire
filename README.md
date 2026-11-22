@@ -1,29 +1,97 @@
 # Fire CLI 🔥
 
-Configuration-first CLI with dynamic completion, runtime eval, and container-friendly runners.
+[![Release](https://img.shields.io/github/v/release/gbenm/fire?sort=semver)](https://github.com/gbenm/fire/releases/latest)
+[![crates.io](https://img.shields.io/crates/v/fire-cli)](https://crates.io/crates/fire-cli)
+[![CI](https://github.com/gbenm/fire/actions/workflows/ci.yml/badge.svg)](https://github.com/gbenm/fire/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-## Quick start (5 minutes)
-1) Install via Homebrew (tap required):
+**A config-first task runner for your projects, and for the AI agents working in them.**
+
+![Fire demo: define commands in fire.yml, run them, detach a dev server with Ctrl+Z, and let an AI agent reuse it over MCP](./docs/assets/demo.gif)
+
+Put your project's commands in a `fire.yml`, and get:
+
+- **One entry point** for build, test, dev servers, containers, and scripts: `fire <command>`, with
+  tab completion and descriptions generated from your config.
+- **Agents that use your commands instead of guessing.** `fire cli mcp` exposes them to Claude
+  Code, Cursor, or any MCP host, and keeps dangerous ones (`agents: false`) human-only.
+- **Long-running processes you can share.** Every command runs on a pty you can detach with Ctrl+Z
+  and reattach from any terminal; you and your agents see the same dev servers and logs.
+- **Smart runners.** Fall back to a container when a tool isn't installed, ensure services are up
+  before running, and compute arguments with JS/TS/Python snippets.
+
+If you've used `make`, `just`, Task, or `npm run` as a command menu, Fire fills the same role and
+adds completion, sessions, and an agent interface on top.
+
+```yaml
+# fire.yml
+commands:
+  test: cargo test
+  dev:
+    description: Start the API with hot reload
+    long_running: true
+    exec: cargo watch -x run
+  npm:
+    check: npm -v                                    # not installed locally?
+    fallback_runner: docker run --rm -it -v .:/app -w /app node:lts-alpine sh
+    exec: npm                                        # ...then run it in a container
+  deploy:
+    agents: false                                    # agents must ask you first
+    exec: ./scripts/deploy prod
+```
+
+```bash
+fire test               # run it
+fire dev                # Ctrl+Z detaches; it keeps running
+fire cli ps             # see what's running, from any project
+fire cli fg <id>        # attach again from any terminal
+```
+
+## Install
+
+**Homebrew** (macOS, Linux):
 ```bash
 brew tap gbenm/labs
 brew install fire
 ```
 
-2) execute `fire cli init` to create a `fire.yml`:
+**Install script** (macOS, Linux x86_64/arm64):
+```bash
+curl -fsSL https://raw.githubusercontent.com/gbenm/fire/main/install.sh | sh
+```
+
+**Cargo**:
+```bash
+cargo install fire-cli
+```
+
+Or download a binary from the [latest release](https://github.com/gbenm/fire/releases/latest).
+
+**Windows**: use [WSL](https://learn.microsoft.com/windows/wsl/install). Inside your WSL distro
+(Ubuntu, Debian, ...) Fire is a regular Linux install: use the install script or Homebrew above, and
+run it from the WSL terminal. Native Windows isn't supported, since sessions rely on Unix ptys.
+
+## Quick start (5 minutes)
+1) Run `fire cli init` in your project to create a `fire.yml`:
 ```yaml
 commands:
   hello: echo "Hello Fire"
 ```
 
-3) Run it:
+2) Run it:
 ```bash
 fire hello world
 # => Hello Fire world
 ```
 
-4) Enable completion (zsh + bash):
+3) Enable completion (zsh + bash):
 ```bash
 fire cli completion install
+```
+
+4) Optional: connect your AI agent (see [MCP server for agents](#mcp-server-for-agents)):
+```bash
+claude mcp add fire -- fire cli mcp
 ```
 
 ## Configuration at a glance
@@ -83,6 +151,11 @@ script runs them without a terminal. Details: see [docs/sessions.md](./docs/sess
 - [Sessions](./docs/sessions.md)
 - [Progressive examples](./docs/examples.md)
 - [Troubleshooting](./docs/troubleshooting.md)
+
+## Contributing
+Bug reports, ideas, and pull requests are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md), and
+share your setups or ask questions in [Discussions](https://github.com/gbenm/fire/discussions).
+If Fire saves you time, a ⭐ helps other people find it.
 
 ## If you enjoyed this and want to buy me a coffee ☕️
 - Buy Me a Coffee: https://buymeacoffee.com/gbenm

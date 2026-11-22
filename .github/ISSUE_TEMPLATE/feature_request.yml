@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest an idea or a workflow fire should support
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The workflow or problem, not just the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: How could fire help?
+      description: Config shape, command, or behavior you have in mind.

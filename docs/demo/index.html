@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@600;800&display=block"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <style>
+      :root {
+        --ground: #140d0a;
+        --term: #1d1613;
+        --bar: #2a201b;
+        --ink: #f3ece6;
+        --dim: #9a8d84;
+        --accent: #ff7a1a;
+        --green: #7ee787;
+        --yellow: #f2cc60;
+        --blue: #79c0ff;
+        --red: #ff7b72;
+        --mono: "JetBrains Mono", Menlo, monospace;
+        --sans: "Inter", system-ui, sans-serif;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 1920px; height: 1080px; overflow: hidden;
+        background: var(--ground);
+      }
+      #root {
+        position: relative; width: 100%; height: 100%;
+        background: radial-gradient(1200px 600px at 85% -10%, #3a1a0a 0%, transparent 60%), var(--ground);
+        font-family: var(--mono);
+      }
+      .brand {
+        position: absolute; left: 80px; top: 56px;
+        font-family: var(--sans); font-weight: 800; font-size: 44px; color: var(--ink);
+        display: flex; align-items: center; gap: 14px;
+      }
+      .brand .dot {
+        width: 22px; height: 22px; border-radius: 50%;
+        background: radial-gradient(circle at 40% 35%, #ffd27a, var(--accent) 55%, #c2410c);
+        box-shadow: 0 0 24px #ff7a1a99;
+      }
+      .caption {
+        position: absolute; left: 300px; right: 80px; top: 60px;
+        font-family: var(--sans); font-weight: 600; font-size: 40px; color: var(--ink);
+        text-align: right; opacity: 0;
+      }
+      .caption b { color: var(--accent); font-weight: 800; }
+      .window {
+        position: absolute; left: 80px; top: 150px; width: 1760px; height: 870px;
+        background: var(--term); border-radius: 18px; overflow: hidden;
+        box-shadow: 0 30px 80px #0009, 0 0 0 1px #ffffff14;
+      }
+      .titlebar {
+        height: 48px; background: var(--bar); display: flex; align-items: center; gap: 10px; padding-left: 20px;
+      }
+      .titlebar i { width: 15px; height: 15px; border-radius: 50%; display: block; }
+      .titlebar span {
+        margin-left: 18px; color: var(--dim); font-size: 24px;
+      }
+      .screen {
+        position: absolute; left: 0; right: 0; top: 48px; bottom: 0;
+        padding: 30px 40px; font-size: 38px; line-height: 1.5; color: var(--ink);
+      }
+      .line { white-space: pre; height: 1.5em; }
+      .typed { display: inline-block; overflow: hidden; vertical-align: top; white-space: pre; width: 0; }
+      .prompt { color: var(--green); }
+      .prompt b { color: var(--blue); font-weight: 400; }
+      .dim { color: var(--dim); }
+      .k { color: var(--blue); }
+      .s { color: var(--yellow); }
+      .a { color: var(--accent); }
+      .g { color: var(--green); }
+      .r { color: var(--red); }
+      .agent {
+        position: absolute; left: 760px; top: 400px; width: 1100px; height: 640px;
+        background: #191311; border-radius: 16px; overflow: hidden;
+        box-shadow: 0 30px 80px #000c, 0 0 0 2px #ff7a1a66;
+      }
+      .agent .screen { font-size: 33px; }
+      .agent .titlebar span { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="21" data-width="1920" data-height="1080">
+      <div class="brand"><div class="dot"></div>fire</div>
+
+      <div id="cap1" class="caption">Define your project's commands <b>once</b></div>
+      <div id="cap2" class="caption">One entry point, with <b>completion</b> built in</div>
+      <div id="cap3" class="caption"><b>Ctrl+Z</b> detaches. It keeps running.</div>
+      <div id="cap4" class="caption">Your <b>AI agent</b> uses the same commands, via MCP</div>
+
+      <div class="window">
+        <div class="titlebar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span data-layout-ignore>~/my-api</span></div>
+        <div id="s1" class="screen clip" data-start="0" data-duration="4.4"></div>
+        <div id="s2" class="screen clip" data-start="4.4" data-duration="4.2"></div>
+        <div id="s3" class="screen clip" data-layout-allow-occlusion data-layout-allow-overlap data-start="8.6" data-duration="12.4"></div>
+      </div>
+
+      <div id="agent" class="agent clip" data-layout-allow-occlusion data-start="14" data-duration="7">
+        <div class="titlebar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span data-layout-ignore>AI agent · fire MCP</span></div>
+        <div id="s4" class="screen" data-layout-allow-occlusion data-layout-allow-overlap></div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      const P = '<span class="prompt">~/my-api <b>❯</b> </span>';
+
+      // Each entry: [time, kind, text/html]. kind "cmd" types the text after the prompt; "out" shows a line.
+      const scenes = {
+        s1: [
+          [0.3, "cmd", "cat fire.yml"],
+          [1.0, "out", '<span class="k">commands</span>:'],
+          [1.05, "out", '  <span class="k">test</span>: cargo test'],
+          [1.1, "out", '  <span class="k">dev</span>:'],
+          [1.15, "out", '    <span class="k">description</span>: <span class="s">Start the API with hot reload</span>'],
+          [1.2, "out", '    <span class="k">long_running</span>: <span class="a">true</span>'],
+          [1.25, "out", '    <span class="k">exec</span>: cargo watch -x run'],
+          [1.3, "out", '  <span class="k">deploy</span>:'],
+          [1.35, "out", '    <span class="k">agents</span>: <span class="a">false</span>          <span class="dim"># humans only</span>'],
+          [1.4, "out", '    <span class="k">exec</span>: ./scripts/deploy prod'],
+        ],
+        s2: [
+          [4.6, "cmd", "fire"],
+          [5.0, "out", "Fire CLI v2.10.0"],
+          [5.05, "out", "Commands:"],
+          [5.1, "out", '  deploy  <span class="r">[no agents]</span> Deploy to production'],
+          [5.15, "out", "  dev     Start the API with hot reload"],
+          [5.2, "out", "  test    Run the test suite"],
+          [5.6, "cmd", "fire test"],
+          [5.95, "out", '<span class="dim">[fire] cmd      cargo test</span>'],
+          [6.0, "out", 'test result: <span class="g">ok</span>. 42 passed; 0 failed'],
+        ],
+        s3: [
+          [8.8, "cmd", "fire dev"],
+          [9.5, "out", '<span class="g">API listening on :8080</span>'],
+          [10.0, "out", '<span class="dim">GET /health 200 1ms</span>'],
+          [10.9, "out", '<span class="a">^Z</span>'],
+          [11.1, "out", '<span class="dim">[fire] detached; dev-57f8 keeps running (`fg` reattaches)</span>'],
+          [11.9, "cmd", "fire cli ps"],
+          [12.6, "out", '<span class="dim">ID        STATUS   AGE  DIR       COMMAND</span>'],
+          [12.65, "out", 'dev-57f8  <span class="g">running</span>  4s   ~/my-api  fire dev'],
+        ],
+        s4: [
+          [14.6, "out", '<span class="a">›</span> search_commands <span class="s">"api"</span>'],
+          [15.0, "out", '<span class="dim">  dev · Start the API with hot reload</span>'],
+          [15.7, "out", '<span class="a">›</span> list_sessions'],
+          [16.1, "out", '<span class="dim">  dev-57f8</span> <span class="g">running</span> <span class="dim">· reusing it</span>'],
+          [16.8, "out", '<span class="a">›</span> session_output dev-57f8'],
+          [17.2, "out", '<span class="g">  API listening on :8080</span>'],
+          [18.0, "out", '<span class="a">›</span> start_session deploy'],
+          [18.4, "out", '<span class="r">  ✗ reserved for humans (agents: false)</span>'],
+        ],
+      };
+
+      for (const [id, entries] of Object.entries(scenes)) {
+        const screen = document.getElementById(id);
+        for (const [t, kind, text] of entries) {
+          const line = document.createElement("div");
+          line.className = "line";
+          if (kind === "cmd") {
+            line.innerHTML = P + '<span class="typed">' + text + "</span>";
+            screen.appendChild(line);
+            const typed = line.querySelector(".typed");
+            const dur = Math.max(0.25, text.length * 0.045);
+            tl.set(line, { opacity: 1 }, t - 0.25);
+            tl.fromTo(typed, { width: "0ch" }, { width: text.length + "ch", duration: dur, ease: "steps(" + text.length + ")" }, t);
+            gsap.set(line, { opacity: 0 });
+          } else {
+            line.innerHTML = text;
+            screen.appendChild(line);
+            gsap.set(line, { opacity: 0 });
+            tl.set(line, { opacity: 1 }, t);
+          }
+        }
+      }
+
+      // Captions
+      const caps = [["#cap1", 0.1, 4.2], ["#cap2", 4.4, 8.4], ["#cap3", 8.6, 13.8], ["#cap4", 14.0, 21]];
+      for (const [sel, a, b] of caps) {
+        tl.fromTo(sel, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, a);
+        if (b < 21) tl.to(sel, { opacity: 0, duration: 0.2 }, b - 0.2);
+      }
+
+      // Agent window slides in
+      tl.fromTo("#agent", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 14.0);
+      tl.to("#s3", { opacity: 0.35, duration: 0.45 }, 14.0);
+      tl.to({}, { duration: 0.01 }, 20.99);
+
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

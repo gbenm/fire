@@ -20,3 +20,12 @@ Common issues and quick fixes.
 - Missing runtime key: confirm it exists under `runtimes`.
 - `on_unused_args: error` aborts when extra args are not consumed by placeholders in `eval`.
 - For Python/Node/Deno version mismatches, adjust `runner` or `fallback_runner` to the right binary/image.
+
+## Windows
+- Native Windows isn't supported: sessions run commands on Unix ptys. Use
+  [WSL](https://learn.microsoft.com/windows/wsl/install) and install the Linux build inside it
+  (`curl -fsSL https://raw.githubusercontent.com/gbenm/fire/main/install.sh | sh`).
+- Run `fire` and `fire cli completion install` from the WSL shell, and keep your project in the
+  Linux filesystem (`~/...`) rather than `/mnt/c/...` for much faster file access.
+- To let a Windows-side MCP host reach Fire in WSL, use command `wsl` with args
+  `["bash", "-lc", "fire cli mcp"]` (the login shell loads the `PATH` where Fire was installed).

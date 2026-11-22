@@ -1,0 +1,11 @@
+{
+  "name": "fire-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes hyperframes@0.9.21 preview",
+    "check": "npx --yes hyperframes@0.9.21 check",
+    "render": "npx --yes hyperframes@0.9.21 render",
+    "publish": "npx --yes hyperframes@0.9.21 publish"
+  }
+}
