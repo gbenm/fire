@@ -1010,8 +1010,7 @@ commands:
             }],
         };
 
-        let values =
-            completion_suggestions(&config, &["backend".to_string(), "echo".to_string()]);
+        let values = completion_suggestions(&config, &["backend".to_string(), "echo".to_string()]);
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
         assert_eq!(names, vec!["echo", "echo-eval"]);
     }

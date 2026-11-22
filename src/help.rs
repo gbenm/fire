@@ -442,7 +442,9 @@ fn group_description(config: &LoadedConfig, group: &str) -> Option<String> {
                 group: file_alias,
                 group_description,
                 ..
-            } if implicit_namespace.as_deref() == Some(namespace.as_str()) && file_alias == group => {
+            } if implicit_namespace.as_deref() == Some(namespace.as_str())
+                && file_alias == group =>
+            {
                 let value = non_empty(group_description);
                 if value.is_some() {
                     return value;
@@ -454,7 +456,11 @@ fn group_description(config: &LoadedConfig, group: &str) -> Option<String> {
     None
 }
 
-fn namespace_group_description(config: &LoadedConfig, namespace: &str, group: &str) -> Option<String> {
+fn namespace_group_description(
+    config: &LoadedConfig,
+    namespace: &str,
+    group: &str,
+) -> Option<String> {
     for file in &config.files {
         if let FileScope::NamespaceGroup {
             namespace: ns_alias,
@@ -603,10 +609,7 @@ commands:
         let groups = namespace_groups(&config, "ex");
         assert_eq!(
             groups,
-            vec![(
-                "backend".to_string(),
-                Some("Backend commands".to_string())
-            )]
+            vec![("backend".to_string(), Some("Backend commands".to_string()))]
         );
     }
 }

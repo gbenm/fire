@@ -425,9 +425,8 @@ https://github.com/gbenm/fire";
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FireMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            INSTRUCTIONS,
-        )
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(INSTRUCTIONS)
     }
 }
 
@@ -490,10 +489,18 @@ commands:
         };
 
         let context = build_command_context(&config);
-        let names: Vec<_> = context.commands.iter().map(|node| node.name.as_str()).collect();
+        let names: Vec<_> = context
+            .commands
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect();
         assert_eq!(names, vec!["build", "db"]);
         let db = &context.commands[1];
-        let subs: Vec<_> = db.subcommands.iter().map(|node| node.name.as_str()).collect();
+        let subs: Vec<_> = db
+            .subcommands
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect();
         assert_eq!(subs, vec!["migrate"]);
         assert!(search_context(&context, "deploy").is_empty());
         assert!(search_context(&context, "drop").is_empty());
