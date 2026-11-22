@@ -125,11 +125,22 @@ jobs:
         run: |
           cat dist/*.sha256 | sort -k2 > dist/checksums.txt
 
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          path: src
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          src/.github/scripts/changelog-section.sh "${RELEASE_TAG#v}" src/CHANGELOG.md > release-notes.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: Fire ${{ env.RELEASE_TAG }}
+          body_path: release-notes.md
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |

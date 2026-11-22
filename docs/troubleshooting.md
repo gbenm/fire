@@ -29,10 +29,35 @@ Without `{fire.exec}`, the commands go to the runner's stdin, so the runner must
 - `docker run` / `docker exec` need `-i`; without it docker ignores stdin and nothing runs.
 - `docker compose exec` needs `-T` (it allocates a TTY by default).
 
+## `{fire.exec}` ... is already quoted
+Fire quotes the commands it puts in place of `{fire.exec}`. Remove the quotes around it:
+`sh -c {fire.exec}`, not `sh -c '{fire.exec}'` or `sh -c "{fire.exec}"`.
+
+## `{fire.exec}` only works in command runners
+A runtime `runner` doesn't take `{fire.exec}`: it's the sdk's executable, or a command that ends
+in it, and Fire appends the sdk's arguments (`runner: docker run --rm -i my-image deno`). See
+[Runtime runners](./runtimes-and-eval.md#runtime-runners).
+
 ## Runtime runner exited before connecting
 - The runtime prints the reason above Fire's message: `Missing FIRE_RUNTIME_RPC_ADDR` or `Cannot connect to fire at …`.
 - In a container, pass the address: `-e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT` (see [Runtime runners](./runtimes-and-eval.md#runtime-runners)).
 - The runner must end in the sdk's executable (or an image whose entrypoint is it): Fire appends the sdk's arguments.
+
+## Interactive `compute` gets an empty value
+- Without a terminal (pipes, CI, cron, `fire x < file`) a shell `compute` gets a closed stdin, so
+  `read` returns empty instead of waiting. Pass the value as an argument or through the
+  environment there.
+- In a background session the prompt waits in the session output: answer with
+  `fire cli send <id> <text>` or attach with `fire cli fg <id>`.
+- The prompt ended up in the value: write prompts to stderr (`printf "Name: " >&2`); everything
+  on stdout is the value.
+
+## Aliases or functions not found with `shell:`
+- Non-interactive shells don't load `.zshrc` / `.bashrc`. Use `bash -l` / `zsh -l` for your login
+  profile, or call the program directly.
+- `shell: $SHELL` with an unset variable is an error: set it in `environment` or use a program name.
+- With `fish`, `exec` arrays are chained with `and`; with nu, tcsh and other shells without
+  `set -e`, every line runs even after a failure.
 
 ## Eval fails or exits early
 - Missing runtime key: confirm it exists under `runtimes`.
