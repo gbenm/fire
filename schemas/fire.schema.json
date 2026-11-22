@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fire-cli.dev/schemas/fire.schema.json",
+  "$id": "https://raw.githubusercontent.com/gbenm/fire/main/schemas/fire.schema.json",
   "title": "Fire Config",
   "type": "object",
   "additionalProperties": false,

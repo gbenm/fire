@@ -21,7 +21,7 @@ Put your project's commands in a `fire.yml`, and get:
   before running, and compute arguments with JS/TS/Python snippets.
 
 If you've used `make`, `just`, Task, or `npm run` as a command menu, Fire fills the same role and
-adds completion, sessions, and an agent interface on top.
+adds completion, sessions, and an agent interface on top ([how they compare](./docs/comparison.md)).
 
 ```yaml
 # fire.yml
@@ -78,6 +78,12 @@ commands:
   hello: echo "Hello Fire"
 ```
 
+> **Tip:** already have `package.json` scripts, a `Makefile`, a `justfile` or a `compose.yml`?
+> Ask your coding agent to write the initial config for you, for example:
+> *"Create a fire.yml for this project from its existing scripts. Use the schema in the
+> `# yaml-language-server` comment, add a `description` to every command, and mark dev servers
+> and watchers with `long_running: true`."*
+
 2) Run it:
 ```bash
 fire hello world
@@ -128,7 +134,8 @@ fire cli mcp
 Mark commands agents shouldn't touch (deploys, destructive DB tasks) with `agents: false`.
 Details: see [docs/mcp.md](./docs/mcp.md).
 
-- Claude Code: `claude mcp add fire -- fire cli mcp`
+- Claude Code: `claude mcp add --scope user fire -- fire cli mcp`
+- Codex, VS Code, Cursor, Claude Desktop, Gemini CLI, Windsurf: see [setup per host](./docs/mcp.md#usage)
 - MCP Registry name: `mcp-name: io.github.gbenm/fire`
 
 ## Sessions
@@ -147,6 +154,7 @@ script runs them without a terminal. Details: see [docs/sessions.md](./docs/sess
 
 ## Documentation map
 - [Overview](./docs/overview.md)
+- [Fire compared to make, just, Task, mise and npm scripts](./docs/comparison.md)
 - [Commands & arguments](./docs/commands-and-args.md)
 - [Runtimes & eval](./docs/runtimes-and-eval.md)
 - [Shell completion](./docs/completion.md)

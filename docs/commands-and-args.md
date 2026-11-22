@@ -91,7 +91,7 @@ commands:
     exec: compose exec front npm run
 
   start:
-    runner: docker run --rm -it docker run --rm -it node:lts-alpine sh
+    runner: docker run --rm -it -v .:/app -w /app node:lts-alpine sh
     exec:
       - npm run build
       - npm run start

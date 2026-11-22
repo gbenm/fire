@@ -19,22 +19,61 @@ duplicates). Commands resolve against the same merged config Fire uses (local `f
 [Overview](./overview.md#file-discovery-and-merge-order)).
 
 ## Usage
-Point an MCP-capable host (Claude Code, Claude Desktop, Cursor, etc.) at:
+Register `fire cli mcp` as a stdio server in your agent. Use user (global) scope so it's available
+in every project; fire picks the project from the directory the host starts it in.
+
+**Claude Code**
 ```bash
-fire cli mcp
+claude mcp add --scope user fire -- fire cli mcp
 ```
 
-Example host config (adjust to your tool's format):
+**Codex**
+```bash
+codex mcp add fire -- fire cli mcp
+```
+Or in `~/.codex/config.toml`:
+```toml
+[mcp_servers.fire]
+command = "fire"
+args = ["cli", "mcp"]
+```
+
+**VS Code (Copilot agent mode)**
+```bash
+code --add-mcp '{"name":"fire","command":"fire","args":["cli","mcp"]}'
+```
+Or in a workspace `.vscode/mcp.json` (note the `servers` key):
 ```json
 {
-  "mcpServers": {
-    "fire": {
-      "command": "fire",
-      "args": ["cli", "mcp"]
-    }
+  "servers": {
+    "fire": { "command": "fire", "args": ["cli", "mcp"] }
   }
 }
 ```
+
+**Cursor, Claude Desktop, Gemini CLI, Windsurf** and most other hosts use the same `mcpServers`
+shape:
+```json
+{
+  "mcpServers": {
+    "fire": { "command": "fire", "args": ["cli", "mcp"] }
+  }
+}
+```
+
+| Host | File |
+|---|---|
+| Cursor | `~/.cursor/mcp.json` (or `.cursor/mcp.json` in a project) |
+| Claude Desktop | macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Gemini CLI | `~/.gemini/settings.json` (or `.gemini/settings.json` in a project) |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+
+Tips:
+- GUI apps on macOS may not inherit your shell's `PATH`. If the host can't find `fire`, use the
+  absolute path from `which fire` as `command`.
+- Hosts that aren't tied to a project directory (Claude Desktop, for example) only see the
+  commands from your [registered global directories](./overview.md#file-discovery-and-merge-order).
+- Check it works by asking the agent "what fire commands are available here?".
 
 ## Keeping commands away from agents
 Some commands should stay human-only: production deploys, destructive database tasks, anything
