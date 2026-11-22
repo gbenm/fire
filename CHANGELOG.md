@@ -55,6 +55,9 @@ reconstructed from the git history.
 - Docs: comparison with other task runners, MCP setup per host, schema `$id`.
 
 ### Changed
+- MCP command discovery is consolidated in `search_commands`: omit its query to list every
+  command, use each result's prominent `path` to run it, and opt in to `exec`/`eval` templates
+  with `include_exec`. (#39)
 - The MCP session lifecycle is split into single-purpose `stop_session`, `signal_session`, and
   `forget_session` tools. (#41)
 - The MCP `start_session` result exposes the session id as a `session_id` field. (#40)

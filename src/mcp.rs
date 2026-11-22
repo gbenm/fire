@@ -41,10 +41,13 @@ pub(crate) struct CommandNode {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct CommandMatch {
+    /// The canonical invocation to run in a shell.
     pub(crate) path: String,
     pub(crate) description: Option<String>,
     pub(crate) runnable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) exec: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) eval: Option<Vec<String>>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) long_running: bool,
@@ -167,28 +170,33 @@ fn non_empty(value: &str) -> Option<String> {
     }
 }
 
-fn search_context(context: &CommandContext, query: &str) -> Vec<CommandMatch> {
+fn search_context(context: &CommandContext, query: &str, include_exec: bool) -> Vec<CommandMatch> {
     let mut out = Vec::new();
     let needle = query.to_lowercase();
     for node in &context.commands {
-        collect_matches(node, &needle, &mut out);
+        collect_matches(node, &needle, include_exec, &mut out);
     }
     out
 }
 
-fn collect_matches(node: &CommandNode, needle: &str, out: &mut Vec<CommandMatch>) {
+fn collect_matches(
+    node: &CommandNode,
+    needle: &str,
+    include_exec: bool,
+    out: &mut Vec<CommandMatch>,
+) {
     if node_matches(node, needle) {
         out.push(CommandMatch {
             path: node.path.clone(),
             description: node.description.clone(),
             runnable: node.runnable,
-            exec: node.exec.clone(),
-            eval: node.eval.clone(),
+            exec: include_exec.then(|| node.exec.clone()).flatten(),
+            eval: include_exec.then(|| node.eval.clone()).flatten(),
             long_running: node.long_running,
         });
     }
     for child in &node.subcommands {
-        collect_matches(child, needle, out);
+        collect_matches(child, needle, include_exec, out);
     }
 }
 
@@ -219,8 +227,11 @@ fn node_matches(node: &CommandNode, needle: &str) -> bool {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct SearchCommandsRequest {
-    /// Case-insensitive substring to match against command paths, descriptions, and exec/eval templates.
-    query: String,
+    /// Optional case-insensitive substring to match against command paths, descriptions, and
+    /// exec/eval templates. Omit or pass an empty string to list every command.
+    query: Option<String>,
+    /// Include underlying exec/eval templates for context. Never run these directly; run `path`.
+    include_exec: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -356,24 +367,22 @@ impl FireMcpServer {
 #[tool_router]
 impl FireMcpServer {
     #[tool(
-        description = "List the full tree of `fire` commands the user configured (builds, tests, dev servers, deploys...), with invocation paths, descriptions, and exec/eval templates. Prefer these over ad-hoc shell commands."
-    )]
-    fn list_commands(&self) -> String {
-        let config = crate::config::load_config();
-        let context = build_command_context(&config);
-        to_json(&context)
-    }
-
-    #[tool(
-        description = "Search the user's configured `fire` commands (case-insensitive substring over path, description, and exec/eval templates). First stop when the user names an app, service or task you don't recognize (\"start X\", \"run the Y tests\"): it is likely a fire command. Also use it before writing your own build/test/run/deploy commands."
+        description = "Discover the user's configured `fire` commands. `path` is the exact command to run in a shell. Omit `query` or pass an empty string to list everything; otherwise it is a case-insensitive substring over paths, descriptions, and exec/eval templates. Underlying templates are hidden by default; request `include_exec` only for context, and never copy or run them directly. Use this first when the user names an app, service or task you don't recognize, and before writing your own build/test/run/deploy commands."
     )]
     fn search_commands(
         &self,
-        Parameters(SearchCommandsRequest { query }): Parameters<SearchCommandsRequest>,
+        Parameters(SearchCommandsRequest {
+            query,
+            include_exec,
+        }): Parameters<SearchCommandsRequest>,
     ) -> String {
         let config = crate::config::load_config();
         let context = build_command_context(&config);
-        to_json(&search_context(&context, &query))
+        to_json(&search_context(
+            &context,
+            query.as_deref().unwrap_or_default(),
+            include_exec.unwrap_or(false),
+        ))
     }
 
     #[tool(
@@ -492,8 +501,9 @@ Sessions are shared with the user and other agents across projects, so give `sta
 short `note` saying why; read output with `session_output`, write stdin with `send_input`, \
 send a specific signal with `signal_session`, stop with `stop_session`, and remove an exited \
 record with `forget_session`; the user can attach with `fire cli fg <id>`. \
-`search_commands`/`list_commands` return each command's exact `path` (e.g. `fire backend test`); \
-run short ones in your shell as `fire <path> [args]`. `exec`/`eval` are context only. \
+`search_commands` returns each command's exact `path` (e.g. `fire backend test`); \
+run that path in your shell with any arguments. Omit its query to list all commands. Underlying \
+`exec`/`eval` templates are hidden unless explicitly requested and are context only. \
 https://github.com/gbenm/fire";
 
 #[tool_handler(router = self.tool_router)]
@@ -656,8 +666,8 @@ commands:
             .map(|node| node.name.as_str())
             .collect();
         assert_eq!(subs, vec!["migrate"]);
-        assert!(search_context(&context, "deploy").is_empty());
-        assert!(search_context(&context, "drop").is_empty());
+        assert!(search_context(&context, "deploy", false).is_empty());
+        assert!(search_context(&context, "drop", false).is_empty());
     }
 
     #[test]
@@ -833,12 +843,69 @@ commands:
         };
 
         let context = build_command_context(&config);
-        let matches = search_context(&context, "backend");
+        let matches = search_context(&context, "backend", false);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].path, "fire run");
 
-        let matches = search_context(&context, "npm");
+        let matches = search_context(&context, "npm", false);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].path, "fire run");
+    }
+
+    #[test]
+    fn search_is_the_only_command_discovery_tool() {
+        let router = FireMcpServer::tool_router();
+        assert!(router.has_route("search_commands"));
+        assert!(!router.has_route("list_commands"));
+
+        let search = router.get("search_commands").expect("search tool");
+        let required = search
+            .input_schema
+            .get("required")
+            .and_then(|value| value.as_array());
+        assert!(required.is_none_or(Vec::is_empty), "query must be optional");
+        assert!(search.input_schema["properties"]
+            .get("include_exec")
+            .is_some());
+        let description = search.description.as_deref().expect("search description");
+        assert!(description.contains("`path` is the exact command to run"));
+    }
+
+    #[test]
+    fn search_lists_everything_and_hides_templates_by_default() {
+        let config = LoadedConfig {
+            merged_namespaces: Default::default(),
+            files: vec![FileConfig {
+                source: SourceKind::Local,
+                project_dir: PathBuf::from("."),
+                config_path: PathBuf::from("/tmp/fire-test.yml"),
+                scope: FileScope::Root,
+                runtimes: BTreeMap::new(),
+                commands: parse_commands(
+                    r#"
+commands:
+  build:
+    description: Build everything
+    exec: cargo build
+  generated:
+    eval: py:commands()
+"#,
+                ),
+            }],
+        };
+        let context = build_command_context(&config);
+
+        let matches = search_context(&context, "", false);
+        assert_eq!(matches.len(), 2);
+        let json = serde_json::to_value(&matches).expect("serializable matches");
+        for command in json.as_array().expect("command array") {
+            assert!(command.get("exec").is_none());
+            assert!(command.get("eval").is_none());
+        }
+
+        let matches = search_context(&context, "", true);
+        let json = serde_json::to_value(&matches).expect("serializable matches");
+        assert_eq!(json[0]["exec"][0], "cargo build");
+        assert_eq!(json[1]["eval"][0], "py:commands()");
     }
 }

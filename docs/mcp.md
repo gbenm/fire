@@ -3,10 +3,10 @@
 `fire cli mcp` starts a [Model Context Protocol](https://modelcontextprotocol.io) server over
 stdio. It gives agents two things:
 
-1. **The commands you already configured.** Every available `fire` command, with its invocation
-   path, description, and `exec`/`eval` templates, so the agent runs `fire ...` instead of guessing
-   or writing its own build/test/run commands. Commands marked `long_running: true` say so, so
-   the agent knows to start them with `start_session`.
+1. **The commands you already configured.** Every available `fire` command, with its exact
+   invocation path and description, so the agent runs `fire ...` instead of guessing or writing
+   its own build/test/run commands. Commands marked `long_running: true` say so, so the agent
+   knows to start them with `start_session`.
 2. **Managed long-running processes.** Agents start dev servers, watchers, and similar processes
    as [detached sessions](./sessions.md), each with a short note explaining why. You and every
    other agent, in any project, can then see them, read their output, send input or signals, and
@@ -92,7 +92,7 @@ commands:
         agents: false
         exec: ./scripts/drop-db
 ```
-- The command, and everything under it, is left out of `list_commands` and `search_commands`. A
+- The command, and everything under it, is left out of `search_commands`. A
   subcommand can't opt back in under a group marked `agents: false`.
 - `start_session` refuses to run it, with an error telling the agent not to run it any other way
   and to ask you instead.
@@ -109,22 +109,14 @@ own permissions (for example, in Claude Code: `"deny": ["Bash(fire deploy:*)"]`)
 
 ## Tools
 
-### `list_commands`
-Returns the full command tree as JSON: `fire_version`, the active `implicit_local_namespace` (if
-any), the `merged_namespaces` (if any, see [merged namespaces](./overview.md#merged-namespaces)), usage notes, and a `commands` array. Each node has:
-- `path` — the canonical invocation, e.g. `"fire ex backend logs"`
-- `name`, `namespace`, `group`, `source` (`local` or `global`)
-- `description`
-- `runnable` — `false` for group-only nodes (invoke a subcommand instead)
-- `exec` / `eval` — the underlying template(s), for context only
-- `placeholder` — the argument placeholder pattern, if customized
-- `subcommands` — nested nodes, same shape
-
 ### `search_commands`
-Takes a `query` string and returns a flat list of matches (same fields as above, minus
-`subcommands`) whose `path`, `description`, `exec`, or `eval` contain the query
-(case-insensitive substring match). Useful once the tree is large enough that returning it whole
-isn't practical.
+The single command-discovery tool. Omit `query` (or pass an empty string) to return every command,
+or provide a case-insensitive substring to match against `path`, `description`, `exec`, or `eval`.
+Each flat result puts `path` first: it is the exact canonical invocation to run, such as
+`"fire ex backend logs"`. Results also include `description`, `runnable`, and `long_running`.
+
+Underlying `exec` and `eval` templates are omitted by default. Pass `include_exec: true` only when
+their implementation is useful as context; run the returned `path`, never a copied template.
 
 ### `list_sessions`
 Returns every detached session (started by any agent or by you, from any project): `id`,
