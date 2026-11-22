@@ -5,7 +5,8 @@ stdio. It gives agents two things:
 
 1. **The commands you already configured.** Every available `fire` command, with its invocation
    path, description, and `exec`/`eval` templates, so the agent runs `fire ...` instead of guessing
-   or writing its own build/test/run commands.
+   or writing its own build/test/run commands. Commands marked `long_running: true` say so, so
+   the agent knows to start them with `start_session`.
 2. **Managed long-running processes.** Agents start dev servers, watchers, and similar processes
    as [detached sessions](./sessions.md), each with a short note explaining why. You and every
    other agent, in any project, can then see them, read their output, send input or signals, and
@@ -93,7 +94,8 @@ Returns every detached session (started by any agent or by you, from any project
 
 ### `session_output`
 Takes an `id` and optional `lines` (default 100). Returns the session plus the last lines of its
-`stdout` and `stderr`.
+terminal `output` as plain text: stdout and stderr merged (sessions run on a pty), escape
+sequences removed and `\r` progress redraws collapsed.
 
 ### `start_session`
 Takes `command` (the fire path plus arguments as a token array, without `fire`, e.g.
@@ -102,11 +104,14 @@ the server's). Same as `fire cli bg -m "<note>" <command...>`, except that it re
 marked `agents: false`. Returns the session id in `stdout`.
 
 ### `send_input`
-Takes `id` and `text`, and writes the text plus a newline to the session's stdin (`fire cli send`).
+Takes `id` and `text`, and types the text followed by Enter into the session's terminal
+(`fire cli send`). With `raw: true`, sends `text` as exact keys without Enter, interpreting `\r`,
+`\n`, `\t`, `\e`, `\\` and `\xHH`: e.g. `q`, `\x03` (Ctrl+C) or `\e[A` (up arrow)
+(`fire cli send --raw`).
 
 ### `signal_session`
 Takes `id` and an optional `signal` (name like `INT`, `HUP`, `USR1`, or a number), which is sent to
-the process group. Without `signal`, it stops the session (`TERM`, then `KILL` after 5s), or
+the session's foreground process group, as a keyboard signal would be. Without `signal`, it stops the session (`TERM`, then `KILL` after 5s), or
 removes the record of an already-exited one (`fire cli kill`).
 
 Management tools return `{ ok, stdout, stderr }` from the equivalent CLI command.

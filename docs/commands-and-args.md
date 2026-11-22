@@ -5,6 +5,7 @@ This guide shows how to author commands, chain hooks, and work with positional a
 ## File-level metadata
 - `group`: adds a path prefix for all commands in the file. If omitted, it's inferred from the filename (see below). Set it to `null` to keep the file ungrouped regardless of filename.
 - `description`: file-level label used for the group in help/completion.
+- `session` / `long_running`: defaults for every command in the file (see the command keys below and [Sessions](./sessions.md)).
 
 ```yaml
 group: backend
@@ -42,6 +43,8 @@ A command spec supports:
 - `placeholder`: placeholder pattern. If absent, no interpolation or spreads occur.
 - `on_unused_args`: behavior for unused args in **eval** (default: `ignore`).
 - `agents`: set to `false` to keep the command (and its subcommands) away from agents using the [MCP server](./mcp.md#keeping-commands-away-from-agents) (default: `true`).
+- `session`: set to `false` to always run the command directly instead of in a [session](./sessions.md) (default: `true`, sessions are used when running in a terminal).
+- `long_running`: set to `true` for servers, watchers and workers. Without a terminal (agents, scripts) the command then starts as a detached [session](./sessions.md#long-running-commands-without-a-terminal) and returns its id instead of blocking (default: `false`).
 
 String shorthand (`commands.foo: "npm test"`) is equivalent to a spec with `exec: "npm test"`.
 

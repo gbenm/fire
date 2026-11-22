@@ -1,30 +1,41 @@
-//! Detached sessions: run a fire command in the background under a small supervisor so that
+//! Detached sessions: run a fire command on a pseudo-terminal under a small supervisor so that
 //! users and agents (from any terminal or project) can list it, read its output, attach to it,
-//! or kill it.
+//! send it input or signals, or kill it.
 //!
 //! Layout per session (`<data dir>/fire/sessions/<id>/`):
 //! - `session.json` — metadata (command, note, cwd, pids, exit code)
-//! - `stdout.log` / `stderr.log` — captured output
-//! - `stdin` — FIFO forwarded to the process's stdin while it runs
+//! - `output.log` — raw pty output (stdout and stderr merged, as a terminal shows them)
+//! - `ctl.sock` — control socket of the supervisor while the program runs
+//!
+//! Sessions from older fire versions used pipes instead: `stdout.log`, `stderr.log` and a `stdin` FIFO.
+//! Those are still readable and can be signalled until they are cleaned up.
+
+mod attach;
+mod clean;
+mod proto;
+mod pty;
+mod supervisor;
 
 use std::{
-    ffi::CString,
+    ffi::OsStr,
     fs::{self, File, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
-    os::unix::{
-        fs::OpenOptionsExt,
-        process::{CommandExt, ExitStatusExt},
-    },
+    io::{self, IsTerminal, Read, Seek, SeekFrom, Write},
+    os::unix::{ffi::OsStrExt, fs::OpenOptionsExt, net::UnixStream},
     path::{Path, PathBuf},
     process::{self, Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
 
+use crate::resolve::ResolvedCommand;
+
 const EXITED_RETENTION_SECS: u64 = 24 * 60 * 60;
+const OUTPUT_LOG: &str = "output.log";
+const SOCKET: &str = "ctl.sock";
+/// `sun_path` holds 104 (macOS) to 108 (Linux) bytes including the trailing NUL.
+const MAX_SOCKET_PATH: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Session {
@@ -40,6 +51,10 @@ pub(crate) struct Session {
     pub(crate) pid: Option<u32>,
     pub(crate) exit_code: Option<i32>,
     pub(crate) ended_at: Option<u64>,
+    /// Started implicitly by `fire <command>` in a terminal: removed when the program exits
+    /// while someone is attached.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) auto: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,7 +105,7 @@ pub(crate) fn handle(args: &[String]) {
             _ => fail("Usage: fire cli logs <id> [lines]"),
         },
         Some("fg") => match &rest[1..] {
-            [id] => attach(id),
+            [id] => attach_existing(id),
             _ => fail("Usage: fire cli fg <id>"),
         },
         Some("kill") => match &rest[1..] {
@@ -99,11 +114,25 @@ pub(crate) fn handle(args: &[String]) {
             _ => fail("Usage: fire cli kill <id> [SIGNAL]"),
         },
         Some("send") => match &rest[1..] {
-            [id, text @ ..] if !text.is_empty() => send_input(id, &text.join(" ")),
-            _ => fail("Usage: fire cli send <id> <text...>"),
+            [flag, id, text @ ..] if flag == "--raw" && !text.is_empty() => {
+                send_input(id, unescape(&text.join(" ")))
+            }
+            [id, text @ ..] if !text.is_empty() => {
+                // Enter on a terminal is CR; the line discipline turns it into a newline for
+                // programs reading lines.
+                let mut bytes = text.join(" ").into_bytes();
+                bytes.push(b'\r');
+                send_input(id, bytes)
+            }
+            _ => fail("Usage: fire cli send [--raw] <id> <text...>"),
         },
         Some("__supervise") => match &rest[1..] {
-            [id] => supervise(id),
+            [id] => supervisor::supervise(id, pty::DEFAULT_ROWS, pty::DEFAULT_COLS),
+            [id, rows, cols] => supervisor::supervise(
+                id,
+                rows.parse().unwrap_or(pty::DEFAULT_ROWS),
+                cols.parse().unwrap_or(pty::DEFAULT_COLS),
+            ),
             _ => process::exit(2),
         },
         _ => fail("Unknown session command"),
@@ -162,7 +191,7 @@ fn start(args: &[String]) {
     }
 
     let config = crate::config::load_config();
-    let name = match crate::resolve::resolve_command(&config, command) {
+    match crate::resolve::resolve_command(&config, command) {
         Some(resolved)
             if from_agent && !resolved.command_chain.iter().all(|entry| entry.allows_agents()) =>
         {
@@ -171,21 +200,45 @@ fn start(args: &[String]) {
                 command[..resolved.consumed].join(" ")
             ))
         }
-        Some(resolved) if resolved.command.is_runnable() => command[..resolved.consumed].join("-"),
+        Some(resolved) if resolved.command.is_runnable() => {
+            let id = spawn_session(command, resolved.consumed, note, false)
+                .unwrap_or_else(|err| fail(&err));
+            print_started(&id, command);
+        }
         _ => fail(&format!(
             "Unknown or non-runnable command: fire {}",
             command.join(" ")
         )),
-    };
+    }
+}
 
-    let id = new_id(&name);
+fn print_started(id: &str, command: &[String]) {
+    println!("{id}");
+    eprintln!(
+        "[fire] started `fire {}` as session {id}",
+        command.join(" ")
+    );
+    eprintln!(
+        "[fire] logs: fire cli logs {id} | attach: fire cli fg {id} | stop: fire cli kill {id}"
+    );
+}
+
+/// Creates the session record and starts its supervisor. `consumed` is how many leading tokens
+/// of `command` are the command path (used for the id).
+fn spawn_session(
+    command: &[String],
+    consumed: usize,
+    note: Option<String>,
+    auto: bool,
+) -> Result<String, String> {
+    let id = new_id(&command[..consumed.clamp(1, command.len())].join("-"));
     let dir = session_dir(&id);
-    if let Err(err) = fs::create_dir_all(&dir).and_then(|_| mkfifo(&dir.join("stdin"))) {
-        fail(&format!(
+    fs::create_dir_all(&dir).map_err(|err| {
+        format!(
             "Failed to create session directory {}: {err}",
             dir.display()
-        ));
-    }
+        )
+    })?;
 
     let session = Session {
         id: id.clone(),
@@ -200,17 +253,26 @@ fn start(args: &[String]) {
         pid: None,
         exit_code: None,
         ended_at: None,
+        auto,
     };
     save(&session);
 
+    let (rows, cols) = pty::terminal_size().unwrap_or((pty::DEFAULT_ROWS, pty::DEFAULT_COLS));
     let mut supervisor = Command::new(current_exe());
     supervisor
-        .args(["cli", "__supervise", &id])
+        .args([
+            "cli",
+            "__supervise",
+            &id,
+            &rows.to_string(),
+            &cols.to_string(),
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     // Detach from the terminal so closing it doesn't take the process down.
     unsafe {
+        use std::os::unix::process::CommandExt;
         supervisor.pre_exec(|| {
             libc::setsid();
             Ok(())
@@ -218,70 +280,138 @@ fn start(args: &[String]) {
     }
     if let Err(err) = supervisor.spawn() {
         let _ = fs::remove_dir_all(&dir);
-        fail(&format!("Failed to start session: {err}"));
+        return Err(format!("Failed to start session: {err}"));
     }
-
-    println!("{id}");
-    eprintln!(
-        "[fire] started `fire {}` as session {id}",
-        command.join(" ")
-    );
-    eprintln!(
-        "[fire] logs: fire cli logs {id} | attach: fire cli fg {id} | stop: fire cli kill {id}"
-    );
+    Ok(id)
 }
 
-fn supervise(id: &str) {
-    let dir = session_dir(id);
-    let Some(mut session) = load(id) else {
-        process::exit(1)
+// ---------------------------------------------------------------- `fire <command>` in a session
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Launch {
+    /// Run in this process, as fire always did.
+    Direct,
+    /// Start a session and attach this terminal to it right away.
+    Attach,
+    /// Start a detached session, print its id and return.
+    Detach,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LaunchContext {
+    inside_session: bool,
+    disabled: bool,
+    session_setting: Option<bool>,
+    long_running: bool,
+    terminal: bool,
+}
+
+fn choose_launch(context: LaunchContext) -> Launch {
+    if context.inside_session || context.disabled || context.session_setting == Some(false) {
+        Launch::Direct
+    } else if context.terminal {
+        Launch::Attach
+    } else if context.long_running {
+        Launch::Detach
+    } else {
+        Launch::Direct
+    }
+}
+
+/// With a terminal, every `fire <command>` runs in a session the user can detach (Ctrl+Z) and
+/// pick up again anywhere. Without one (agents, scripts), only `long_running` commands use a
+/// session, detached, so they don't block the caller. Returns when the command should run
+/// directly in this process.
+pub(crate) fn run_in_session_if_enabled(command_args: &[String], resolved: &ResolvedCommand<'_>) {
+    let setting = |pick: fn(&crate::config::CommandSpec) -> Option<bool>| {
+        resolved
+            .command_chain
+            .iter()
+            .rev()
+            .find_map(|entry| entry.spec().and_then(pick))
     };
-    session.supervisor_pid = process::id();
-    save(&session);
-
-    let open_log = |name: &str| File::create(dir.join(name)).unwrap_or_else(|_| process::exit(1));
-    let stdout = open_log("stdout.log");
-    let mut stderr = open_log("stderr.log");
-    // Read+write keeps a writer open, so the process never sees EOF between attaches.
-    let stdin = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(dir.join("stdin"));
-
-    let mut command = Command::new(current_exe());
-    command
-        .args(&session.command)
-        .current_dir(&session.cwd)
-        .env("FIRE_SESSION", id)
-        .stdout(stdout)
-        .stderr(stderr.try_clone().unwrap_or_else(|_| process::exit(1)))
-        .process_group(0);
-    match stdin {
-        Ok(file) => command.stdin(file),
-        Err(_) => command.stdin(Stdio::null()),
+    let terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
+    let context = LaunchContext {
+        inside_session: std::env::var_os("FIRE_SESSION").is_some(),
+        disabled: env_flag_off("FIRE_SESSIONS") || env_flag_on("FIRE_DRY_RUN"),
+        session_setting: setting(|spec| spec.session),
+        long_running: setting(|spec| spec.long_running) == Some(true),
+        // Started with `&`: keep today's behavior rather than stopping on the terminal.
+        terminal: terminal && pty::is_foreground(0),
     };
 
-    let exit_code = match command.spawn() {
-        Ok(mut child) => {
-            session.pid = Some(child.id());
-            save(&session);
-            match child.wait() {
-                Ok(status) => status
-                    .code()
-                    .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)),
-                Err(_) => 1,
+    match choose_launch(context) {
+        Launch::Direct => {}
+        Launch::Attach => {
+            let note = std::env::var("FIRE_SESSION_NOTE").ok().or_else(|| {
+                resolved
+                    .command
+                    .description()
+                    .and_then(|text| text.lines().next())
+                    .map(|line| line.trim().to_string())
+            });
+            // If the supervisor can't start, fall back to running directly.
+            if let Ok(id) = spawn_session(command_args, resolved.consumed, note, true) {
+                attach::attach(
+                    &id,
+                    attach::Options {
+                        quiet: true,
+                        remove_on_exit: true,
+                    },
+                );
             }
         }
-        Err(err) => {
-            let _ = writeln!(stderr, "[fire] failed to start: {err}");
-            127
+        Launch::Detach => {
+            let cwd = std::env::current_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
+            if let Some(existing) = list_sessions().into_iter().find(|session| {
+                session.is_running() && session.command == command_args && session.cwd == cwd
+            }) {
+                println!("{}", existing.id);
+                eprintln!(
+                    "[fire] `fire {}` is already running here as session {}",
+                    command_args.join(" "),
+                    existing.id
+                );
+                print_detached_hints(&existing.id);
+                process::exit(0);
+            }
+            let note = std::env::var("FIRE_SESSION_NOTE").ok();
+            match spawn_session(command_args, resolved.consumed, note, false) {
+                Ok(id) => {
+                    println!("{id}");
+                    eprintln!(
+                        "[fire] `fire {}` is long-running; started it detached as session {id}",
+                        command_args.join(" ")
+                    );
+                    print_detached_hints(&id);
+                    process::exit(0);
+                }
+                Err(err) => eprintln!("[fire] {err}; running it directly"),
+            }
         }
-    };
+    }
+}
 
-    session.exit_code = Some(exit_code);
-    session.ended_at = Some(now());
-    save(&session);
-    let _ = fs::remove_file(dir.join("stdin"));
+fn print_detached_hints(id: &str) {
+    eprintln!(
+        "[fire] output: fire cli logs {id} (MCP: session_output) | attach: fire cli fg {id} | stop: fire cli kill {id}"
+    );
+    eprintln!("[fire] to block until it exits instead, set FIRE_SESSIONS=off");
+}
+
+fn env_flag_off(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "off" | "0" | "false" | "no"
+        )
+    })
+}
+
+fn env_flag_on(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| value.trim() == "true")
 }
 
 // ---------------------------------------------------------------- list / logs
@@ -298,7 +428,7 @@ pub(crate) fn list_sessions() -> Vec<Session> {
                 && now().saturating_sub(session.ended_at.unwrap_or(session.started_at))
                     > EXITED_RETENTION_SECS;
             if stale {
-                let _ = fs::remove_dir_all(session_dir(&session.id));
+                remove_session(&session.id);
             }
             !stale
         })
@@ -356,19 +486,27 @@ fn print_sessions() {
     }
 }
 
-/// Last `lines` lines of a session's stdout/stderr.
-pub(crate) fn read_output(id: &str, lines: usize) -> Option<(Session, String, String)> {
+/// Last `lines` lines of a session's output as plain text (escape sequences stripped, progress
+/// rewrites collapsed).
+pub(crate) fn read_output(id: &str, lines: usize) -> Option<(Session, String)> {
     let session = load(id)?;
     let dir = session_dir(id);
-    Some((
-        session,
-        tail(&dir.join("stdout.log"), lines),
-        tail(&dir.join("stderr.log"), lines),
-    ))
+    let output = if dir.join(OUTPUT_LOG).exists() {
+        tail(&dir.join(OUTPUT_LOG), lines)
+    } else {
+        let stdout = tail(&dir.join("stdout.log"), lines);
+        let stderr = tail(&dir.join("stderr.log"), lines);
+        if stderr.is_empty() {
+            stdout
+        } else {
+            format!("{stdout}--- stderr ---\n{stderr}")
+        }
+    };
+    Some((session, output))
 }
 
 fn print_logs(id: &str, lines: usize) {
-    let Some((session, stdout, stderr)) = read_output(id, lines) else {
+    let Some((session, output)) = read_output(id, lines) else {
         fail(&format!("No session `{id}`. See: fire cli ps"))
     };
     eprintln!(
@@ -377,14 +515,7 @@ fn print_logs(id: &str, lines: usize) {
         session.command.join(" "),
         session.status()
     );
-    if !stdout.is_empty() {
-        eprintln!("== stdout ==");
-        print!("{stdout}");
-    }
-    if !stderr.is_empty() {
-        eprintln!("== stderr ==");
-        eprint!("{stderr}");
-    }
+    print!("{output}");
 }
 
 fn tail(path: &Path, lines: usize) -> String {
@@ -396,7 +527,7 @@ fn tail(path: &Path, lines: usize) -> String {
     let _ = file.seek(SeekFrom::Start(len.saturating_sub(MAX_BYTES)));
     let mut buffer = Vec::new();
     let _ = file.read_to_end(&mut buffer);
-    let text = String::from_utf8_lossy(&buffer);
+    let text = clean::clean(&String::from_utf8_lossy(&buffer));
     let all: Vec<&str> = text.lines().collect();
     let mut out = all[all.len().saturating_sub(lines)..].join("\n");
     if !out.is_empty() {
@@ -405,20 +536,9 @@ fn tail(path: &Path, lines: usize) -> String {
     out
 }
 
-// ---------------------------------------------------------------- fg / kill
+// ---------------------------------------------------------------- fg / kill / send
 
-static INTERRUPT: AtomicBool = AtomicBool::new(false);
-static DETACH: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn on_signal(signal: libc::c_int) {
-    if signal == libc::SIGTSTP {
-        DETACH.store(true, Ordering::SeqCst);
-    } else {
-        INTERRUPT.store(true, Ordering::SeqCst);
-    }
-}
-
-fn attach(id: &str) {
+fn attach_existing(id: &str) {
     let Some(session) = load(id) else {
         fail(&format!("No session `{id}`. See: fire cli ps"))
     };
@@ -426,109 +546,13 @@ fn attach(id: &str) {
         print_logs(id, 20);
         return;
     }
-
-    let dir = session_dir(id);
-    print_logs(id, 20);
-    eprintln!("[fire] attached — Ctrl+Z detaches (keeps running), Ctrl+C interrupts");
-
-    unsafe {
-        libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGTSTP, on_signal as *const () as libc::sighandler_t);
-    }
-
-    let fifo = dir.join("stdin");
-    thread::spawn(move || {
-        let Ok(mut writer) = OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(&fifo)
-        else {
-            return;
-        };
-        // Non-blocking was only needed for open(); writes should block normally.
-        unsafe {
-            use std::os::fd::AsRawFd;
-            let fd = writer.as_raw_fd();
-            libc::fcntl(
-                fd,
-                libc::F_SETFL,
-                libc::fcntl(fd, libc::F_GETFL) & !libc::O_NONBLOCK,
-            );
-        }
-        let mut buffer = [0u8; 4096];
-        let mut stdin = io::stdin();
-        while let Ok(read) = stdin.read(&mut buffer) {
-            if read == 0 || writer.write_all(&buffer[..read]).is_err() {
-                return;
-            }
-        }
-    });
-
-    let mut streams = [
-        Follow::new(dir.join("stdout.log"), false),
-        Follow::new(dir.join("stderr.log"), true),
-    ];
-    loop {
-        if DETACH.load(Ordering::SeqCst) {
-            eprintln!("\n[fire] detached from {id}; still running");
-            process::exit(0);
-        }
-        if INTERRUPT.swap(false, Ordering::SeqCst) {
-            signal_group(&session, libc::SIGINT);
-        }
-        let current = load(id);
-        for stream in &mut streams {
-            stream.pump();
-        }
-        match current {
-            Some(current) if current.is_running() => {}
-            Some(current) => {
-                let code = current.exit_code.unwrap_or(1);
-                eprintln!("[fire] {id} exited with code {code}");
-                process::exit(code);
-            }
-            None => process::exit(1),
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
-struct Follow {
-    path: PathBuf,
-    offset: u64,
-    stderr: bool,
-}
-
-impl Follow {
-    fn new(path: PathBuf, stderr: bool) -> Self {
-        let offset = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-        Self {
-            path,
-            offset,
-            stderr,
-        }
-    }
-
-    fn pump(&mut self) {
-        let Ok(mut file) = File::open(&self.path) else {
-            return;
-        };
-        if file.seek(SeekFrom::Start(self.offset)).is_err() {
-            return;
-        }
-        let mut buffer = Vec::new();
-        if file.read_to_end(&mut buffer).is_err() || buffer.is_empty() {
-            return;
-        }
-        self.offset += buffer.len() as u64;
-        if self.stderr {
-            let _ = io::stderr().write_all(&buffer);
-        } else {
-            let mut out = io::stdout();
-            let _ = out.write_all(&buffer);
-            let _ = out.flush();
-        }
-    }
+    attach::attach(
+        id,
+        attach::Options {
+            quiet: false,
+            remove_on_exit: session.auto,
+        },
+    );
 }
 
 fn kill(id: &str) {
@@ -536,7 +560,7 @@ fn kill(id: &str) {
         fail(&format!("No session `{id}`. See: fire cli ps"))
     };
     if !session.is_running() {
-        let _ = fs::remove_dir_all(session_dir(id));
+        remove_session(id);
         println!("[fire] {id} was not running; removed");
         return;
     }
@@ -564,16 +588,72 @@ fn send_signal(id: &str, name: &str) {
     println!("[fire] sent {name} to {id}");
 }
 
-fn send_input(id: &str, text: &str) {
+fn send_input(id: &str, bytes: Vec<u8>) {
     running(id);
-    let result = OpenOptions::new()
-        .write(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(session_dir(id).join("stdin"))
-        .and_then(|mut fifo| fifo.write_all(format!("{text}\n").as_bytes()));
+    let result = match connect(id) {
+        Some(mut stream) => proto::send(&mut stream, proto::INPUT, &bytes),
+        // Pre-pty session: line-based FIFO.
+        None => OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(session_dir(id).join("stdin"))
+            .and_then(|mut fifo| {
+                let mut line = bytes;
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                    line.push(b'\n');
+                }
+                fifo.write_all(&line)
+            }),
+    };
     if let Err(err) = result {
         fail(&format!("Failed to write to {id}: {err}"));
     }
+}
+
+/// Escapes for `send --raw`: `\r` (Enter), `\n`, `\t`, `\e` (Esc), `\\`, and `\xHH` for any
+/// byte, e.g. `\x03` for Ctrl+C.
+fn unescape(text: &str) -> Vec<u8> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte != b'\\' || index + 1 == bytes.len() {
+            out.push(byte);
+            index += 1;
+            continue;
+        }
+        let escaped = match bytes[index + 1] {
+            b'r' => Some(b'\r'),
+            b'n' => Some(b'\n'),
+            b't' => Some(b'\t'),
+            b'e' => Some(0x1b),
+            b'\\' => Some(b'\\'),
+            b'x' => {
+                let value =
+                    std::str::from_utf8(bytes.get(index + 2..index + 4).unwrap_or_default())
+                        .ok()
+                        .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+                if value.is_some() {
+                    index += 2;
+                }
+                value
+            }
+            _ => None,
+        };
+        match escaped {
+            Some(value) => {
+                out.push(value);
+                index += 2;
+            }
+            None => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    out
 }
 
 fn running(id: &str) -> Session {
@@ -606,7 +686,14 @@ pub(crate) fn parse_signal(value: &str) -> Option<libc::c_int> {
     })
 }
 
+/// The supervisor knows the pty's foreground process group, so ask it first; fall back to the
+/// program's own group (pre-pty sessions, or a supervisor that stopped answering).
 fn signal_group(session: &Session, signal: libc::c_int) {
+    if let Some(mut stream) = connect(&session.id) {
+        if proto::send(&mut stream, proto::SIGNAL, &signal.to_be_bytes()).is_ok() {
+            return;
+        }
+    }
     // Re-read: the pid is recorded by the supervisor after spawning.
     let pid = load(&session.id).and_then(|current| current.pid);
     if let Some(pid) = pid {
@@ -627,6 +714,40 @@ fn sessions_root() -> PathBuf {
 
 fn session_dir(id: &str) -> PathBuf {
     sessions_root().join(id)
+}
+
+fn remove_session(id: &str) {
+    let _ = fs::remove_dir_all(session_dir(id));
+}
+
+/// Connects to a running session's supervisor, waiting briefly while a fresh one starts up.
+fn connect(id: &str) -> Option<UnixStream> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Ok(stream) = connect_once(&session_dir(id).join(SOCKET)) {
+            return Some(stream);
+        }
+        let starting = load(id).is_some_and(|session| {
+            session.ended_at.is_none() && session.pid.is_none() && session.is_running()
+        });
+        if !starting || Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn connect_once(path: &Path) -> io::Result<UnixStream> {
+    if path.as_os_str().len() < MAX_SOCKET_PATH {
+        return UnixStream::connect(path);
+    }
+    // Too long for `sun_path`: connect through a relative path. Callers are single-threaded at
+    // this point (CLI commands), so changing the cwd briefly is safe.
+    let previous = std::env::current_dir()?;
+    std::env::set_current_dir(path.parent().unwrap_or(Path::new(".")))?;
+    let result = UnixStream::connect(path.file_name().unwrap_or(OsStr::from_bytes(b"")));
+    let _ = std::env::set_current_dir(previous);
+    result
 }
 
 fn load(id: &str) -> Option<Session> {
@@ -658,6 +779,7 @@ fn new_id(name: &str) -> String {
                 '-'
             }
         })
+        .take(32)
         .collect();
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -665,16 +787,6 @@ fn new_id(name: &str) -> String {
         .unwrap_or(0)
         ^ process::id().rotate_left(16);
     format!("{}-{:04x}", slug.trim_matches('-'), seed & 0xffff)
-}
-
-fn mkfifo(path: &Path) -> io::Result<()> {
-    let path = CString::new(path.as_os_str().as_encoded_bytes())
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-    if unsafe { libc::mkfifo(path.as_ptr(), 0o600) } == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
 }
 
 fn pid_alive(pid: u32) -> bool {
@@ -717,15 +829,16 @@ mod tests {
         let id = new_id("API_Dev");
         assert!(id.starts_with("api-dev-"), "{id}");
         assert_eq!(id.len(), "api-dev-".len() + 4);
+        assert!(new_id(&"x".repeat(80)).len() <= 32 + 5);
     }
 
     #[test]
-    fn tail_returns_last_lines() {
+    fn tail_returns_last_clean_lines() {
         let dir = std::env::temp_dir().join(format!("fire-tail-{}", process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("out.log");
-        fs::write(&path, "a\nb\nc\n").unwrap();
-        assert_eq!(tail(&path, 2), "b\nc\n");
+        fs::write(&path, "a\r\n\x1b[31mb\x1b[0m\r\n10%\r100%\r\n").unwrap();
+        assert_eq!(tail(&path, 2), "b\n100%\n");
         assert_eq!(tail(&dir.join("missing"), 2), "");
         fs::remove_dir_all(dir).unwrap();
     }
@@ -740,6 +853,63 @@ mod tests {
     }
 
     #[test]
+    fn unescapes_raw_keys() {
+        assert_eq!(unescape(r"q"), b"q");
+        assert_eq!(unescape(r"\x03"), vec![3]);
+        assert_eq!(unescape(r"yes\r"), b"yes\r");
+        assert_eq!(unescape(r"\e[A\t\\"), b"\x1b[A\t\\");
+        assert_eq!(unescape(r"\xZZ\q\"), br"\xZZ\q\");
+    }
+
+    #[test]
+    fn launch_follows_terminal_and_settings() {
+        let tty = LaunchContext {
+            terminal: true,
+            ..LaunchContext::default()
+        };
+        assert_eq!(choose_launch(tty), Launch::Attach);
+        assert_eq!(
+            choose_launch(LaunchContext {
+                session_setting: Some(false),
+                ..tty
+            }),
+            Launch::Direct
+        );
+        assert_eq!(
+            choose_launch(LaunchContext {
+                inside_session: true,
+                ..tty
+            }),
+            Launch::Direct
+        );
+        assert_eq!(
+            choose_launch(LaunchContext {
+                disabled: true,
+                ..tty
+            }),
+            Launch::Direct
+        );
+
+        let piped = LaunchContext::default();
+        assert_eq!(choose_launch(piped), Launch::Direct);
+        assert_eq!(
+            choose_launch(LaunchContext {
+                long_running: true,
+                ..piped
+            }),
+            Launch::Detach
+        );
+        assert_eq!(
+            choose_launch(LaunchContext {
+                long_running: true,
+                session_setting: Some(false),
+                ..piped
+            }),
+            Launch::Direct
+        );
+    }
+
+    #[test]
     fn exited_session_reports_exited() {
         let session = Session {
             id: "x-0000".into(),
@@ -751,6 +921,7 @@ mod tests {
             pid: Some(2),
             exit_code: Some(0),
             ended_at: Some(1),
+            auto: false,
         };
         assert_eq!(session.status(), "exited");
     }

@@ -214,7 +214,7 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
         },
         CompletionSuggestion {
             value: "send".to_string(),
-            description: Some("Write a line to a session's stdin".to_string()),
+            description: Some("Type into a session".to_string()),
         },
         CompletionSuggestion {
             value: "kill".to_string(),

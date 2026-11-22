@@ -29,9 +29,8 @@ pub fn setup_cli() {
         .and_then(|value| value.to_str())
         .unwrap_or("fire")
         .to_string();
-    let config = load_config();
-
     if args.len() >= 2 && args[1] == "__complete" {
+        let config = load_config();
         args.drain(0..2);
         let words = normalize_completion_words(args, &bin_name);
         let suggestions = completion_suggestions(&config, &words);
@@ -42,6 +41,7 @@ pub fn setup_cli() {
     }
 
     if let Some(words) = completion_words_from_env(&bin_name) {
+        let config = load_config();
         let suggestions = completion_suggestions(&config, &words);
         for suggestion in render_values_only(&suggestions) {
             println!("{suggestion}");
@@ -55,6 +55,10 @@ pub fn setup_cli() {
         handle_cli_command(command_args);
         return;
     }
+
+    // Loaded after `cli` on purpose: session supervisors start through `fire cli` and must not
+    // pay for config discovery.
+    let config = load_config();
 
     if command_args.is_empty() {
         print_root_help(&config);
@@ -94,6 +98,7 @@ pub fn setup_cli() {
             eprintln!("[fire] {message}");
             process::exit(1);
         }
+        session::run_in_session_if_enabled(command_args, &resolved);
         execute_resolved_command(resolved);
     }
 

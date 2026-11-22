@@ -96,6 +96,13 @@ pub(crate) struct CommandSpec {
     /// `false` keeps the command (and its subcommands) away from agents using the MCP server.
     #[serde(default)]
     pub(crate) agents: Option<bool>,
+    /// `false` runs the command directly even in a terminal, never inside a session.
+    #[serde(default)]
+    pub(crate) session: Option<bool>,
+    /// `true` marks servers, watchers and workers: without a terminal (agents, scripts) the
+    /// command starts as a detached session instead of blocking the caller.
+    #[serde(default)]
+    pub(crate) long_running: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -149,6 +156,10 @@ struct FireFileRaw {
     env_file: EnvFileSetting,
     #[serde(default)]
     environment: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    session: Option<bool>,
+    #[serde(default)]
+    long_running: Option<bool>,
     #[serde(default)]
     include: Vec<String>,
     #[serde(default)]
@@ -368,6 +379,8 @@ impl FireFileRaw {
             fallback_runner: self.fallback_runner.clone(),
             env_file: self.env_file.clone(),
             environment: self.environment.clone(),
+            session: self.session,
+            long_running: self.long_running,
             ..CommandSpec::default()
         }
     }
@@ -717,6 +730,12 @@ fn apply_file_defaults_to_entry(entry: CommandEntry, defaults: &CommandSpec) -> 
             if spec.environment.is_none() {
                 spec.environment = defaults.environment.clone();
             }
+            if spec.session.is_none() {
+                spec.session = defaults.session;
+            }
+            if spec.long_running.is_none() {
+                spec.long_running = defaults.long_running;
+            }
 
             if !defaults.compute.is_empty() {
                 let mut merged = defaults.compute.clone();
@@ -755,6 +774,8 @@ fn command_defaults_empty(defaults: &CommandSpec) -> bool {
         && defaults.fallback_runner.trim().is_empty()
         && matches!(defaults.env_file, EnvFileSetting::Unset)
         && defaults.environment.is_none()
+        && defaults.session.is_none()
+        && defaults.long_running.is_none()
 }
 
 fn infer_group_from_filename(path: &Path) -> Option<String> {

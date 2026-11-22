@@ -25,7 +25,7 @@ pub(crate) fn print_root_help(config: &LoadedConfig) {
 }
 
 /// Agents often discover commands through help output, so point them at managed sessions here.
-const SESSION_HINT: &str = "Long-running (servers, watchers)? Run detached: fire cli bg -m \"why\" <command> (see: fire cli ps)";
+const SESSION_HINT: &str = "Long-running (servers, watchers)? Run detached: fire cli bg -m \"why\" <command> (see: fire cli ps). In a terminal, Ctrl+Z detaches any fire command.";
 
 pub(crate) fn print_scope_help(config: &LoadedConfig, path: &[String]) -> bool {
     let printed = print_scope_help_inner(config, path);
@@ -78,6 +78,16 @@ pub(crate) fn print_command_help(command_path: &[String], command: &CommandEntry
 
     if !command.allows_agents() {
         println!("Agents: not available (agents: false)");
+    }
+    if let Some(spec) = command.spec() {
+        if spec.long_running == Some(true) {
+            println!(
+                "Long-running: starts detached when run without a terminal (long_running: true)"
+            );
+        }
+        if spec.session == Some(false) {
+            println!("Sessions: off, always runs directly (session: false)");
+        }
     }
 
     let subcommands = command_subcommands(command);

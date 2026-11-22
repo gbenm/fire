@@ -30,6 +30,9 @@ pub(crate) struct CommandNode {
     pub(crate) exec: Option<Vec<String>>,
     pub(crate) eval: Option<Vec<String>>,
     pub(crate) placeholder: Option<String>,
+    /// Server, watcher or worker: run it with `start_session`, not in your own shell.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) long_running: bool,
     pub(crate) subcommands: Vec<CommandNode>,
 }
 
@@ -40,6 +43,8 @@ pub(crate) struct CommandMatch {
     pub(crate) runnable: bool,
     pub(crate) exec: Option<Vec<String>>,
     pub(crate) eval: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) long_running: bool,
 }
 
 pub(crate) fn build_command_context(config: &LoadedConfig) -> CommandContext {
@@ -67,6 +72,7 @@ pub(crate) fn build_command_context(config: &LoadedConfig) -> CommandContext {
                 namespace.as_deref(),
                 group.as_deref(),
                 source,
+                None,
             ));
         }
     }
@@ -79,6 +85,7 @@ pub(crate) fn build_command_context(config: &LoadedConfig) -> CommandContext {
             "When a single local namespace is active (see `implicit_local_namespace`), its prefix token can be omitted.".to_string(),
             "Nodes with `runnable: false` are command groups; invoke one of their `subcommands` instead.".to_string(),
             "`exec`/`eval` show the underlying template(s) a command runs, for context only — invoke via `fire <path>`, not by copying these templates.".to_string(),
+            "`long_running: true` marks servers, watchers and workers: start them with `start_session`. Run from a shell without a terminal, they detach on their own and print a session id.".to_string(),
         ],
         commands,
     }
@@ -102,7 +109,12 @@ fn build_node(
     namespace: Option<&str>,
     group: Option<&str>,
     source: &'static str,
+    inherited_long_running: Option<bool>,
 ) -> CommandNode {
+    let long_running = entry
+        .spec()
+        .and_then(|spec| spec.long_running)
+        .or(inherited_long_running);
     let subcommands = entry
         .subcommands()
         .map(|map| {
@@ -111,7 +123,15 @@ fn build_node(
                 .map(|(sub_name, sub_entry)| {
                     let mut sub_path = path_tokens.to_vec();
                     sub_path.push(sub_name.clone());
-                    build_node(&sub_path, sub_name, sub_entry, namespace, group, source)
+                    build_node(
+                        &sub_path,
+                        sub_name,
+                        sub_entry,
+                        namespace,
+                        group,
+                        source,
+                        long_running,
+                    )
                 })
                 .collect()
         })
@@ -128,6 +148,7 @@ fn build_node(
         exec: entry.execution_commands(),
         eval: entry.evaluation_expressions(),
         placeholder: entry.spec().and_then(|spec| non_empty(&spec.placeholder)),
+        long_running: long_running == Some(true),
         subcommands,
     }
 }
@@ -158,6 +179,7 @@ fn collect_matches(node: &CommandNode, needle: &str, out: &mut Vec<CommandMatch>
             runnable: node.runnable,
             exec: node.exec.clone(),
             eval: node.eval.clone(),
+            long_running: node.long_running,
         });
     }
     for child in &node.subcommands {
@@ -200,7 +222,7 @@ struct SearchCommandsRequest {
 struct SessionOutputRequest {
     /// Session id, as returned by `list_sessions` or `fire cli bg`.
     id: String,
-    /// How many trailing lines of each stream to return (default 100).
+    /// How many trailing lines of output to return (default 100).
     lines: Option<usize>,
 }
 
@@ -220,8 +242,11 @@ struct StartSessionRequest {
 struct SendInputRequest {
     /// Session id.
     id: String,
-    /// Line of text written to the process's stdin (a newline is appended).
+    /// Text typed into the session's terminal. Enter is appended unless `raw` is true.
     text: String,
+    /// Send `text` as keys, without Enter, interpreting escapes: `\r` (Enter), `\n`, `\t`,
+    /// `\e` (Esc), `\\`, `\xHH` (any byte, e.g. `\x03` = Ctrl+C, `\e[A` = up arrow).
+    raw: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -270,8 +295,8 @@ fn run_fire_cli(args: &[&str], cwd: Option<&str>) -> String {
 struct SessionOutput {
     #[serde(flatten)]
     session: crate::session::SessionInfo,
-    stdout: String,
-    stderr: String,
+    /// The terminal output (stdout and stderr merged) as plain text.
+    output: String,
 }
 
 #[derive(Debug, Clone)]
@@ -322,17 +347,16 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Read the last lines of a detached session's stdout and stderr, plus its status."
+        description = "Read the last lines of a session's terminal output (stdout and stderr merged, colors and progress redraws cleaned up), plus its status."
     )]
     fn session_output(
         &self,
         Parameters(SessionOutputRequest { id, lines }): Parameters<SessionOutputRequest>,
     ) -> String {
         match crate::session::read_output(&id, lines.unwrap_or(100)) {
-            Some((session, stdout, stderr)) => to_json(&SessionOutput {
+            Some((session, output)) => to_json(&SessionOutput {
                 session: session.info(),
-                stdout,
-                stderr,
+                output,
             }),
             None => format!("{{\"error\": \"no session `{id}`\"}}"),
         }
@@ -350,12 +374,18 @@ impl FireMcpServer {
         run_fire_cli(&args, cwd.as_deref())
     }
 
-    #[tool(description = "Write a line of text to a running session's stdin.")]
+    #[tool(
+        description = "Type into a running session's terminal (it runs on a pty): a line of text followed by Enter, or with `raw: true` exact keys such as `q`, `\\x03` (Ctrl+C) or `\\e[A` (up arrow)."
+    )]
     fn send_input(
         &self,
-        Parameters(SendInputRequest { id, text }): Parameters<SendInputRequest>,
+        Parameters(SendInputRequest { id, text, raw }): Parameters<SendInputRequest>,
     ) -> String {
-        run_fire_cli(&["send", &id, &text], None)
+        if raw == Some(true) {
+            run_fire_cli(&["send", "--raw", &id, &text], None)
+        } else {
+            run_fire_cli(&["send", &id, &text], None)
+        }
     }
 
     #[tool(

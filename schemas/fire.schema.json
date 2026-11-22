@@ -44,6 +44,16 @@
         "$ref": "#/$defs/runtime"
       }
     },
+    "session": {
+      "type": "boolean",
+      "default": true,
+      "description": "File-level default for `session` on every command in this file. Set to false to run the command directly, never inside a session. By default, in a terminal every fire command runs in a session on a pty that you can detach (Ctrl+Z) and reattach (`fg`, or `fire cli fg <id>` from anywhere). Use it for programs that misbehave under the supervisor."
+    },
+    "long_running": {
+      "type": "boolean",
+      "default": false,
+      "description": "File-level default for `long_running` on every command in this file. Marks servers, watchers and workers. Without a terminal (agents' shells, scripts) the command starts as a detached session, prints its id and returns right away instead of blocking; an identical running session is reused. In a terminal it changes nothing. The MCP server exposes it so agents use `start_session`."
+    },
     "include": {
       "type": "array",
       "description": "List of additional local directories (relative to current directory) where Fire should load fire config files. Search is direct-level only (non-recursive).",
@@ -196,6 +206,16 @@
         "placeholder": {
           "type": "string",
           "description": "Placeholder template for this command."
+        },
+        "session": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set to false to run the command directly, never inside a session. By default, in a terminal every fire command runs in a session on a pty that you can detach (Ctrl+Z) and reattach (`fg`, or `fire cli fg <id>` from anywhere). Use it for programs that misbehave under the supervisor."
+        },
+        "long_running": {
+          "type": "boolean",
+          "default": false,
+          "description": "Marks servers, watchers and workers. Without a terminal (agents' shells, scripts) the command starts as a detached session, prints its id and returns right away instead of blocking; an identical running session is reused. In a terminal it changes nothing. The MCP server exposes it so agents use `start_session`."
         },
         "agents": {
           "type": "boolean",

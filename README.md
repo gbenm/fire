@@ -60,15 +60,19 @@ fire cli mcp
 Mark commands agents shouldn't touch (deploys, destructive DB tasks) with `agents: false`.
 Details: see [docs/mcp.md](./docs/mcp.md).
 
-## Detached sessions
-Run long-lived commands in the background with a short note so you and your agents can find them
-from any project, read their output, send input or signals, attach (Ctrl+Z detaches) or stop them:
+## Sessions
+In a terminal, every `fire` command runs on a pty under a small supervisor. It behaves exactly as if
+run directly (colors, prompts, Ctrl+C, exit code), but **Ctrl+Z detaches it** while it keeps
+running: `fg` brings it back, and `fire cli fg <id>` attaches to it from any other terminal. You and
+your agents can list sessions from any project, read their output, type into them, signal or stop
+them:
 ```bash
-fire cli bg -m "api for auth tests" api dev
+fire cli bg -m "api for auth tests" api dev   # start one detached
 fire cli ps
 fire cli fg <id>
 ```
-Details: see [docs/sessions.md](./docs/sessions.md).
+Mark servers and watchers with `long_running: true` so they detach on their own when an agent or a
+script runs them without a terminal. Details: see [docs/sessions.md](./docs/sessions.md).
 
 ## Documentation map
 - [Overview](./docs/overview.md)
@@ -76,7 +80,7 @@ Details: see [docs/sessions.md](./docs/sessions.md).
 - [Runtimes & eval](./docs/runtimes-and-eval.md)
 - [Shell completion](./docs/completion.md)
 - [MCP server](./docs/mcp.md)
-- [Detached sessions](./docs/sessions.md)
+- [Sessions](./docs/sessions.md)
 - [Progressive examples](./docs/examples.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 

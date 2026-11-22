@@ -150,9 +150,11 @@ fn print_cli_help() {
         "  bg [-m \"note\"] <command>  Run a fire command detached, with a short context note"
     );
     println!("  ps       List detached sessions (all projects)");
-    println!("  logs <id> [lines]  Show the last stdout/stderr lines of a session");
-    println!("  fg <id>  Attach to a session (Ctrl+Z detaches, Ctrl+C interrupts)");
-    println!("  send <id> <text>  Write a line to a session's stdin");
+    println!("  logs <id> [lines]  Show the last lines of a session's output");
+    println!("  fg <id>  Attach to a session (Ctrl+Z detaches, shell `fg` reattaches)");
+    println!(
+        "  send [--raw] <id> <text>  Type a line into a session (--raw: exact keys, e.g. '\\x03')"
+    );
     println!("  kill <id> [SIGNAL]  Stop a session (TERM, then KILL), or send SIGNAL (INT, HUP, USR1...)");
 }
 
