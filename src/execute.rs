@@ -12,7 +12,8 @@ use std::{
 
 use serde::Deserialize;
 
-use crate::config::{DirSetting, EnvFileSetting, RuntimeConfig};
+use crate::config::{DirSetting, EnvFileSetting, RunnerSetting, RuntimeConfig};
+use crate::container;
 use crate::env;
 use crate::resolve::ResolvedCommand;
 
@@ -69,9 +70,17 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
             &mut ignored_stats,
         )
     });
-    let rendered_runner = context.runner.as_deref().map(|value| {
+    let runner = context
+        .runner
+        .as_ref()
+        .map(|setting| runner_invocation(setting, &resolved, &context, None));
+    let fallback_runner = context
+        .fallback_runner
+        .as_ref()
+        .map(|setting| runner_invocation(setting, &resolved, &context, None));
+    let rendered_runner = runner.as_ref().map(|runner| {
         render_runtime_string(
-            value,
+            &runner.runner,
             &context,
             &original_args,
             computed_values,
@@ -80,9 +89,9 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
             &mut ignored_stats,
         )
     });
-    let rendered_fallback_runner = context.fallback_runner.as_deref().map(|value| {
+    let rendered_fallback_runner = fallback_runner.as_ref().map(|runner| {
         render_runtime_string(
-            value,
+            &runner.runner,
             &context,
             &original_args,
             computed_values,
@@ -145,12 +154,19 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     let commands_to_run = commands_with_remaining_args(&rendered_commands_to_run, &tail_args);
 
     let exit_code = match selected_runner {
-        RunnerMode::Runner(runner) | RunnerMode::Fallback(runner) => run_with_runner(
+        RunnerMode::Runner(invocation) => run_with_runner(
             &context.shell,
-            &runner,
+            &invocation,
             &context.dir,
             &commands_to_run,
-            &context.environment,
+            &runner_environment(&context, runner.as_ref()),
+        ),
+        RunnerMode::Fallback(invocation) => run_with_runner(
+            &context.shell,
+            &invocation,
+            &context.dir,
+            &commands_to_run,
+            &runner_environment(&context, fallback_runner.as_ref()),
         ),
         RunnerMode::Direct => run_in_single_shell(
             &context.shell,
@@ -173,9 +189,9 @@ enum RuntimeSdk {
 #[derive(Debug, Clone)]
 struct RuntimeDefinition {
     sdk: RuntimeSdk,
-    runner: String,
+    runner: RunnerSetting,
     check: Option<String>,
-    fallback_runner: Option<String>,
+    fallback_runner: Option<RunnerSetting>,
     paths: Vec<String>,
 }
 
@@ -298,7 +314,18 @@ fn start_runtime_engine_for_key(
         eprintln!("[fire] Runtime `{runtime_key}` is not defined in `runtimes`.");
         process::exit(1);
     });
-    let runtime = resolve_runtime_definition(runtime_key, runtime_config);
+    let runtime = resolve_runtime_definition(runtime_config);
+    let library_paths =
+        resolve_runtime_library_paths(resolved.runtime_paths_base_dir, &runtime.paths);
+    let runtime_target = || container::RuntimeTarget {
+        executable: default_runtime_runner(&runtime.sdk),
+        paths: &library_paths,
+    };
+    let runner = runner_invocation(&runtime.runner, resolved, context, Some(runtime_target()));
+    let fallback_runner = runtime
+        .fallback_runner
+        .as_ref()
+        .map(|setting| runner_invocation(setting, resolved, context, Some(runtime_target())));
 
     let mut ignored_stats = RenderStats::default();
     let rendered_check = runtime.check.as_deref().map(|value| {
@@ -313,7 +340,7 @@ fn start_runtime_engine_for_key(
         )
     });
     let rendered_runner = render_runtime_string(
-        &runtime.runner,
+        &runner.runner,
         context,
         args,
         computed_values,
@@ -321,9 +348,9 @@ fn start_runtime_engine_for_key(
         RenderMode::Shell,
         &mut ignored_stats,
     );
-    let rendered_fallback = runtime.fallback_runner.as_deref().map(|value| {
+    let rendered_fallback = fallback_runner.as_ref().map(|runner| {
         render_runtime_string(
-            value,
+            &runner.runner,
             context,
             args,
             computed_values,
@@ -342,8 +369,11 @@ fn start_runtime_engine_for_key(
         rendered_fallback.as_deref(),
     );
 
-    let runtime_runner = match selected {
-        RunnerMode::Runner(value) | RunnerMode::Fallback(value) => value,
+    let (runtime_runner, runner_env) = match selected {
+        RunnerMode::Runner(value) => (value, runner_environment(context, Some(&runner))),
+        RunnerMode::Fallback(value) => {
+            (value, runner_environment(context, fallback_runner.as_ref()))
+        }
         RunnerMode::Direct => {
             eprintln!("[fire] Runtime `{runtime_key}` has no valid runner.");
             process::exit(1);
@@ -363,11 +393,8 @@ fn start_runtime_engine_for_key(
         runtime_runner,
         runtime_bootstrap_invocation(&runtime.sdk)
     );
-    let mut engine =
-        RuntimeEngine::start(&context.shell, &launch, &context.dir, &context.environment);
+    let mut engine = RuntimeEngine::start(&context.shell, &launch, &context.dir, &runner_env);
 
-    let library_paths =
-        resolve_runtime_library_paths(resolved.runtime_paths_base_dir, &runtime.paths);
     for path in &library_paths {
         engine.load(path);
     }
@@ -801,18 +828,16 @@ fn format_runtime_request_json(request: &RuntimeRequest<'_>) -> String {
     format!("{{{}}}", parts.join(","))
 }
 
-fn resolve_runtime_definition(key: &str, config: &RuntimeConfig) -> RuntimeDefinition {
+fn resolve_runtime_definition(config: &RuntimeConfig) -> RuntimeDefinition {
     let sdk = parse_runtime_sdk(&config.sdk);
-    let runner = non_empty(&config.runner)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| default_runtime_runner(&sdk).to_string());
+    let runner = if config.runner.is_empty() {
+        RunnerSetting::Text(default_runtime_runner(&sdk).to_string())
+    } else {
+        config.runner.clone()
+    };
     let check = non_empty(&config.check).map(ToOwned::to_owned);
-    let fallback_runner = non_empty(&config.fallback_runner).map(ToOwned::to_owned);
-
-    if runner.trim().is_empty() {
-        eprintln!("[fire] Runtime `{key}` has an invalid runner.");
-        process::exit(1);
-    }
+    let fallback_runner =
+        (!config.fallback_runner.is_empty()).then(|| config.fallback_runner.clone());
 
     RuntimeDefinition {
         sdk,
@@ -1228,8 +1253,8 @@ struct ExecutionContext {
     shell: Shell,
     before: Option<String>,
     dir: PathBuf,
-    runner: Option<String>,
-    fallback_runner: Option<String>,
+    runner: Option<RunnerSetting>,
+    fallback_runner: Option<RunnerSetting>,
     check: Option<String>,
     placeholder: Option<String>,
     on_unused_args: Option<UnusedArgsMode>,
@@ -1237,6 +1262,9 @@ struct ExecutionContext {
     compute: BTreeMap<String, String>,
     env_file: EnvFileSetting,
     inline_environment: BTreeMap<String, String>,
+    /// Only what the fire file declares (`env_file`, `environment`).
+    declared_environment: BTreeMap<String, String>,
+    /// The declared variables with the process environment on top.
     environment: BTreeMap<String, String>,
 }
 
@@ -1365,11 +1393,11 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
         if let Some(check) = non_empty(&spec.check) {
             context.check = Some(check.to_string());
         }
-        if let Some(runner) = non_empty(&spec.runner) {
-            context.runner = Some(runner.to_string());
+        if !spec.runner.is_empty() {
+            context.runner = Some(spec.runner.clone());
         }
-        if let Some(fallback_runner) = non_empty(&spec.fallback_runner) {
-            context.fallback_runner = Some(fallback_runner.to_string());
+        if !spec.fallback_runner.is_empty() {
+            context.fallback_runner = Some(spec.fallback_runner.clone());
         }
         if let Some(value) = non_empty(&spec.shell) {
             shell = Some(value.to_string());
@@ -1400,7 +1428,7 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
 
     let include_base_dir =
         (resolved.runtime_paths_base_dir != resolved.project_dir).then_some(resolved.project_dir);
-    context.environment = env::resolve(
+    context.declared_environment = env::declared(
         resolved.runtime_paths_base_dir,
         include_base_dir,
         &context.env_file,
@@ -1410,6 +1438,8 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
         eprintln!("[fire] {err}");
         process::exit(1);
     });
+    context.environment = context.declared_environment.clone();
+    context.environment.extend(std::env::vars());
 
     if let Some(value) = shell {
         context.shell = Shell::parse(&value, &context.environment).unwrap_or_else(|err| {
@@ -1822,6 +1852,57 @@ fn ensure_working_directory(dir: &Path) {
     }
 }
 
+/// A runner as fire runs it: the string as written, or the one a container object generates,
+/// plus the values of the container's `-e KEY` flags.
+struct RunnerInvocation {
+    runner: String,
+    env: BTreeMap<String, String>,
+}
+
+fn runner_invocation(
+    setting: &RunnerSetting,
+    resolved: &ResolvedCommand<'_>,
+    context: &ExecutionContext,
+    runtime: Option<container::RuntimeTarget<'_>>,
+) -> RunnerInvocation {
+    match setting {
+        RunnerSetting::Text(runner) => RunnerInvocation {
+            runner: runner.trim().to_string(),
+            env: BTreeMap::new(),
+        },
+        RunnerSetting::Container(object) => {
+            let target = container::Target {
+                project_dir: resolved.project_dir,
+                config_dir: resolved.runtime_paths_base_dir,
+                dir: &context.dir,
+                declared_env: &context.declared_environment,
+                environment: &context.environment,
+                runtime,
+            };
+            let generated = container::generate(object, &target).unwrap_or_else(|err| {
+                eprintln!("[fire] {err}");
+                process::exit(1);
+            });
+            RunnerInvocation {
+                runner: generated.runner,
+                env: generated.env,
+            }
+        }
+    }
+}
+
+/// The runner's process environment: the command's, plus the container's `environment`.
+fn runner_environment(
+    context: &ExecutionContext,
+    runner: Option<&RunnerInvocation>,
+) -> BTreeMap<String, String> {
+    let mut environment = context.environment.clone();
+    if let Some(runner) = runner {
+        environment.extend(runner.env.clone());
+    }
+    environment
+}
+
 fn select_runner_mode(
     shell: &Shell,
     dir: &Path,
@@ -2186,7 +2267,7 @@ fn success_exit_status() -> process::ExitStatus {
     }
 }
 
-fn shell_escape(value: &str) -> String {
+pub(crate) fn shell_escape(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
     }

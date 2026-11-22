@@ -2,7 +2,8 @@ use std::{collections::BTreeMap, fs, path::Path};
 
 use crate::config::EnvFileSetting;
 
-pub(crate) fn resolve(
+/// Only the variables the fire file declares (`env_file`, `environment`), interpolated.
+pub(crate) fn declared(
     config_dir: &Path,
     include_base_dir: Option<&Path>,
     setting: &EnvFileSetting,
@@ -29,9 +30,6 @@ pub(crate) fn resolve(
     for (key, value) in environment {
         let expanded = interpolate(value, &shell, &values)?;
         values.insert(key.clone(), expanded);
-    }
-    for (key, value) in shell {
-        values.insert(key, value);
     }
     Ok(values)
 }
@@ -76,7 +74,7 @@ fn load_file(
     Ok(())
 }
 
-fn interpolate(
+pub(crate) fn interpolate(
     value: &str,
     shell: &BTreeMap<String, String>,
     values: &BTreeMap<String, String>,
@@ -151,7 +149,7 @@ mod tests {
         fs::write(child.join(".env"), "CHILD=yes\nDUP=child\n").unwrap();
         let inline = BTreeMap::from([("DUP".to_string(), "${CHILD}-inline".to_string())]);
 
-        let values = resolve(&child, Some(&root), &EnvFileSetting::Unset, &inline).unwrap();
+        let values = declared(&child, Some(&root), &EnvFileSetting::Unset, &inline).unwrap();
         assert_eq!(values.get("BASE").map(String::as_str), Some("yes"));
         assert_eq!(values.get("CHILD").map(String::as_str), Some("yes"));
         assert_eq!(values.get("DUP").map(String::as_str), Some("yes-inline"));

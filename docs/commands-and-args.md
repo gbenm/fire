@@ -162,6 +162,65 @@ runner: docker exec -it db bash -c {fire.exec}   # e.g. mysql asking for a passw
 
 `--dry-run` and the `[fire] runner` log show the runner as written, followed by each command.
 
+### Container runners
+
+`runner` and `fallback_runner` (in commands and in [runtimes](./runtimes-and-eval.md#container-object)) also take a container object, with Docker Compose key names. Fire **only turns it into a string runner** that follows the rules above; that string is what runs, what the `[fire] runner` log and `--dry-run` show, and you can copy it and run it by hand.
+
+```yaml
+commands:
+  test:
+    runner:
+      image: alpine
+    exec: ./scripts/test.sh
+```
+
+runs
+
+```sh
+docker run --rm -i -v /path/to/project:/path/to/project -w /path/to/project alpine
+```
+
+with the commands on stdin.
+
+| Key | Generates | Default |
+|---|---|---|
+| `image` | the image (required) | |
+| `engine` | `docker` or `podman` | `docker` |
+| `tty` | `-t` | `false`, never inferred from the terminal |
+| `command` | what runs inside the image | the image's own command |
+| `volumes` | `-v` for each entry | the project directory and the command's `dir`, at the same absolute path |
+| `working_dir` | `-w` | the command's resolved `dir` |
+| `environment` | `-e NAME` for each variable | the command's `environment` / `env_file` |
+| `user` | `--user` | none |
+| `network` / `network_mode` | `--network` | none |
+| `args` | extra flags before the image | none |
+
+- **`command`**: fire never picks a shell. Without `command`, the image's own command runs and the commands go to its stdin, which works for images whose default is a shell (`alpine`, `debian`, `ubuntu`). Images like `node` start `node` by default, so write `command: sh -c {fire.exec}` (stdin stays free) or `command: sh` (commands on stdin). Any `command` follows the [two modes](#how-commands-reach-the-runner).
+- **`tty: true`** needs `{fire.exec}` in `command`: otherwise the commands go to stdin, which can't be a terminal, and fire stops with an error before running anything.
+- **`volumes`** replace the inferred mounts entirely: list the project yourself if you still need it. Relative host paths (`./`, `../`) resolve from the fire file's directory, as in Compose.
+- **`environment`**: the container gets the variables the fire file declares (`environment`, `env_file`) plus the object's `environment`, which wins on conflict, never the whole host environment. Fire passes them as `-e NAME` and sets the values in the runner's environment, so they never show up in the log or `--dry-run`. Values take `${VAR}` like the command's `environment`.
+- **Values you write go into the string as written**, so the shell expands `$VAR`, `~` and `$(...)` in them; paths fire computes are quoted. On Linux, `user: $(id -u):$(id -g)` keeps files written to the project owned by you instead of root.
+- `network` and `network_mode` can't be combined, as in Compose.
+- Unknown keys are reported when the command runs (`unknown key `imagen``).
+
+```yaml
+commands:
+  build:
+    runner:
+      image: node:lts-alpine
+      command: sh -c {fire.exec}
+      tty: true
+      volumes:
+        - ./:/app
+        - ~/.npm:/root/.npm
+      working_dir: /app
+      environment:
+        NODE_ENV: production
+      user: $(id -u):$(id -g)
+      args: [--cpus, "2"]
+    exec: npm run build
+```
+
 ## Execution logs
 By default, Fire prints each shell command before executing it:
 - Direct execution (`exec` / shorthand)

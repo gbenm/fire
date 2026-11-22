@@ -41,7 +41,15 @@ in it, and Fire appends the sdk's arguments (`runner: docker run --rm -i my-imag
 ## Runtime runner exited before connecting
 - The runtime prints the reason above Fire's message: `Missing FIRE_RUNTIME_RPC_ADDR` or `Cannot connect to fire at …`.
 - In a container, pass the address: `-e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT` (see [Runtime runners](./runtimes-and-eval.md#runtime-runners)).
+- `Cannot connect to fire at host.docker.internal:…` with native Docker on Linux: the alias points at the bridge, not at Fire's loopback listener. Use `network_mode: host` in the [container object](./runtimes-and-eval.md#container-object), or `--network host -e FIRE_RUNTIME_RPC_ADDR=127.0.0.1:$FIRE_RUNTIME_RPC_PORT` in a string runner.
 - The runner must end in the sdk's executable (or an image whose entrypoint is it): Fire appends the sdk's arguments.
+
+## Container runner errors
+- `tty: true needs {fire.exec} in command`: without `{fire.exec}` the commands go to the container's stdin, which can't be a terminal. Add `command: sh -c {fire.exec}` or drop `tty`.
+- The container runs `node` (or another program) instead of your commands: without `command`, the image's own command runs. Add `command: sh -c {fire.exec}` or `command: sh`.
+- `unknown key ...`: the object only takes `image`, `engine`, `tty`, `command`, `volumes`, `working_dir`, `environment`, `user`, `network`, `network_mode` and `args`.
+- Files missing inside the container after setting `volumes`: explicit `volumes` replace the inferred mounts, so add the project yourself (`./:/app`).
+- Files created as root on Linux: set `user: $(id -u):$(id -g)`.
 
 ## Interactive `compute` gets an empty value
 - Without a terminal (pipes, CI, cron, `fire x < file`) a shell `compute` gets a closed stdin, so

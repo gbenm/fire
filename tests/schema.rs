@@ -35,9 +35,50 @@ fn namespace_prefix_is_required() {
 
 #[test]
 fn repo_fire_files_validate() {
-    for path in ["config.sample.fire.yml", "infer.fire.yml", "samples/test.fire.yml"] {
+    for path in [
+        "config.sample.fire.yml",
+        "infer.fire.yml",
+        "samples/test.fire.yml",
+    ] {
         let yaml = std::fs::read_to_string(path).unwrap();
         let errs = errors(&yaml);
         assert!(errs.is_empty(), "{path}: {errs:?}");
     }
+}
+
+#[test]
+fn runner_accepts_a_container_object() {
+    let yaml = r#"runtimes:
+  ts:
+    sdk: deno
+    fallback_runner:
+      image: denoland/deno:latest
+      network_mode: host
+commands:
+  build:
+    runner:
+      image: node:lts-alpine
+      engine: podman
+      tty: true
+      command: sh -c {fire.exec}
+      volumes: [./:/app]
+      working_dir: /app
+      environment:
+        NODE_ENV: production
+      user: $(id -u):$(id -g)
+      network: my-net
+      args: [--cpus, "2"]
+    exec: npm run build
+"#;
+    let errs = errors(yaml);
+    assert!(errs.is_empty(), "{errs:?}");
+}
+
+#[test]
+fn container_object_needs_an_image_and_known_keys() {
+    assert!(!errors("commands:\n  a:\n    runner:\n      command: sh\n    exec: x\n").is_empty());
+    assert!(!errors(
+        "commands:\n  a:\n    runner:\n      image: alpine\n      imagen: x\n    exec: x\n"
+    )
+    .is_empty());
 }

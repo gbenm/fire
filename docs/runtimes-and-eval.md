@@ -9,7 +9,8 @@ runtimes:
     sdk: deno
     runner: deno
     check: deno --version
-    fallback_runner: docker run --rm -i -v "$PWD:$PWD" -e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT denoland/deno:latest
+    fallback_runner:
+      image: denoland/deno:latest
     paths:
       - scripts/*.ts
       - scripts/helpers/*.ts
@@ -29,7 +30,8 @@ Fields:
 - `sdk`: one of `node`, `deno`, `python`.
 - `runner`: the sdk's executable, or a command that ends in it (default: `node`, `deno` or `python`). See [Runtime runners](#runtime-runners).
 - `check`: optional probe; if it fails, `fallback_runner` is used.
-- `fallback_runner`: alternative runner (often a container image) when `check` fails. Same rule as `runner`.
+- `fallback_runner`: alternative runner (often a container) when `check` fails. Same rule as `runner`.
+- `runner` and `fallback_runner` also take a [container object](#container-object).
 - `paths`: glob patterns to pre-load modules/functions into the runtime session.
   - Absolute paths are supported.
   - Relative paths are resolved from the directory of the YAML file that defines that runtime.
@@ -53,7 +55,43 @@ The bootstrap connects back to Fire over TCP, using `FIRE_RUNTIME_RPC_ADDR` (`12
 fallback_runner: docker run --rm -i -v "$PWD:$PWD" -e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT denoland/deno:latest
 ```
 
+With native Docker on Linux (no Docker Desktop), `host.docker.internal` points at the bridge, where Fire's loopback listener isn't reachable. Share the host network instead, so `127.0.0.1` inside the container is the host:
+
+```yaml
+fallback_runner: docker run --rm -i --network host -v "$PWD:$PWD" -e FIRE_RUNTIME_RPC_ADDR=127.0.0.1:$FIRE_RUNTIME_RPC_PORT denoland/deno:latest
+```
+
 Files in `paths` are loaded by their absolute path on the host, so mount their directory at the same path (`-v "$PWD:$PWD"` when the config is in the current directory). If the runtime can't connect, it prints why (`Missing FIRE_RUNTIME_RPC_ADDR`, `Cannot connect to fire at …`).
+
+### Container object
+
+The [container object](./commands-and-args.md#container-runners) builds that string for you:
+
+```yaml
+runtimes:
+  ts:
+    sdk: deno
+    fallback_runner:
+      image: denoland/deno:latest
+```
+
+generates
+
+```sh
+docker run --rm -i -v /project:/project -w /project --add-host=host.docker.internal:host-gateway -e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT denoland/deno:latest deno
+```
+
+- `command` defaults to the sdk's executable (`deno`, `node`, `python`); a custom one must end in it.
+- The project directory and the directories of `paths` outside it are mounted at the same absolute path, so `paths` load unchanged. Explicit `volumes` replace these mounts.
+- How the runtime reaches Fire depends only on the object's keys, never on your OS, so the same file generates the same string on every machine:
+
+| Keys | Flags | `FIRE_RUNTIME_RPC_ADDR` |
+|---|---|---|
+| `network_mode: host` | `--network host` | `127.0.0.1:$FIRE_RUNTIME_RPC_PORT` |
+| default, `engine: docker` | `--add-host=host.docker.internal:host-gateway` | `host.docker.internal:$FIRE_RUNTIME_RPC_PORT` |
+| default, `engine: podman` | | `host.containers.internal:$FIRE_RUNTIME_RPC_PORT` |
+
+The default works with Docker Desktop and podman machine. **With native Docker on Linux, add `network_mode: host`.**
 
 ## `eval` expressions
 Syntax: `<runtimeKey>:<code>`

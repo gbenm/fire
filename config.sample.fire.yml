@@ -19,7 +19,9 @@ runtimes:
     sdk: deno
     runner: deno
     check: deno --version
-    fallback_runner: docker run --rm -i -v "$PWD:$PWD" -e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT denoland/deno:latest
+    # container object: fire generates the `docker run ...` string (native Docker on Linux: add `network_mode: host`)
+    fallback_runner:
+      image: denoland/deno:latest
     paths:
       - scripts/*.ts
       - scripts/helpers/*.ts

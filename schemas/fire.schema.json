@@ -91,6 +91,69 @@
     }
   },
   "$defs": {
+    "containerRunner": {
+      "type": "object",
+      "description": "Container object: fire only generates a string runner from it, `<engine> run --rm -i [-t] <flags> <image> [command]`, which is what it runs, logs and shows in `--dry-run`. Keys follow Docker Compose. Values you write go into the string as written (the shell expands `$VAR`, `~`, `$(...)`); paths fire computes are quoted.",
+      "additionalProperties": false,
+      "required": ["image"],
+      "properties": {
+        "image": {
+          "type": "string",
+          "description": "Image to run.",
+          "examples": ["alpine", "node:lts-alpine", "denoland/deno:latest"]
+        },
+        "engine": {
+          "type": "string",
+          "enum": ["docker", "podman"],
+          "default": "docker",
+          "description": "Container engine. Only the host alias for runtimes differs (`host.docker.internal` / `host.containers.internal`)."
+        },
+        "tty": {
+          "type": "boolean",
+          "default": false,
+          "description": "Adds `-t`. Never inferred from the terminal. In a command runner it needs `{fire.exec}` in `command`, since otherwise the commands go to stdin, which can't be a terminal."
+        },
+        "command": {
+          "type": "string",
+          "description": "What runs inside the image. Command runners: when omitted, the image's own command runs and fire writes the commands to its stdin (works for images whose default is a shell, like `alpine`); for others write `sh -c {fire.exec}` or `sh`. Runtime runners: defaults to the sdk's executable and must end in it.",
+          "examples": ["sh -c {fire.exec}", "bash -c {fire.exec}", "sh"]
+        },
+        "volumes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "`host:container[:options]` mounts. Relative host paths (`./`, `../`) resolve from the fire file's directory. When set, they REPLACE the inferred mounts entirely (the project directory, the command's `dir` and the runtime `paths` directories, at the same absolute path): mount them yourself if you still need them."
+        },
+        "working_dir": {
+          "type": "string",
+          "description": "`-w` inside the container. Defaults to the command's resolved `dir`."
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Extra variables for the container, on top of the command's `environment`/`env_file` (these win on conflict). Fire passes every variable as `-e NAME` and sets the value in the runner's environment, so values never appear in the log or `--dry-run`. The host environment is not passed."
+        },
+        "user": {
+          "type": "string",
+          "description": "`--user`. No default. On Linux, `$(id -u):$(id -g)` keeps files written to the mounted project owned by you.",
+          "examples": ["$(id -u):$(id -g)", "1000:1000"]
+        },
+        "network": {
+          "type": "string",
+          "description": "`--network <name>`. Can't be combined with `network_mode`."
+        },
+        "network_mode": {
+          "type": "string",
+          "description": "`--network <mode>`, as in Compose. With `host`, runtimes reach fire at `127.0.0.1` (needed with native Docker on Linux); otherwise through the engine's host alias.",
+          "examples": ["host"]
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Extra flags for `run`, added as written before the image.",
+          "examples": [["--cpus", "2"]]
+        }
+      }
+    },
     "namespace": {
       "type": "object",
       "additionalProperties": false,
@@ -122,16 +185,25 @@
           ]
         },
         "runner": {
-          "type": "string",
-          "description": "The sdk's executable, or a command that ends in it (`deno`, `uv run python`, `docker run --rm -i denoland/deno:latest`). Fire appends the sdk's bootstrap arguments and never rewrites it. Launched through the command's `shell`. Fire exports `FIRE_RUNTIME_RPC_ADDR` and `FIRE_RUNTIME_RPC_PORT`; a container runner must pass the address itself, e.g. `-e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT`."
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "The sdk's executable, or a command that ends in it (`deno`, `uv run python`, `docker run --rm -i denoland/deno:latest`). Fire appends the sdk's bootstrap arguments and never rewrites it. Launched through the command's `shell`. Fire exports `FIRE_RUNTIME_RPC_ADDR` and `FIRE_RUNTIME_RPC_PORT`; a container runner must pass the address itself, e.g. `-e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT` (Docker Desktop) or `--network host -e FIRE_RUNTIME_RPC_ADDR=127.0.0.1:$FIRE_RUNTIME_RPC_PORT` (native Docker on Linux)."
+            },
+            { "$ref": "#/$defs/containerRunner" }
+          ],
+          "description": "The sdk's executable or a command that ends in it, or a container object that fire turns into one (default `command`: the sdk's executable; fire adds the RPC address)."
         },
         "check": {
           "type": "string",
           "description": "Health-check command to verify runtime availability."
         },
         "fallback_runner": {
-          "type": "string",
-          "description": "Runner used when `check` fails. Same rule as `runner`: the sdk's executable, or a command that ends in it."
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/$defs/containerRunner" }
+          ],
+          "description": "Runner used when `check` fails. Same rule as `runner`: the sdk's executable, or a command that ends in it, or a container object."
         },
         "paths": {
           "type": "array",
@@ -207,12 +279,18 @@
           "examples": ["zsh", "bash", "$SHELL"]
         },
         "runner": {
-          "type": "string",
-          "description": "Command that runs `exec` inside another environment (container, ssh, ...), exactly as written. With `{fire.exec}` in it, fire replaces it with the commands as one quoted argument and stdin stays free (`docker run --rm -it node sh -c {fire.exec}`); don't quote it yourself. Without it, the commands are written to the runner's stdin, so it needs `-i` and no `-t` (`docker run --rm -i node sh`). Launched through `shell`."
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/$defs/containerRunner" }
+          ],
+          "description": "Command that runs `exec` inside another environment (container, ssh, ...), exactly as written, or a container object that fire turns into such a command. With `{fire.exec}` in it, fire replaces it with the commands as one quoted argument and stdin stays free (`docker run --rm -it node sh -c {fire.exec}`); don't quote it yourself. Without it, the commands are written to the runner's stdin, so it needs `-i` and no `-t` (`docker run --rm -i node sh`). Launched through `shell`."
         },
         "fallback_runner": {
-          "type": "string",
-          "description": "Runner used if `check` fails. Same rules as `runner`: `{fire.exec}` or commands on stdin."
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/$defs/containerRunner" }
+          ],
+          "description": "Runner used if `check` fails. Same rules as `runner`: `{fire.exec}` or commands on stdin, or a container object."
         },
         "before": {
           "type": "string",

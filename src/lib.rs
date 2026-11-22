@@ -3,6 +3,7 @@ use std::{env as std_env, path::Path, process};
 mod cli;
 mod completion;
 mod config;
+mod container;
 mod env;
 mod execute;
 mod help;

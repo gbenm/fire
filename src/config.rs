@@ -79,9 +79,9 @@ pub(crate) struct CommandSpec {
     #[serde(default)]
     pub(crate) check: String,
     #[serde(default)]
-    pub(crate) runner: String,
+    pub(crate) runner: RunnerSetting,
     #[serde(default)]
-    pub(crate) fallback_runner: String,
+    pub(crate) fallback_runner: RunnerSetting,
     /// Interpreter for every shell snippet (`exec`, shell `compute`, `before`, `check`) and for
     /// launching the runner. Empty means `sh`.
     #[serde(default)]
@@ -115,13 +115,112 @@ pub(crate) struct RuntimeConfig {
     #[serde(default)]
     pub(crate) sdk: String,
     #[serde(default)]
-    pub(crate) runner: String,
+    pub(crate) runner: RunnerSetting,
     #[serde(default)]
     pub(crate) check: String,
     #[serde(default)]
-    pub(crate) fallback_runner: String,
+    pub(crate) fallback_runner: RunnerSetting,
     #[serde(default)]
     pub(crate) paths: Vec<String>,
+}
+
+/// `runner` / `fallback_runner`: a command written by hand, or a container object that fire
+/// turns into one (`<engine> run --rm -i ... <image> [command]`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum RunnerSetting {
+    Text(String),
+    Container(Box<ContainerRunner>),
+}
+
+impl Default for RunnerSetting {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
+}
+
+impl RunnerSetting {
+    pub(crate) fn is_empty(&self) -> bool {
+        matches!(self, Self::Text(value) if value.trim().is_empty())
+    }
+}
+
+impl<'de> Deserialize<'de> for RunnerSetting {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RunnerVisitor;
+
+        impl<'de> Visitor<'de> for RunnerVisitor {
+            type Value = RunnerSetting;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a runner command or a container object with `image`")
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(RunnerSetting::default())
+            }
+
+            fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(RunnerSetting::default())
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                RunnerSetting::deserialize(deserializer)
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(RunnerSetting::Text(value.to_string()))
+            }
+
+            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::MapAccess<'de>,
+            {
+                let container =
+                    ContainerRunner::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                Ok(RunnerSetting::Container(Box::new(container)))
+            }
+        }
+
+        deserializer.deserialize_any(RunnerVisitor)
+    }
+}
+
+/// Container object for `runner` / `fallback_runner`, with Docker Compose key names. It only
+/// generates a string runner; see `container::generate`.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub(crate) struct ContainerRunner {
+    #[serde(default)]
+    pub(crate) image: String,
+    #[serde(default)]
+    pub(crate) engine: Option<String>,
+    #[serde(default)]
+    pub(crate) tty: bool,
+    #[serde(default)]
+    pub(crate) command: Option<String>,
+    #[serde(default)]
+    pub(crate) volumes: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) working_dir: Option<String>,
+    #[serde(default)]
+    pub(crate) environment: BTreeMap<String, String>,
+    #[serde(default)]
+    pub(crate) user: Option<String>,
+    #[serde(default)]
+    pub(crate) network: Option<String>,
+    #[serde(default)]
+    pub(crate) network_mode: Option<String>,
+    #[serde(default)]
+    pub(crate) args: Vec<String>,
+    /// Unknown keys, reported when the runner is generated (a typo here must not make the
+    /// whole file unreadable).
+    #[serde(flatten)]
+    pub(crate) unknown: BTreeMap<String, de::IgnoredAny>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -154,9 +253,9 @@ struct FireFileRaw {
     #[serde(default)]
     check: String,
     #[serde(default)]
-    runner: String,
+    runner: RunnerSetting,
     #[serde(default)]
-    fallback_runner: String,
+    fallback_runner: RunnerSetting,
     #[serde(default)]
     shell: String,
     #[serde(default)]
@@ -756,10 +855,10 @@ fn apply_file_defaults_to_entry(entry: CommandEntry, defaults: &CommandSpec) -> 
             if spec.check.trim().is_empty() {
                 spec.check = defaults.check.clone();
             }
-            if spec.runner.trim().is_empty() {
+            if spec.runner.is_empty() {
                 spec.runner = defaults.runner.clone();
             }
-            if spec.fallback_runner.trim().is_empty() {
+            if spec.fallback_runner.is_empty() {
                 spec.fallback_runner = defaults.fallback_runner.clone();
             }
             if spec.shell.trim().is_empty() {
@@ -811,8 +910,8 @@ fn command_defaults_empty(defaults: &CommandSpec) -> bool {
         && defaults.macros.is_empty()
         && defaults.dir.is_effectively_empty()
         && defaults.check.trim().is_empty()
-        && defaults.runner.trim().is_empty()
-        && defaults.fallback_runner.trim().is_empty()
+        && defaults.runner.is_empty()
+        && defaults.fallback_runner.is_empty()
         && defaults.shell.trim().is_empty()
         && matches!(defaults.env_file, EnvFileSetting::Unset)
         && defaults.environment.is_none()
@@ -1283,10 +1382,9 @@ mod tests {
         assert_eq!(ns.prefix, "tools");
         assert_eq!(ns.description, "");
 
-        let long: FireFileRaw = yaml_serde::from_str(
-            "namespace:\n  prefix: tools\n  description: Tools\ncommands: {}",
-        )
-        .expect("deserialize");
+        let long: FireFileRaw =
+            yaml_serde::from_str("namespace:\n  prefix: tools\n  description: Tools\ncommands: {}")
+                .expect("deserialize");
         let ns = long.namespace.expect("namespace");
         assert_eq!(ns.prefix, "tools");
         assert_eq!(ns.description, "Tools");

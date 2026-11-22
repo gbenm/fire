@@ -368,7 +368,7 @@ fn runtime_runner_and_check_use_the_configured_shell() {
 }
 
 /// Hand-written container runner on Docker Desktop, where `host.docker.internal` reaches fire's
-/// listener on the host's 127.0.0.1. Linux without Docker Desktop is tracked in #44.
+/// listener on the host's 127.0.0.1. Native Docker on Linux needs `--network host` instead.
 #[test]
 #[cfg(target_os = "macos")]
 fn docker_runtime_runner_connects_with_the_port() {

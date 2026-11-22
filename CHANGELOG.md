@@ -25,6 +25,13 @@ reconstructed from the git history.
   (including session ptys, answered with `fire cli send`), so a compute can prompt. Without a
   terminal stdin is closed and the compute never blocks. (#23)
 - `namespace: tools` as shorthand for `namespace: { prefix: tools }`. (#32)
+- Container object for `runner` / `fallback_runner` (commands and runtimes), with Compose key
+  names (`image`, `engine`, `tty`, `command`, `volumes`, `working_dir`, `environment`, `user`,
+  `network`, `network_mode`, `args`). Fire only turns it into a string runner, shown in the log
+  and `--dry-run`: it mounts the project at the same path, forwards the declared environment as
+  `-e NAME` (values never printed) and, for runtimes, passes the RPC address (`network_mode: host`
+  for native Docker on Linux). (#44)
+- Docs: the runtime runner form for native Docker on Linux (`--network host`). (#44)
 - Docs: comparison with other task runners, MCP setup per host, schema `$id`.
 
 ### Changed
