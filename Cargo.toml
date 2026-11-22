@@ -1,6 +1,6 @@
 [package]
 name = "fire-cli"
-version = "2.10.1"
+version = "3.0.0"
 edition = "2021"
 description = "Config-first task runner: YAML commands, dynamic completion, detachable pty sessions, and an MCP server for AI agents"
 license = "MIT"

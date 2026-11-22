@@ -6,6 +6,8 @@ reconstructed from the git history.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-22
+
 ### Breaking
 - Runners run exactly as written. Fire no longer strips `-t`/`--tty`, no longer adds `-T` to
   `docker compose exec`, and no longer switches shell runners (`docker exec -it db bash`) to an
@@ -251,7 +253,8 @@ Version bump only.
 - First release: commands from YAML, namespaces and groups, global install, `include`, `init`,
   `runner` / `fallback_runner` / `check`, `before`, placeholders and macros, completion.
 
-[Unreleased]: https://github.com/gbenm/fire/compare/v2.10.1...HEAD
+[Unreleased]: https://github.com/gbenm/fire/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/gbenm/fire/compare/v2.10.1...v3.0.0
 [2.10.1]: https://github.com/gbenm/fire/compare/v2.10.0...v2.10.1
 [2.10.0]: https://github.com/gbenm/fire/compare/v2.9.0...v2.10.0
 [2.9.0]: https://github.com/gbenm/fire/compare/v2.8.1...v2.9.0
