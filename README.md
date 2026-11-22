@@ -9,7 +9,7 @@
 
 ![Fire demo: define commands in fire.yml, run them, detach a dev server with Ctrl+Z, and let an AI agent reuse it over MCP](./docs/assets/demo.gif)
 
-Put your project's commands in a `fire.yml`, and get:
+Put your project's commands in a `fire.yaml`, and get:
 
 - **One entry point** for build, test, dev servers, containers, and scripts: `fire <command>`, with
   tab completion and descriptions generated from your config.
@@ -24,7 +24,8 @@ If you've used `make`, `just`, Task, or `npm run` as a command menu, Fire fills 
 adds completion, sessions, and an agent interface on top ([how they compare](./docs/comparison.md)).
 
 ```yaml
-# fire.yml
+# fire.yaml
+---
 commands:
   test: cargo test
   dev:
@@ -72,15 +73,17 @@ Or download a binary from the [latest release](https://github.com/gbenm/fire/rel
 run it from the WSL terminal. Native Windows isn't supported, since sessions rely on Unix ptys.
 
 ## Quick start (5 minutes)
-1) Run `fire cli init` in your project to create a `fire.yml`:
+1) Run `fire cli init` in your project to create a `fire.yaml`:
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/gbenm/fire/main/schemas/fire.schema.json
+---
 commands:
   hello: echo "Hello Fire"
 ```
 
 > **Tip:** already have `package.json` scripts, a `Makefile`, a `justfile` or a `compose.yml`?
 > Ask your coding agent to write the initial config for you, for example:
-> *"Create a fire.yml for this project from its existing scripts. Use the schema in the
+> *"Create a fire.yaml for this project from its existing scripts. Use the schema in the
 > `# yaml-language-server` comment, add a `description` to every command, and mark dev servers
 > and watchers with `long_running: true`."*
 
@@ -101,7 +104,7 @@ claude mcp add fire -- fire cli mcp
 ```
 
 ## Configuration at a glance
-Fire loads, merges, and executes commands defined in YAML (`fire.yml`, `fire.yaml`, `*.fire.yml`, `*.fire.yaml`). Commands can:
+Fire loads, merges, and executes commands defined in YAML (`fire.yaml`, `*.fire.yaml`, or the same names with `.yml`). Commands can:
 - run shell `exec` steps
 - evaluate runtime snippets via `eval` (node/deno/python)
 - rewrite arguments with `compute`
@@ -122,7 +125,7 @@ Details: see [docs/completion.md](./docs/completion.md).
 
 ## Schema & editor support
 Associate your YAML with https://raw.githubusercontent.com/gbenm/fire/main/schemas/fire.schema.json for validation (`fire cli init` does it):
-- Add `$schema` to the first line: `# yaml-language-server: $schema=https://raw.githubusercontent.com/gbenm/fire/main/schemas/fire.schema.json`
+- Add `$schema` to the first line: `# yaml-language-server: $schema=https://raw.githubusercontent.com/gbenm/fire/main/schemas/fire.schema.json`, followed by `---` to start the document (linters such as yamllint's `document-start` rule expect it)
 - Or map file names in `.vscode/settings.json` (`yaml.schemas`).
 
 ## MCP server for agents

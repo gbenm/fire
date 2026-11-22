@@ -37,6 +37,10 @@ reconstructed from the git history.
 ### Changed
 - The runtime `runner` and its `check` are launched through the command's `shell`. (#21)
 - Documented rule: a runtime `runner` is the sdk's executable, or a command that ends in it. (#21)
+- `fire cli init` writes `fire.yaml` / `<base>.fire.yaml` (a typed `.yml` name is kept) and adds
+  `---` after the schema comment, so linters like yamllint's `document-start` rule pass. It warns
+  when the same file with the other extension already exists, since both get loaded. Existing
+  `.yml` files keep working. (#48)
 
 ### Fixed
 - node and deno runtimes print why they exit (`Missing FIRE_RUNTIME_RPC_ADDR`,

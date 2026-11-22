@@ -127,6 +127,12 @@ fn run_init() {
         non_empty(&group),
     );
 
+    if let Some(sibling) = sibling_with_other_extension(&file_name) {
+        println!(
+            "Note: '{sibling}' also exists here. Fire loads both files, and a command defined in both is reported as a duplicate."
+        );
+    }
+
     if let Err(err) = fs::write(&output_path, content) {
         eprintln!("[fire] Failed to write {}: {err}", output_path.display());
         process::exit(1);
@@ -202,7 +208,7 @@ fn is_brew_formula_installed(formula: &str) -> bool {
 
 fn prompt_base_file_name() -> String {
     loop {
-        let value = prompt_line("Base file name (backend/common/database). Empty -> fire.yml:");
+        let value = prompt_line("Base file name (backend/common/database). Empty -> fire.yaml:");
         if value.is_empty() {
             return value;
         }
@@ -263,13 +269,29 @@ fn is_valid_file_base(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
+/// `.yaml` unless the user typed an explicit `.yml` suffix.
 fn file_name_from_base(base: &str) -> String {
     let trimmed = base.trim();
     if trimmed.is_empty() {
-        return "fire.yml".to_string();
+        return "fire.yaml".to_string();
     }
+    let extension = if trimmed.ends_with(".yml") {
+        "yml"
+    } else {
+        "yaml"
+    };
     let normalized = strip_known_yaml_suffixes(trimmed);
-    format!("{normalized}.fire.yml")
+    format!("{normalized}.fire.{extension}")
+}
+
+/// The same config file with the other YAML extension, if it exists.
+fn sibling_with_other_extension(file_name: &str) -> Option<String> {
+    let other = if let Some(stem) = file_name.strip_suffix(".yaml") {
+        format!("{stem}.yml")
+    } else {
+        format!("{}.yaml", file_name.strip_suffix(".yml")?)
+    };
+    Path::new(&other).exists().then_some(other)
 }
 
 fn build_init_yaml(
@@ -282,9 +304,9 @@ fn build_init_yaml(
         "# yaml-language-server: $schema=https://raw.githubusercontent.com/gbenm/fire/main/schemas/fire.schema.json"
             .to_string(),
     );
+    lines.push("---".to_string());
 
     if let Some(prefix) = namespace_prefix {
-        lines.push(String::new());
         lines.push("namespace:".to_string());
         lines.push(format!("  prefix: {}", yaml_quote(prefix)));
         lines.push(format!(
@@ -294,11 +316,15 @@ fn build_init_yaml(
     }
 
     if let Some(group) = group {
-        lines.push(String::new());
+        if namespace_prefix.is_some() {
+            lines.push(String::new());
+        }
         lines.push(format!("group: {}", yaml_quote(group)));
     }
 
-    lines.push(String::new());
+    if namespace_prefix.is_some() || group.is_some() {
+        lines.push(String::new());
+    }
     lines.push("commands:".to_string());
     lines.push("  example: echo \"hello world\"".to_string());
     lines.push(String::new());
@@ -545,14 +571,39 @@ mod tests {
     };
 
     #[test]
-    fn empty_base_name_uses_fire_yml() {
-        assert_eq!(file_name_from_base(""), "fire.yml");
+    fn empty_base_name_uses_fire_yaml() {
+        assert_eq!(file_name_from_base(""), "fire.yaml");
     }
 
     #[test]
     fn base_name_generates_pattern_file_name() {
-        assert_eq!(file_name_from_base("backend"), "backend.fire.yml");
+        assert_eq!(file_name_from_base("backend"), "backend.fire.yaml");
+        assert_eq!(
+            file_name_from_base("backend.fire.yaml"),
+            "backend.fire.yaml"
+        );
+        assert_eq!(file_name_from_base("backend.yaml"), "backend.fire.yaml");
+    }
+
+    #[test]
+    fn explicit_yml_extension_is_respected() {
         assert_eq!(file_name_from_base("backend.fire.yml"), "backend.fire.yml");
+        assert_eq!(file_name_from_base("backend.yml"), "backend.fire.yml");
+    }
+
+    #[test]
+    fn yaml_starts_document_after_schema_comment() {
+        for yaml in [
+            build_init_yaml(None, None, None),
+            build_init_yaml(Some("ex"), Some("Example"), Some("backend")),
+        ] {
+            let mut lines = yaml.lines();
+            assert!(lines
+                .next()
+                .unwrap()
+                .starts_with("# yaml-language-server: $schema="));
+            assert_eq!(lines.next(), Some("---"));
+        }
     }
 
     #[test]

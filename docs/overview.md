@@ -3,7 +3,7 @@
 Fire is a configuration-driven CLI. Commands, completion, and runtime execution are defined in YAML files you keep alongside your project. This document covers how Fire discovers config, merges scopes, and resolves command paths.
 
 ## What makes Fire different?
-- **Config-first**: behavior lives in `*.fire.yml` files; no code changes needed to add commands.
+- **Config-first**: behavior lives in `*.fire.yaml` files; no code changes needed to add commands.
 - **Dynamic completion**: tab-completion is generated from your config (with descriptions when present).
 - **Runtime-aware**: evaluate JS/TS (node/deno) or Python snippets directly from YAML.
 - **Containers and runners**: route commands through runners or fallback runners with health checks.
@@ -15,10 +15,14 @@ Fire loads YAML files from the current working directory using these patterns:
 - `*.fire.yaml`
 - `*.fire.yml`
 
+`.yaml` and `.yml` are equivalent; `fire cli init` writes `.yaml` unless you type a `.yml` name.
+
 Merge rules:
 1) `fire.yaml` / `fire.yml` (base)  
 2) `*.fire.yaml` / `*.fire.yml` in lexicographic order  
-If the same command path is defined multiple times, the **last loaded** definition wins.
+Commands from all files are merged. If two files in the same scope define the same command path, running it fails with a `Duplicate terminal command` error naming both files.
+
+Both extensions of the same name (for example `fire.yml` and `fire.yaml`) are loaded as two separate files, so keep only one. `fire cli init` warns when it creates a file whose other-extension twin already exists.
 
 ### Includes
 Root files may declare `include` to load additional directories (non-recursive):

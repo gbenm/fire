@@ -8,7 +8,7 @@ what Fire adds, and when another tool is the better fit.
 
 | | Fire |
 |---|---|
-| **Config** | YAML (`fire.yml`, `*.fire.yml`), with a JSON Schema for editor validation |
+| **Config** | YAML (`fire.yaml`, `*.fire.yaml`, `.yml` also works), with a JSON Schema for editor validation |
 | **Completion** | Generated from your config, nested groups included, with descriptions (zsh) |
 | **Commands everywhere** | Register a directory once (`fire cli install`) and call its namespace from any directory |
 | **Long-running processes** | Every command runs on a pty you can detach (Ctrl+Z) and reattach from any terminal (`fire cli fg <id>`) |

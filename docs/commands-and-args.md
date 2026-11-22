@@ -100,7 +100,7 @@ commands:
     shell: $SHELL     # the user's login shell
     exec: echo "running in $0"
 ```
-- **The default is `sh`**, on purpose: `fire.yml` files are shared, and `$SHELL` changes between users (fish isn't even POSIX), CI, agents and background sessions.
+- **The default is `sh`**, on purpose: fire files are shared, and `$SHELL` changes between users (fish isn't even POSIX), CI, agents and background sessions.
 - Accepts any executable, optionally with arguments (`zsh`, `/bin/zsh`, `bash -l`), or a variable such as `$SHELL` / `${SHELL}`. Variables are read from the command's [environment](#environment) first, then from fire's own; an unset variable is an error.
 - For your personal commands, put `shell: $SHELL` at the top of the fire files in the directories you registered with `fire cli install`: it only affects those commands, never shared repos.
 - Non-interactive shells don't load `.zshrc` / `.bashrc`, so aliases and functions defined there aren't available. Use `bash -l` / `zsh -l` if you need your login profile.
