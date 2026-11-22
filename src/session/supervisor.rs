@@ -157,6 +157,8 @@ pub(crate) fn supervise(id: &str, rows: u16, cols: u16) {
 
     // Output written right before exiting may still be buffered in the pty.
     supervisor.pump_output(&mut clients);
+    // Re-read: the note or `stopped` may have changed while it ran.
+    let mut session = load(id).unwrap_or(session);
     session.exit_code = Some(exit_code);
     session.ended_at = Some(now());
     save(&session);

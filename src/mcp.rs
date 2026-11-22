@@ -336,7 +336,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "List detached `fire` sessions across all projects (started with `fire cli bg`, by any agent or the user): id, command, note (why it was started), cwd, status, pid and exit code. Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `session_output` first: it usually shows why it failed (e.g. port in use)."
+        description = "List detached `fire` sessions across all projects (started with `fire cli bg`, by any agent or the user): id, command, note (why it was started), cwd, status (`running`, `exited`, `stopped` = stopped on purpose, `lost`), pid and exit code. Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `session_output` first: it usually shows why it failed (e.g. port in use)."
     )]
     fn list_sessions(&self) -> String {
         let sessions: Vec<_> = crate::session::list_sessions()
@@ -363,7 +363,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. `command` must be a configured fire command (find it with `search_commands`). Check `list_sessions` first to avoid duplicates. Returns the session id in `stdout`; then confirm it came up with `session_output`. Fails for commands the user reserved for humans (`agents: false`)."
+        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. `command` must be a configured fire command (find it with `search_commands`). One command in one cwd is one session: if it is already running, this returns its id and replaces its note instead of starting a duplicate; if it ended (crashed or stopped), it starts again under the same id with the new note. So to restart a server, stop it with `signal_session` and call this again. Returns the session id in `stdout`; then confirm it came up with `session_output`. Fails for commands the user reserved for humans (`agents: false`)."
     )]
     fn start_session(
         &self,

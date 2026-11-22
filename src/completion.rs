@@ -154,6 +154,10 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         return None;
     }
 
+    if path.len() >= 2 && path[1] == "ps" {
+        return Some(core_cli_ps_flags(&path[2..], prefix));
+    }
+
     match path.len() {
         1 => Some(core_cli_children(prefix)),
         2 => {
@@ -225,6 +229,18 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
     suggestions
         .into_iter()
         .filter(|suggestion| suggestion.value.starts_with(prefix))
+        .collect()
+}
+
+/// `fire cli ps` filter flags not typed yet.
+fn core_cli_ps_flags(typed: &[String], prefix: &str) -> Vec<CompletionSuggestion> {
+    crate::session::PS_FLAGS
+        .iter()
+        .filter(|(flag, _)| flag.starts_with(prefix) && !typed.iter().any(|arg| arg == flag))
+        .map(|(flag, description)| CompletionSuggestion {
+            value: flag.to_string(),
+            description: Some(description.to_string()),
+        })
         .collect()
 }
 
@@ -1077,6 +1093,22 @@ commands:
                 "kill"
             ]
         );
+    }
+
+    #[test]
+    fn core_cli_ps_completes_filter_flags() {
+        let config = config_with_scopes();
+        let values = completion_suggestions(
+            &config,
+            &[
+                "cli".to_string(),
+                "ps".to_string(),
+                "--failed".to_string(),
+                "--".to_string(),
+            ],
+        );
+        let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
+        assert_eq!(names, vec!["--all", "--exited", "--stopped"]);
     }
 
     #[test]

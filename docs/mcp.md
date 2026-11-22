@@ -89,7 +89,8 @@ isn't practical.
 
 ### `list_sessions`
 Returns every detached session (started by any agent or by you, from any project): `id`,
-`command`, `note` (the short reason it was started), `cwd`, `status` (`running`, `exited`, `lost`),
+`command`, `note` (the short reason it was started), `cwd`, `status` (`running`, `exited`,
+`stopped` when someone stopped it on purpose, `lost`),
 `pid`, `exit_code`, and timestamps.
 
 ### `session_output`
@@ -101,7 +102,10 @@ sequences removed and `\r` progress redraws collapsed.
 Takes `command` (the fire path plus arguments as a token array, without `fire`, e.g.
 `["api", "dev"]`), a required short `note`, and an optional `cwd` (project directory, defaulting to
 the server's). Same as `fire cli bg -m "<note>" <command...>`, except that it refuses commands
-marked `agents: false`. Returns the session id in `stdout`.
+marked `agents: false`. Returns the session id in `stdout`. One command in one `cwd` is one
+session: if it is already running, the tool returns that id and replaces its note; if it ended, it
+starts again under the same id. So a restart is `signal_session` followed by `start_session`, and
+the session list doesn't fill up with copies of the same server.
 
 ### `send_input`
 Takes `id` and `text`, and types the text followed by Enter into the session's terminal

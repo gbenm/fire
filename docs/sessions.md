@@ -59,7 +59,8 @@ commands:
 
 Without a terminal, `fire web` then starts a **detached** session, prints its id on stdout plus how
 to read its output, and exits 0 right away. If a running session with the same command and
-directory already exists, it reports that one instead of starting a duplicate. With a terminal the
+directory already exists, it reports that one instead of starting a duplicate (and updates its note
+when `FIRE_SESSION_NOTE` is set). With a terminal the
 flag changes nothing (sessions are already on); it also tells agents, through the MCP server's
 command list, to use `start_session`. Scripts that need to block until the command exits can set
 `FIRE_SESSIONS=off`.
@@ -70,7 +71,8 @@ the file, and on a command group, for everything below it. The closest setting w
 ## Managing sessions
 ```bash
 fire cli bg -m "api for auth e2e tests" api dev   # start detached, prints the session id
-fire cli ps                                        # list sessions (all projects)
+fire cli ps                                        # list running sessions (all projects)
+fire cli ps --failed --stopped                     # ...or ended ones (-a/--all, --exited, --failed, --stopped)
 fire cli logs api-dev-3f2a [lines]                 # last lines of output as text (default 50)
 fire cli fg api-dev-3f2a                           # attach in your terminal
 fire cli send api-dev-3f2a rs                      # type a line (followed by Enter)
@@ -85,6 +87,12 @@ fire cli kill api-dev-3f2a                         # stop it: TERM, then KILL af
   should always pass it.
 - Everything after the flags is a normal fire command path plus its arguments, resolved from the
   current directory (the session keeps that directory as its `cwd`).
+- **One command in one directory is one session.** If the same command (same arguments) is already
+  running from that directory, `bg` prints its id and replaces its note instead of starting a
+  duplicate. If it ended (crashed, finished or was stopped), it starts again under the **same id**,
+  with the new note, and the previous run's output moves to `output.prev.log`. Restarting a server
+  is `fire cli kill <id>` and the same `bg` again. Running it in a terminal or detached by
+  `long_running` reuses an ended session the same way. Pass `--new` to force a separate session.
 - `fire cli bg` starts the pty with your terminal's size, or 120x40 without one. Whoever attaches
   or resizes last sets the size.
 - `send --raw` understands `\r` (Enter), `\n`, `\t`, `\e` (Esc), `\\` and `\xHH` for any byte, e.g.
@@ -107,7 +115,12 @@ A session started by an agent is the same as one you started: attach to it, type
 - On a pty, stdout and stderr are one stream, as a terminal shows them. The raw bytes are kept for
   replay on attach; `fire cli logs` and the MCP `session_output` tool return clean text: colors and
   other escape sequences removed, and `\r` progress redraws collapsed to their final state.
-- `fire cli ps` shows `running`, `exited(<code>)` or `lost` (the supervisor itself was killed).
+- `fire cli ps` shows only `running` sessions, and says how many ended ones are hidden. Show those
+  with flags, which combine: `-a`/`--all` (everything), `--exited` (every ended session),
+  `--failed` (ended with a non-zero code on its own, or `lost`: the supervisor itself was killed)
+  and `--stopped` (stopped on purpose with `fire cli kill` / MCP `signal_session`, so it isn't
+  counted as a failure even though the exit code is non-zero). The flags complete in your shell.
+- Statuses: `running`, `exited(<code>)`, `stopped` or `lost`.
 - Exited sessions are removed automatically after 24 hours, or right away with `fire cli kill <id>`.
 
 Session data lives in your local data directory (`~/Library/Application Support/fire/sessions` on

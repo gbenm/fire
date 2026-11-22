@@ -55,20 +55,28 @@ pub(crate) struct Session {
     /// while someone is attached.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) auto: bool,
+    /// Stopped on purpose (`fire cli kill`, MCP `signal_session`) rather than ending on its own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) stopped: bool,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SessionInfo {
     #[serde(flatten)]
     pub(crate) session: Session,
-    /// `running`, `exited` or `lost` (supervisor died without recording an exit).
+    /// `running`, `exited`, `stopped` (ended after a user or agent stopped it) or `lost`
+    /// (supervisor died without recording an exit).
     pub(crate) status: &'static str,
 }
 
 impl Session {
     pub(crate) fn status(&self) -> &'static str {
         if self.ended_at.is_some() {
-            "exited"
+            if self.stopped {
+                "stopped"
+            } else {
+                "exited"
+            }
         } else if self.supervisor_pid == 0 || pid_alive(self.supervisor_pid) {
             "running"
         } else {
@@ -78,6 +86,24 @@ impl Session {
 
     fn is_running(&self) -> bool {
         self.status() == "running"
+    }
+
+    /// Ended with an error on its own (not stopped by someone), or its supervisor died.
+    fn is_failed(&self) -> bool {
+        match self.status() {
+            "exited" => self.exit_code != Some(0),
+            "lost" => true,
+            _ => false,
+        }
+    }
+
+    /// Can be started again under the same id: it ended and nothing of it is left running.
+    fn is_restartable(&self) -> bool {
+        match self.status() {
+            "exited" | "stopped" => true,
+            "lost" => !self.pid.is_some_and(pid_alive),
+            _ => false,
+        }
     }
 
     pub(crate) fn info(self) -> SessionInfo {
@@ -93,7 +119,7 @@ pub(crate) fn handle(args: &[String]) {
     let rest = &args[1..];
     match rest.first().map(String::as_str) {
         Some("bg") => start(&rest[1..]),
-        Some("ps") => print_sessions(),
+        Some("ps") => print_sessions(&rest[1..]),
         Some("logs") => match &rest[1..] {
             [id] => print_logs(id, 50),
             [id, lines] => print_logs(
@@ -167,10 +193,12 @@ pub(crate) fn defer_signals_when_supervised() {
 fn start(args: &[String]) {
     let mut note = None;
     let mut from_agent = false;
+    let mut force_new = false;
     let mut index = 0;
     while let Some(flag) = args.get(index).map(String::as_str) {
-        if flag == "--agent" {
-            from_agent = true;
+        if flag == "--agent" || flag == "--new" {
+            from_agent |= flag == "--agent";
+            force_new |= flag == "--new";
             index += 1;
             continue;
         }
@@ -187,7 +215,7 @@ fn start(args: &[String]) {
     }
     let command = &args[index..];
     if command.is_empty() {
-        fail("Usage: fire cli bg [-m \"short context\"] <command> [args...]");
+        fail("Usage: fire cli bg [-m \"short context\"] [--new] <command> [args...]");
     }
 
     let config = crate::config::load_config();
@@ -201,9 +229,29 @@ fn start(args: &[String]) {
             ))
         }
         Some(resolved) if resolved.command.is_runnable() => {
-            let id = spawn_session(command, resolved.consumed, note, false)
+            let existing = if force_new {
+                None
+            } else {
+                same_session(command)
+            };
+            if let Some(existing) = existing.as_ref().filter(|session| session.is_running()) {
+                let id = existing.id.clone();
+                let updated = update_note(existing.clone(), note);
+                println!("{id}");
+                eprintln!(
+                    "[fire] `fire {}` is already running here as session {id}{}",
+                    command.join(" "),
+                    if updated { "; note updated" } else { "" }
+                );
+                eprintln!(
+                    "[fire] logs: fire cli logs {id} | attach: fire cli fg {id} | stop: fire cli kill {id}"
+                );
+                return;
+            }
+            let restarted = existing.as_ref().is_some_and(|session| session.is_restartable());
+            let id = spawn_session(command, resolved.consumed, note, false, existing)
                 .unwrap_or_else(|err| fail(&err));
-            print_started(&id, command);
+            print_started(&id, command, restarted);
         }
         _ => fail(&format!(
             "Unknown or non-runnable command: fire {}",
@@ -212,10 +260,11 @@ fn start(args: &[String]) {
     }
 }
 
-fn print_started(id: &str, command: &[String]) {
+fn print_started(id: &str, command: &[String], restarted: bool) {
     println!("{id}");
     eprintln!(
-        "[fire] started `fire {}` as session {id}",
+        "[fire] {} `fire {}` as session {id}",
+        if restarted { "restarted" } else { "started" },
         command.join(" ")
     );
     eprintln!(
@@ -223,15 +272,68 @@ fn print_started(id: &str, command: &[String]) {
     );
 }
 
+/// The most recent session of `command` started from the current directory: one command in one
+/// directory is treated as the same session, so restarting it doesn't pile up new ids.
+fn same_session(command: &[String]) -> Option<Session> {
+    let cwd = std::env::current_dir().ok()?.display().to_string();
+    list_sessions()
+        .into_iter()
+        .find(|session| session.command == command && session.cwd == cwd)
+}
+
+/// Replaces a session's note when a new, non-empty one is given. Returns whether it changed.
+fn update_note(mut session: Session, note: Option<String>) -> bool {
+    match note.filter(|value| !value.is_empty()) {
+        Some(note) if session.note.as_deref() != Some(note.as_str()) => {
+            session.note = Some(note);
+            save(&session);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Whether a session that ended can take a new run: its old supervisor must be gone first, or
+/// it could remove the new run's control socket while shutting down.
+fn wait_for_supervisor_exit(session: &Session) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while session.supervisor_pid != 0 && pid_alive(session.supervisor_pid) {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
 /// Creates the session record and starts its supervisor. `consumed` is how many leading tokens
-/// of `command` are the command path (used for the id).
+/// of `command` are the command path (used for the id). A `reuse` session that ended is started
+/// again under its id, keeping the previous run's output in `output.prev.log`; otherwise a new
+/// session is created.
 fn spawn_session(
     command: &[String],
     consumed: usize,
     note: Option<String>,
     auto: bool,
+    reuse: Option<Session>,
 ) -> Result<String, String> {
-    let id = new_id(&command[..consumed.clamp(1, command.len())].join("-"));
+    let reuse =
+        reuse.filter(|session| session.is_restartable() && wait_for_supervisor_exit(session));
+    let note = note.filter(|value| !value.is_empty());
+    let (id, note) = match reuse {
+        Some(previous) => {
+            let dir = session_dir(&previous.id);
+            let _ = fs::rename(dir.join(OUTPUT_LOG), dir.join("output.prev.log"));
+            for legacy in ["stdout.log", "stderr.log", "stdin", SOCKET] {
+                let _ = fs::remove_file(dir.join(legacy));
+            }
+            (previous.id, note.or(previous.note))
+        }
+        None => (
+            new_id(&command[..consumed.clamp(1, command.len())].join("-")),
+            note,
+        ),
+    };
     let dir = session_dir(&id);
     fs::create_dir_all(&dir).map_err(|err| {
         format!(
@@ -243,7 +345,7 @@ fn spawn_session(
     let session = Session {
         id: id.clone(),
         command: command.to_vec(),
-        note: note.filter(|value| !value.is_empty()),
+        note,
         cwd: std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .display()
@@ -254,6 +356,7 @@ fn spawn_session(
         exit_code: None,
         ended_at: None,
         auto,
+        stopped: false,
     };
     save(&session);
 
@@ -350,8 +453,9 @@ pub(crate) fn run_in_session_if_enabled(command_args: &[String], resolved: &Reso
                     .and_then(|text| text.lines().next())
                     .map(|line| line.trim().to_string())
             });
+            let previous = same_session(command_args);
             // If the supervisor can't start, fall back to running directly.
-            if let Ok(id) = spawn_session(command_args, resolved.consumed, note, true) {
+            if let Ok(id) = spawn_session(command_args, resolved.consumed, note, true, previous) {
                 attach::attach(
                     &id,
                     attach::Options {
@@ -362,12 +466,10 @@ pub(crate) fn run_in_session_if_enabled(command_args: &[String], resolved: &Reso
             }
         }
         Launch::Detach => {
-            let cwd = std::env::current_dir()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default();
-            if let Some(existing) = list_sessions().into_iter().find(|session| {
-                session.is_running() && session.command == command_args && session.cwd == cwd
-            }) {
+            let note = std::env::var("FIRE_SESSION_NOTE").ok();
+            let previous = same_session(command_args);
+            if let Some(existing) = previous.as_ref().filter(|session| session.is_running()) {
+                update_note(existing.clone(), note);
                 println!("{}", existing.id);
                 eprintln!(
                     "[fire] `fire {}` is already running here as session {}",
@@ -377,8 +479,7 @@ pub(crate) fn run_in_session_if_enabled(command_args: &[String], resolved: &Reso
                 print_detached_hints(&existing.id);
                 process::exit(0);
             }
-            let note = std::env::var("FIRE_SESSION_NOTE").ok();
-            match spawn_session(command_args, resolved.consumed, note, false) {
+            match spawn_session(command_args, resolved.consumed, note, false, previous) {
                 Ok(id) => {
                     println!("{id}");
                     eprintln!(
@@ -437,10 +538,96 @@ pub(crate) fn list_sessions() -> Vec<Session> {
     sessions
 }
 
-fn print_sessions() {
-    let sessions = list_sessions();
+/// Which sessions `fire cli ps` shows. With no flags, only running ones.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PsFilter {
+    running: bool,
+    exited: bool,
+    failed: bool,
+    stopped: bool,
+}
+
+pub(crate) const PS_FLAGS: [(&str, &str); 5] = [
+    ("--all", "Show every session, running or ended"),
+    ("-a", "Show every session, running or ended"),
+    ("--exited", "Show sessions that ended, whatever the reason"),
+    (
+        "--failed",
+        "Show sessions that failed or whose supervisor died",
+    ),
+    ("--stopped", "Show sessions stopped with fire cli kill"),
+];
+
+impl PsFilter {
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let mut filter = PsFilter::default();
+        for arg in args {
+            match arg.as_str() {
+                "-a" | "--all" => {
+                    filter = PsFilter {
+                        running: true,
+                        exited: true,
+                        failed: true,
+                        stopped: true,
+                    }
+                }
+                "--exited" => filter.exited = true,
+                "--failed" => filter.failed = true,
+                "--stopped" => filter.stopped = true,
+                other => return Err(format!("Unknown flag `{other}` for fire cli ps")),
+            }
+        }
+        if filter == PsFilter::default() {
+            filter.running = true;
+        }
+        Ok(filter)
+    }
+
+    fn matches(&self, session: &Session) -> bool {
+        (self.running && session.is_running())
+            || (self.exited && session.ended_at.is_some())
+            || (self.failed && session.is_failed())
+            || (self.stopped && session.status() == "stopped")
+    }
+}
+
+fn print_sessions(args: &[String]) {
+    let filter = PsFilter::parse(args).unwrap_or_else(|err| {
+        fail(&format!(
+            "{err}. Usage: fire cli ps [-a|--all] [--exited] [--failed] [--stopped]"
+        ))
+    });
+    let (sessions, hidden): (Vec<Session>, Vec<Session>) = list_sessions()
+        .into_iter()
+        .partition(|session| filter.matches(session));
+    let hint = || {
+        if !hidden.is_empty() {
+            let failed = hidden.iter().filter(|session| session.is_failed()).count();
+            let failed = if failed > 0 {
+                format!(", {failed} failed")
+            } else {
+                String::new()
+            };
+            eprintln!(
+                "[fire] {} hidden{failed}: fire cli ps --all | --exited | --failed | --stopped",
+                hidden.len()
+            );
+        }
+    };
     if sessions.is_empty() {
-        println!("No sessions. Start one with: fire cli bg -m \"why\" <command>");
+        if hidden.is_empty() {
+            println!("No sessions. Start one with: fire cli bg -m \"why\" <command>");
+        } else {
+            println!(
+                "{}",
+                if args.is_empty() {
+                    "No running sessions."
+                } else {
+                    "No matching sessions."
+                }
+            );
+            hint();
+        }
         return;
     }
 
@@ -484,6 +671,7 @@ fn print_sessions() {
             .collect();
         println!("{}", line.join("  ").trim_end());
     }
+    hint();
 }
 
 /// Last `lines` lines of a session's output as plain text (escape sequences stripped, progress
@@ -565,6 +753,7 @@ fn kill(id: &str) {
         return;
     }
 
+    mark_stopped(id);
     signal_group(&session, libc::SIGTERM);
     for _ in 0..50 {
         if load(id).is_none_or(|current| !current.is_running()) {
@@ -584,8 +773,20 @@ fn send_signal(id: &str, name: &str) {
         ))
     };
     let session = running(id);
+    if [libc::SIGINT, libc::SIGTERM, libc::SIGQUIT, libc::SIGKILL].contains(&signal) {
+        mark_stopped(id);
+    }
     signal_group(&session, signal);
     println!("[fire] sent {name} to {id}");
+}
+
+/// Records that the session is being stopped on purpose, so its exit isn't reported as a failure.
+/// The supervisor re-reads the record before writing the exit, so this survives.
+fn mark_stopped(id: &str) {
+    if let Some(mut session) = load(id) {
+        session.stopped = true;
+        save(&session);
+    }
 }
 
 fn send_input(id: &str, bytes: Vec<u8>) {
@@ -922,7 +1123,72 @@ mod tests {
             exit_code: Some(0),
             ended_at: Some(1),
             auto: false,
+            stopped: false,
         };
         assert_eq!(session.status(), "exited");
+        assert!(!session.is_failed());
+        assert!(session.is_restartable());
+    }
+
+    fn ended(exit_code: i32, stopped: bool) -> Session {
+        Session {
+            id: "x-0000".into(),
+            command: vec!["x".into()],
+            note: None,
+            cwd: ".".into(),
+            started_at: 0,
+            supervisor_pid: 0,
+            pid: None,
+            exit_code: Some(exit_code),
+            ended_at: Some(1),
+            auto: false,
+            stopped,
+        }
+    }
+
+    fn running_session() -> Session {
+        Session {
+            exit_code: None,
+            ended_at: None,
+            ..ended(0, false)
+        }
+    }
+
+    #[test]
+    fn stopped_session_is_not_a_failure() {
+        let session = ended(143, true);
+        assert_eq!(session.status(), "stopped");
+        assert!(!session.is_failed());
+        assert!(ended(1, false).is_failed());
+    }
+
+    #[test]
+    fn ps_shows_running_by_default_and_filters_combine() {
+        let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        let (live, ok, failed, stopped) = (
+            running_session(),
+            ended(0, false),
+            ended(1, false),
+            ended(143, true),
+        );
+
+        let default = PsFilter::parse(&[]).unwrap();
+        assert!(default.matches(&live));
+        assert!(![&ok, &failed, &stopped].iter().any(|s| default.matches(s)));
+
+        let filter = PsFilter::parse(&args(&["--failed", "--stopped"])).unwrap();
+        assert!(!filter.matches(&live) && !filter.matches(&ok));
+        assert!(filter.matches(&failed) && filter.matches(&stopped));
+
+        let exited = PsFilter::parse(&args(&["--exited"])).unwrap();
+        assert!(!exited.matches(&live));
+        assert!([&ok, &failed, &stopped].iter().all(|s| exited.matches(s)));
+
+        let all = PsFilter::parse(&args(&["-a"])).unwrap();
+        assert!([&live, &ok, &failed, &stopped]
+            .iter()
+            .all(|s| all.matches(s)));
+
+        assert!(PsFilter::parse(&args(&["--nope"])).is_err());
     }
 }
