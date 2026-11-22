@@ -47,7 +47,7 @@
     "shell": {
       "type": "string",
       "default": "sh",
-      "description": "File-level default for `shell` on every command in this file. Interpreter for every shell snippet of the command: `exec`, shell `compute`, `before` and `check`; the `runner` is also launched through it (`<shell> -c '<runner>'`). Defaults to `sh`. Accepts any executable with optional arguments (`zsh`, `/bin/bash -l`) or a variable such as `$SHELL` for the user's login shell. Non-interactive shells don't load `.zshrc`/`.bashrc`, so aliases and functions defined there aren't available.",
+      "description": "File-level default for `shell` on every command in this file. Interpreter for every shell snippet of the command: `exec`, shell `compute`, `before` and `check`; the `runner`, and a runtime's `runner` and `check`, are also launched through it (`<shell> -c '<runner>'`). Defaults to `sh`. Accepts any executable with optional arguments (`zsh`, `/bin/bash -l`) or a variable such as `$SHELL` for the user's login shell. Non-interactive shells don't load `.zshrc`/`.bashrc`, so aliases and functions defined there aren't available.",
       "examples": ["zsh", "bash", "$SHELL"]
     },
     "session": {
@@ -116,7 +116,7 @@
         },
         "runner": {
           "type": "string",
-          "description": "Default runner command used to execute runtime logic."
+          "description": "The sdk's executable, or a command that ends in it (`deno`, `uv run python`, `docker run --rm -i denoland/deno:latest`). Fire appends the sdk's bootstrap arguments and never rewrites it. Launched through the command's `shell`. Fire exports `FIRE_RUNTIME_RPC_ADDR` and `FIRE_RUNTIME_RPC_PORT`; a container runner must pass the address itself, e.g. `-e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT`."
         },
         "check": {
           "type": "string",
@@ -124,7 +124,7 @@
         },
         "fallback_runner": {
           "type": "string",
-          "description": "Fallback runner command used when `check` fails."
+          "description": "Runner used when `check` fails. Same rule as `runner`: the sdk's executable, or a command that ends in it."
         },
         "paths": {
           "type": "array",
@@ -196,16 +196,16 @@
         "shell": {
           "type": "string",
           "default": "sh",
-          "description": "Interpreter for every shell snippet of the command: `exec`, shell `compute`, `before` and `check`; the `runner` is also launched through it (`<shell> -c '<runner>'`). Defaults to `sh`. Accepts any executable with optional arguments (`zsh`, `/bin/bash -l`) or a variable such as `$SHELL` for the user's login shell. Non-interactive shells don't load `.zshrc`/`.bashrc`, so aliases and functions defined there aren't available.",
+          "description": "Interpreter for every shell snippet of the command: `exec`, shell `compute`, `before` and `check`; the `runner`, and a runtime's `runner` and `check`, are also launched through it (`<shell> -c '<runner>'`). Defaults to `sh`. Accepts any executable with optional arguments (`zsh`, `/bin/bash -l`) or a variable such as `$SHELL` for the user's login shell. Non-interactive shells don't load `.zshrc`/`.bashrc`, so aliases and functions defined there aren't available.",
           "examples": ["zsh", "bash", "$SHELL"]
         },
         "runner": {
           "type": "string",
-          "description": "Command runner prefix (for example to run inside a container shell)."
+          "description": "Command that runs `exec` inside another environment (container, ssh, ...), exactly as written. With `{fire.exec}` in it, fire replaces it with the commands as one quoted argument and stdin stays free (`docker run --rm -it node sh -c {fire.exec}`); don't quote it yourself. Without it, the commands are written to the runner's stdin, so it needs `-i` and no `-t` (`docker run --rm -i node sh`). Launched through `shell`."
         },
         "fallback_runner": {
           "type": "string",
-          "description": "Runner used if `check` fails."
+          "description": "Runner used if `check` fails. Same rules as `runner`: `{fire.exec}` or commands on stdin."
         },
         "before": {
           "type": "string",

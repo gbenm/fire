@@ -33,7 +33,7 @@ commands:
     exec: cargo watch -x run
   npm:
     check: npm -v                                    # not installed locally?
-    fallback_runner: docker run --rm -it -v .:/app -w /app node:lts-alpine sh
+    fallback_runner: docker run --rm -i -v .:/app -w /app node:lts-alpine sh
     exec: npm                                        # ...then run it in a container
   deploy:
     agents: false                                    # agents must ask you first

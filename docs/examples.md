@@ -26,10 +26,10 @@ greetings:
 ```yaml
 npm:
   check: npm -v
-  fallback_runner: docker run --rm -it node:lts-alpine sh
+  fallback_runner: docker run --rm -i node:lts-alpine sh
   exec: npm
 ```
-- If `npm -v` fails locally, Fire runs the command via the fallback container.
+- If `npm -v` fails locally, Fire runs the command via the fallback container. The commands go to the container's stdin, so the runner needs `-i` and no `-t`.
 
 ## 4) Pre-run hook + runner
 ```yaml
@@ -105,7 +105,7 @@ hash:
 fallback:
   check: exit -1
   before: echo "ignore me please"
-  fallback_runner: docker run --rm -it -v .:/mount alpine sh
+  fallback_runner: docker run --rm -i -v .:/mount alpine sh
   exec:
     - cd mount
     - pwd

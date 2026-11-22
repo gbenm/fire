@@ -9,7 +9,7 @@ runtimes:
     sdk: deno
     runner: deno
     check: deno --version
-    fallback_runner: docker run --rm -it denoland/deno:latest
+    fallback_runner: docker run --rm -i -v "$PWD:$PWD" -e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT denoland/deno:latest
     paths:
       - scripts/*.ts
       - scripts/helpers/*.ts
@@ -27,13 +27,33 @@ runtimes:
 ```
 Fields:
 - `sdk`: one of `node`, `deno`, `python`.
-- `runner`: command to launch the runtime process.
+- `runner`: the sdk's executable, or a command that ends in it (default: `node`, `deno` or `python`). See [Runtime runners](#runtime-runners).
 - `check`: optional probe; if it fails, `fallback_runner` is used.
-- `fallback_runner`: alternative runner (often a container image) when `check` fails.
+- `fallback_runner`: alternative runner (often a container image) when `check` fails. Same rule as `runner`.
 - `paths`: glob patterns to pre-load modules/functions into the runtime session.
   - Absolute paths are supported.
   - Relative paths are resolved from the directory of the YAML file that defines that runtime.
   - This only affects runtime file loading; runtime execution directory still follows normal command `dir` resolution.
+
+## Runtime runners
+**A runtime `runner` is the sdk's executable, or a command that ends in it.** Fire appends the sdk's own arguments to start its bootstrap (`eval '<bootstrap>'` for deno, `-e '<bootstrap>'` for node, `-u -c '<bootstrap>'` for python) and never rewrites the string. `{fire.exec}` only works in command runners. stdin stays with your code.
+
+```yaml
+runner: deno
+runner: uv run python
+runner: docker run --rm -i denoland/deno:latest      # the image's entrypoint is deno
+runner: docker run --rm -i my-image deno             # otherwise, name it at the end
+```
+
+The runner and its `check` are launched through the command's [`shell`](./commands-and-args.md#shell).
+
+The bootstrap connects back to Fire over TCP, using `FIRE_RUNTIME_RPC_ADDR` (`127.0.0.1:<port>`). Fire also exports `FIRE_RUNTIME_RPC_PORT`. A container doesn't inherit the host environment, and `127.0.0.1` inside it is the container, so pass the address yourself. On Docker Desktop, `host.docker.internal` reaches the host:
+
+```yaml
+fallback_runner: docker run --rm -i -v "$PWD:$PWD" -e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT denoland/deno:latest
+```
+
+Files in `paths` are loaded by their absolute path on the host, so mount their directory at the same path (`-v "$PWD:$PWD"` when the config is in the current directory). If the runtime can't connect, it prints why (`Missing FIRE_RUNTIME_RPC_ADDR`, `Cannot connect to fire at …`).
 
 ## `eval` expressions
 Syntax: `<runtimeKey>:<code>`

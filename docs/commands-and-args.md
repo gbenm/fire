@@ -37,7 +37,7 @@ A command spec supports:
 - `before`: shell command that runs before execution unless `fallback_runner` is selected.
 - `dir`: working directory for this command (overrides file-level `dir`).
 - `shell`: interpreter for every shell snippet of the command (default: `sh`). See [Shell](#shell).
-- `runner`: prefix to execute commands inside another environment (e.g., container shell).
+- `runner`: command that runs the `exec` commands inside another environment (a container, ssh, …). See [Hooks and runners](#hooks-and-runners).
 - `fallback_runner`: alternative runner used when `check` fails.
 - `check`: health probe; if it fails (exit code != 0), Fire switches to `fallback_runner` (or errors if none).
 - `macros`: simple string replacements applied before placeholder expansion.
@@ -107,7 +107,7 @@ commands:
 - Fire runs `<shell> [args] -c '<script>'`, so the shell must accept `-c` (sh, bash, zsh, dash, ksh, fish, nu, elvish, xonsh, tcsh, pwsh all do). It's meant for shells: interpreters such as `node` or `python` belong in [`runtimes`](./runtimes-and-eval.md).
 - Commands in an `exec` array stop at the first failure (`set -e`) with sh, bash, zsh, dash, ash, ksh, mksh and yash. With `fish`, which has no `set -e`, they are chained with `and` instead. Other shells (nu, tcsh, …) run every line and don't stop on failure.
 - `shell` takes precedence over `runner`: the runner itself is launched through it (`<shell> -c '<runner>'`). The shell *inside* the runner (a container, ssh, …) is whatever the runner starts.
-- `runtimes` (`eval` and runtime `compute`) are not affected.
+- The runtime `runner` and its `check` (for `eval` and runtime `compute`) are launched through it too; the code inside the runtime is not affected.
 
 ## Hooks and runners
 ```yaml
@@ -118,15 +118,49 @@ commands:
     exec: compose exec front npm run
 
   start:
-    runner: docker run --rm -it -v .:/app -w /app node:lts-alpine sh
+    runner: docker run --rm -i -v .:/app -w /app node:lts-alpine sh
     exec:
       - npm run build
       - npm run start
 ```
 - `before` runs once before execution on direct mode or primary runner mode; it is skipped on fallback.
-- `runner` pipes commands through another process. It's launched through the command's [`shell`](#shell).
 - `fallback_runner` engages when `check` is defined and fails.
-- For shell-based runners (for example `docker exec -it <container> bash` or plain `bash`), Fire uses attached shell mode when a TTY is available so interactive prompts (passwords) work correctly.
+- Runners are launched through the command's [`shell`](#shell) and run **exactly as written**: Fire never adds or removes flags, and behaves the same with and without a terminal.
+
+### How commands reach the runner
+
+There are two modes, and the runner string alone decides which one:
+
+- **Without `{fire.exec}`** (above), Fire writes the commands to the runner's stdin, after `set -e`. The runner must read stdin (`docker run -i`, `docker compose exec -T`, `ssh host sh`) and can't use `-t`, since stdin is not a terminal. Programs inside can't prompt for input.
+- **With `{fire.exec}`**, Fire replaces it with the commands and stdin stays free, so interactive prompts work and `-t` is fine when there is a terminal:
+
+```yaml
+commands:
+  start:
+    runner: docker run --rm -it node sh -c {fire.exec}
+    exec:
+      - npm run build
+      - npm run start
+```
+
+`fire start --watch` runs:
+
+```sh
+docker run --rm -it node sh -c 'set -e
+npm run build
+npm run start --watch'
+```
+
+`{fire.exec}` expands to every command in `exec`, one per line after `set -e`, with the extra args appended to the last one, **already quoted as a single argument**. Don't wrap it in quotes: `'{fire.exec}'` or `"{fire.exec}"` is an error. It works anywhere in the runner:
+
+```yaml
+runner: docker compose exec app bash -lc {fire.exec}
+runner: kubectl exec -it pod -- sh -c {fire.exec}
+runner: ssh -t server {fire.exec}
+runner: docker exec -it db bash -c {fire.exec}   # e.g. mysql asking for a password
+```
+
+`--dry-run` and the `[fire] runner` log show the runner as written, followed by each command.
 
 ## Execution logs
 By default, Fire prints each shell command before executing it:

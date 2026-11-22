@@ -334,7 +334,7 @@ fn start_runtime_engine_for_key(
     });
 
     let selected = select_runner_mode(
-        &Shell::default(),
+        &context.shell,
         &context.dir,
         &context.environment,
         rendered_check.as_deref(),
@@ -350,13 +350,21 @@ fn start_runtime_engine_for_key(
         }
     };
 
+    if runtime_runner.contains(FIRE_EXEC_PLACEHOLDER) {
+        eprintln!(
+            "[fire] Runtime `{runtime_key}`: `{FIRE_EXEC_PLACEHOLDER}` only works in command runners. A runtime runner is the sdk's executable, or a command that ends in it; fire appends the sdk's arguments."
+        );
+        process::exit(1);
+    }
+
     log_runtime(&format!("{runtime_key} -> {runtime_runner}"));
     let launch = format!(
         "{} {}",
         runtime_runner,
         runtime_bootstrap_invocation(&runtime.sdk)
     );
-    let mut engine = RuntimeEngine::start(&launch, &context.dir, &context.environment);
+    let mut engine =
+        RuntimeEngine::start(&context.shell, &launch, &context.dir, &context.environment);
 
     let library_paths =
         resolve_runtime_library_paths(resolved.runtime_paths_base_dir, &runtime.paths);
@@ -520,7 +528,16 @@ fn trim_trailing_newlines(mut value: String) -> String {
 }
 
 impl RuntimeEngine {
-    fn start(command: &str, dir: &Path, environment: &BTreeMap<String, String>) -> Self {
+    /// Launches the runtime through `shell` and waits for its bootstrap to connect back.
+    /// `FIRE_RUNTIME_RPC_ADDR` is the address to connect to; `FIRE_RUNTIME_RPC_PORT` lets a
+    /// hand-written runner (a container) build its own address, e.g.
+    /// `host.docker.internal:$FIRE_RUNTIME_RPC_PORT`.
+    fn start(
+        shell: &Shell,
+        command: &str,
+        dir: &Path,
+        environment: &BTreeMap<String, String>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| {
             eprintln!("[fire] Failed to bind runtime control channel: {err}");
             process::exit(1);
@@ -534,15 +551,15 @@ impl RuntimeEngine {
             process::exit(1);
         });
 
-        let mut child = Command::new("sh")
-            .arg("-c")
-            .arg(command)
+        let mut child = shell
+            .command(command)
             .current_dir(dir)
             .envs(environment)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .env("FIRE_RUNTIME_RPC_ADDR", addr.to_string())
+            .env("FIRE_RUNTIME_RPC_PORT", addr.port().to_string())
             .spawn()
             .unwrap_or_else(|err| {
                 eprintln!("[fire] Failed to start runtime runner `{command}`: {err}");
@@ -1021,7 +1038,12 @@ if ":" not in addr:
     sys.stderr.flush()
     sys.exit(1)
 host, port = addr.rsplit(":", 1)
-sock = socket.create_connection((host, int(port)))
+try:
+    sock = socket.create_connection((host, int(port)))
+except Exception as err:
+    sys.stderr.write(f"Cannot connect to fire at {addr}: {err}\n")
+    sys.stderr.flush()
+    sys.exit(1)
 reader = sock.makefile("r", encoding="utf-8", newline="\n")
 writer = sock.makefile("w", encoding="utf-8", newline="\n")
 def send(line):
@@ -1070,8 +1092,17 @@ const readline = require("node:readline");
 const { pathToFileURL } = require("node:url");
 const addr = process.env.FIRE_RUNTIME_RPC_ADDR || "";
 const [host, portRaw] = addr.split(":");
-if (!host || !portRaw) process.exit(1);
+if (!host || !portRaw) {
+  console.error("Missing FIRE_RUNTIME_RPC_ADDR");
+  process.exit(1);
+}
 const socket = net.createConnection({ host, port: Number(portRaw) });
+let connected = false;
+socket.on("connect", () => { connected = true; });
+socket.on("error", (err) => {
+  console.error(connected ? `Connection to fire at ${addr} failed: ${err.message}` : `Cannot connect to fire at ${addr}: ${err.message}`);
+  process.exit(1);
+});
 const rl = readline.createInterface({ input: socket, crlfDelay: Infinity });
 const done = (id) => socket.write(`__FIRE_DONE__${id}\n`);
 const result = (id, payload) => socket.write(`__FIRE_RESULT__${id}:${JSON.stringify(payload)}\n`);
@@ -1120,8 +1151,17 @@ fn deno_runtime_bootstrap_script() -> &'static str {
 const decoder = new TextDecoder();
 const addr = Deno.env.get("FIRE_RUNTIME_RPC_ADDR") ?? "";
 const [host, portRaw] = addr.split(":");
-if (!host || !portRaw) Deno.exit(1);
-const conn = await Deno.connect({ hostname: host, port: Number(portRaw) });
+if (!host || !portRaw) {
+  console.error("Missing FIRE_RUNTIME_RPC_ADDR");
+  Deno.exit(1);
+}
+let conn;
+try {
+  conn = await Deno.connect({ hostname: host, port: Number(portRaw) });
+} catch (err) {
+  console.error(`Cannot connect to fire at ${addr}: ${err && err.message ? err.message : err}`);
+  Deno.exit(1);
+}
 let buffer = "";
 const writeLine = async (value) => {
   await conn.write(encoder.encode(value + "\n"));
@@ -1817,6 +1857,11 @@ fn select_runner_mode(
     RunnerMode::Direct
 }
 
+/// Placeholder in a command `runner` replaced by the command's script, quoted as one argument.
+const FIRE_EXEC_PLACEHOLDER: &str = "{fire.exec}";
+
+/// A runner with `{fire.exec}` gets the commands there and leaves stdin to the user; without
+/// it, the commands are written to the runner's stdin. The runner runs exactly as written.
 fn run_with_runner(
     shell: &Shell,
     runner: &str,
@@ -1828,73 +1873,73 @@ fn run_with_runner(
         return 0;
     }
 
+    let invocation = expand_fire_exec(runner, commands).unwrap_or_else(|err| {
+        eprintln!("[fire] {err}");
+        process::exit(1);
+    });
+
+    log_runner_start(runner);
+    for command in commands {
+        log_command(command);
+    }
+
     if execution_dry_run_enabled() {
-        let normalized_runner = normalize_runner_for_piped_stdin(runner);
-        log_runner_start(&normalized_runner);
-        for command in commands {
-            log_command(command);
-        }
         return 0;
     }
 
-    if can_use_attached_runner_mode() {
-        if let Some(invocation) = build_attached_shell_runner_invocation(runner, commands) {
-            log_runner_start(runner);
-            for command in commands {
-                log_command(command);
-            }
-            return run_shell_command_passthrough(shell, &invocation, dir, environment);
-        }
+    if let Some(invocation) = invocation {
+        return run_shell_command_passthrough(shell, &invocation, dir, environment);
     }
 
-    let normalized_runner = normalize_runner_for_piped_stdin(runner);
-    log_runner_start(&normalized_runner);
     let mut child = shell
-        .command(&normalized_runner)
+        .command(runner)
         .current_dir(dir)
         .envs(environment)
         .stdin(Stdio::piped())
         .spawn()
         .unwrap_or_else(|err| {
-            eprintln!("[fire] Failed to start runner `{normalized_runner}`: {err}");
+            eprintln!("[fire] Failed to start runner `{runner}`: {err}");
             process::exit(1);
         });
 
     {
         let Some(stdin) = child.stdin.as_mut() else {
-            eprintln!("[fire] Runner `{normalized_runner}` has no writable stdin.");
+            eprintln!("[fire] Runner `{runner}` has no writable stdin.");
             let _ = child.kill();
             process::exit(1);
         };
 
-        if writeln!(stdin, "set -e").is_err() {
-            eprintln!("[fire] Failed to initialize runner shell.");
-            let _ = child.kill();
-            process::exit(1);
-        }
-
-        for command in commands {
-            log_command(command);
-            if writeln!(stdin, "{command}").is_err() {
-                eprintln!("[fire] Failed to send command to runner: `{command}`");
-                let _ = child.kill();
-                process::exit(1);
-            }
-        }
+        // A runner that exits without reading stdin closes the pipe; its exit code tells why.
+        let _ = stdin.write_all(build_runner_script(commands).as_bytes());
         let _ = writeln!(stdin, "exit");
     }
 
     let status = child.wait().unwrap_or_else(|err| {
-        eprintln!("[fire] Failed while waiting for runner `{normalized_runner}`: {err}");
+        eprintln!("[fire] Failed while waiting for runner `{runner}`: {err}");
         let _ = child.kill();
         process::exit(1);
     });
 
-    if !status.success() {
-        return status.code().unwrap_or(1);
-    }
+    status.code().unwrap_or(1)
+}
 
-    status.code().unwrap_or(0)
+/// Replaces every `{fire.exec}` in `runner` with the commands script as a single quoted
+/// argument. `None` when the runner has no placeholder (piped mode). A placeholder the user
+/// already quoted is an error: fire doesn't fix what the user wrote.
+fn expand_fire_exec(runner: &str, commands: &[String]) -> Result<Option<String>, String> {
+    if !runner.contains(FIRE_EXEC_PLACEHOLDER) {
+        return Ok(None);
+    }
+    for quote in ['\'', '"'] {
+        if runner.contains(&format!("{quote}{FIRE_EXEC_PLACEHOLDER}{quote}")) {
+            return Err(format!(
+                "`{FIRE_EXEC_PLACEHOLDER}` in runner `{runner}` is already quoted: remove the surrounding quotes, fire quotes it."
+            ));
+        }
+    }
+    let script = build_runner_script(commands);
+    let script = shell_escape(script.trim_end_matches('\n'));
+    Ok(Some(runner.replace(FIRE_EXEC_PLACEHOLDER, &script)))
 }
 
 fn run_in_single_shell(
@@ -1944,10 +1989,6 @@ fn run_shell_command_passthrough(
         });
 
     status.code().unwrap_or(1)
-}
-
-fn can_use_attached_runner_mode() -> bool {
-    std::io::stdin().is_terminal()
 }
 
 fn commands_with_remaining_args(commands: &[String], remaining_args: &[String]) -> Vec<String> {
@@ -2174,35 +2215,6 @@ fn non_empty(value: &str) -> Option<&str> {
     }
 }
 
-fn build_attached_shell_runner_invocation(runner: &str, commands: &[String]) -> Option<String> {
-    if commands.is_empty() {
-        return None;
-    }
-
-    let tokens = runner.split_whitespace().collect::<Vec<_>>();
-    if tokens.is_empty() {
-        return None;
-    }
-
-    let shell_token = tokens.iter().rev().find(|token| !token.starts_with('-'))?;
-    let shell_name = Path::new(shell_token.trim_matches(['"', '\'']))
-        .file_name()
-        .and_then(|value| value.to_str())?;
-    if !is_supported_interactive_shell(shell_name) {
-        return None;
-    }
-
-    let script = build_runner_script(commands);
-    Some(format!("{runner} -c {}", shell_escape(&script)))
-}
-
-fn is_supported_interactive_shell(value: &str) -> bool {
-    matches!(
-        value,
-        "sh" | "bash" | "zsh" | "ash" | "dash" | "ksh" | "mksh" | "fish"
-    )
-}
-
 fn build_runner_script(commands: &[String]) -> String {
     let mut script = String::from("set -e\n");
     for command in commands {
@@ -2210,70 +2222,6 @@ fn build_runner_script(commands: &[String]) -> String {
         script.push('\n');
     }
     script
-}
-
-fn normalize_runner_for_piped_stdin(runner: &str) -> String {
-    // Commands are sent through stdin. In that mode, explicit TTY flags break
-    // tools like docker with "the input device is not a TTY".
-    let mut out = Vec::new();
-    for token in runner.split_whitespace() {
-        if token == "-t" || token == "--tty" {
-            continue;
-        }
-        if token == "-it" || token == "-ti" {
-            out.push("-i".to_string());
-            continue;
-        }
-        if token.starts_with('-') && !token.starts_with("--") && token.len() > 2 {
-            let mut chars = token.chars();
-            let dash = chars.next().unwrap_or('-');
-            let flags: String = chars.filter(|ch| *ch != 't').collect();
-            if flags.is_empty() {
-                continue;
-            }
-            out.push(format!("{dash}{flags}"));
-            continue;
-        }
-        out.push(token.to_string());
-    }
-
-    ensure_non_tty_for_docker_compose_exec(&mut out);
-
-    if out.is_empty() {
-        runner.to_string()
-    } else {
-        out.join(" ")
-    }
-}
-
-fn ensure_non_tty_for_docker_compose_exec(tokens: &mut Vec<String>) {
-    if tokens.is_empty() {
-        return;
-    }
-
-    let exec_index = if tokens.first().map(String::as_str) == Some("docker-compose") {
-        tokens.iter().position(|token| token == "exec")
-    } else if tokens.len() >= 2
-        && tokens.first().map(String::as_str) == Some("docker")
-        && tokens.get(1).map(String::as_str) == Some("compose")
-    {
-        tokens.iter().position(|token| token == "exec")
-    } else {
-        None
-    };
-
-    let Some(exec_index) = exec_index else {
-        return;
-    };
-
-    if tokens
-        .iter()
-        .any(|token| token == "-T" || token == "--no-tty")
-    {
-        return;
-    }
-
-    tokens.insert(exec_index + 1, "-T".to_string());
 }
 
 #[cfg(test)]
@@ -2418,56 +2366,37 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_tty_flags_for_piped_runner() {
-        let runner = "docker run --rm -it node:lts-alpine /bin/bash";
-        let normalized = normalize_runner_for_piped_stdin(runner);
-        assert_eq!(normalized, "docker run --rm -i node:lts-alpine /bin/bash");
-    }
-
-    #[test]
-    fn keeps_non_tty_flags_untouched() {
-        let runner = "docker exec -i my-container /bin/sh";
-        let normalized = normalize_runner_for_piped_stdin(runner);
-        assert_eq!(normalized, runner);
-    }
-
-    #[test]
-    fn docker_compose_exec_adds_no_tty_flag() {
-        let runner = "docker compose exec linux sh";
-        let normalized = normalize_runner_for_piped_stdin(runner);
-        assert_eq!(normalized, "docker compose exec -T linux sh");
-    }
-
-    #[test]
-    fn docker_compose_exec_keeps_existing_no_tty_flag() {
-        let runner = "docker compose exec -T linux sh";
-        let normalized = normalize_runner_for_piped_stdin(runner);
-        assert_eq!(normalized, runner);
-    }
-
-    #[test]
-    fn builds_attached_runner_invocation_for_shell_runner() {
-        let runner = "docker exec -it db bash";
-        let invocation =
-            build_attached_shell_runner_invocation(runner, &["mysql -u laravel -p".to_string()]);
+    fn fire_exec_expands_to_one_quoted_script() {
+        let commands = vec![
+            "npm run build".to_string(),
+            "npm run start --watch".to_string(),
+        ];
+        let expanded = expand_fire_exec("docker run --rm -it node sh -c {fire.exec}", &commands);
         assert_eq!(
-            invocation,
-            Some("docker exec -it db bash -c 'set -e\nmysql -u laravel -p\n'".to_string())
+            expanded,
+            Ok(Some(
+                "docker run --rm -it node sh -c 'set -e\nnpm run build\nnpm run start --watch'"
+                    .to_string()
+            ))
         );
     }
 
     #[test]
-    fn builds_attached_runner_invocation_for_plain_shell_runner() {
-        let runner = "bash";
-        let invocation = build_attached_shell_runner_invocation(runner, &["echo hi".to_string()]);
-        assert_eq!(invocation, Some("bash -c 'set -e\necho hi\n'".to_string()));
+    fn runner_without_fire_exec_is_left_as_written() {
+        let commands = vec!["echo hi".to_string()];
+        assert_eq!(
+            expand_fire_exec("docker run --rm -it alpine sh", &commands),
+            Ok(None)
+        );
     }
 
     #[test]
-    fn does_not_build_attached_invocation_without_shell_runner() {
-        let runner = "docker compose exec linux";
-        let invocation = build_attached_shell_runner_invocation(runner, &["echo hi".to_string()]);
-        assert_eq!(invocation, None);
+    fn quoted_fire_exec_is_rejected() {
+        let commands = vec!["echo hi".to_string()];
+        for runner in ["sh -c '{fire.exec}'", "sh -c \"{fire.exec}\""] {
+            let err = expand_fire_exec(runner, &commands).expect_err(runner);
+            assert!(err.contains("already quoted"), "{err}");
+        }
     }
 
     #[test]

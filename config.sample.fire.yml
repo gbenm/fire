@@ -19,7 +19,7 @@ runtimes:
     sdk: deno
     runner: deno
     check: deno --version
-    fallback_runner: docker run --rm -it denoland/deno:latest
+    fallback_runner: docker run --rm -i -v "$PWD:$PWD" -e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT denoland/deno:latest
     paths:
       - scripts/*.ts
       - scripts/helpers/*.ts
@@ -28,7 +28,7 @@ runtimes:
     sdk: node
     runner: node
     check: node -v
-    fallback_runner: docker run --rm -it node:lts-alpine
+    fallback_runner: docker run --rm -i -v "$PWD:$PWD" -e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT node:lts-alpine node
     paths:
       - scripts/*.mjs
 
@@ -71,7 +71,7 @@ commands:
   npm:
     dir: . # default (relative to project root)
     check: npm -v # if this fails, fallback_runner will be used
-    fallback_runner: docker run --rm -it node:lts-alpine sh # fallback
+    fallback_runner: docker run --rm -i node:lts-alpine sh # fallback; commands go to stdin (-i, no -t)
     exec: npm
 
   docker-node:
@@ -88,7 +88,7 @@ commands:
     exec: compose exec front npm run
 
   run3:
-    runner: docker compose exec front /bin/bash # equivalent to run inside the container
+    runner: docker compose exec -T front /bin/bash # commands go to stdin (-T: no tty)
     exec: # multiple commands run in sequence; the last one receives the args
       - npm run build
       - npm run start
@@ -145,7 +145,7 @@ commands:
   fallback:
     check: exit -1
     before: echo "ignore me please"
-    fallback_runner: docker run --rm -it -v .:/mount alpine sh
+    fallback_runner: docker run --rm -i -v .:/mount alpine sh
     exec:
       - cd mount
       - pwd
@@ -153,7 +153,7 @@ commands:
       - cat README.md
 
   alpine:
-    runner: docker compose exec linux sh
+    runner: docker compose exec -T linux sh
     before: docker compose ps -q linux | grep -q . || docker compose up -d linux
     exec:
       - echo "This is running inside the alpine container!"
@@ -165,7 +165,7 @@ commands:
       docker compose exec linux pwd
 
   container:
-    runner: docker run --rm -it -v .:/mount alpine sh
+    runner: docker run --rm -i -v .:/mount alpine sh
     exec:
       - cd /mount
       - pwd
@@ -196,7 +196,7 @@ commands:
       - ls
 
   docker:
-    runner: docker exec -it magoo_database_1 bash
+    runner: docker exec -it magoo_database_1 bash -c {fire.exec} # stdin stays free for the password prompt
     exec: mysql -u laravel -D laravel -p
 
   tty:

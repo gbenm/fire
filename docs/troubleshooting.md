@@ -16,6 +16,24 @@ Common issues and quick fixes.
 - Inspect the `check` command; if it exits non-zero, Fire will use `fallback_runner` every time.
 - Remove or relax `check` if you want the primary runner to be used more often.
 
+## `the input device is not a TTY`
+The runner has `-t` but Fire writes the commands to its stdin (no `{fire.exec}` in the runner), so stdin is not a terminal. Either:
+- remove `-t` (keep `-i`), or
+- use `{fire.exec}` so stdin stays free: `docker run --rm -it node sh -c {fire.exec}`. Outside a terminal (CI, agents, `fire cli bg` without a pty) `-t` still fails, so
+- add `-t` only when there is a terminal: `docker run --rm -i $([ -t 0 ] && echo -t) node sh -c {fire.exec}`.
+
+Fire runs runners exactly as written: it no longer strips `-t` or picks an "attached" mode based on the terminal. Runners that relied on that (e.g. `docker exec -it db bash` to type a password) need `-c {fire.exec}`.
+
+## Runner does nothing, with no error
+Without `{fire.exec}`, the commands go to the runner's stdin, so the runner must read it:
+- `docker run` / `docker exec` need `-i`; without it docker ignores stdin and nothing runs.
+- `docker compose exec` needs `-T` (it allocates a TTY by default).
+
+## Runtime runner exited before connecting
+- The runtime prints the reason above Fire's message: `Missing FIRE_RUNTIME_RPC_ADDR` or `Cannot connect to fire at …`.
+- In a container, pass the address: `-e FIRE_RUNTIME_RPC_ADDR=host.docker.internal:$FIRE_RUNTIME_RPC_PORT` (see [Runtime runners](./runtimes-and-eval.md#runtime-runners)).
+- The runner must end in the sdk's executable (or an image whose entrypoint is it): Fire appends the sdk's arguments.
+
 ## Eval fails or exits early
 - Missing runtime key: confirm it exists under `runtimes`.
 - `on_unused_args: error` aborts when extra args are not consumed by placeholders in `eval`.
