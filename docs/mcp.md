@@ -101,7 +101,7 @@ commands:
 - `fire` help marks them as `[no agents]`, so you can see what's restricted without opening the
   YAML.
 
-You can still run these commands yourself, including with `fire cli bg`.
+You can still run these commands yourself, including with `fire --bg`.
 
 This steers well-behaved agents. It is not a sandbox: an agent with shell access can still read
 your config or type `fire deploy prod`. To hard-block that, also add a deny rule to your agent's
@@ -140,7 +140,7 @@ sequences removed and `\r` progress redraws collapsed.
 ### `start_session`
 Takes `command` (the fire path plus arguments as a token array, without `fire`, e.g.
 `["api", "dev"]`), a required short `note`, and an optional `cwd` (project directory, defaulting to
-the server's). Same as `fire cli bg -m "<note>" <command...>`, except that it refuses commands
+the server's). Same as `fire --bg -m "<note>" <command...>`, except that it refuses commands
 marked `agents: false`. Returns the session id in `stdout`. One command in one `cwd` is one
 session: if it is already running, the tool returns that id and replaces its note; if it ended, it
 starts again under the same id. So a restart is `signal_session` followed by `start_session`, and

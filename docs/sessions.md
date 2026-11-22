@@ -33,11 +33,14 @@ Sessions are skipped, and the command runs directly as before, when:
 - stdin or stdout isn't a terminal (`fire x | grep`, scripts, CI, agents' shells), unless the
   command is marked `long_running` (see below);
 - the command or its file sets `session: false`;
-- `FIRE_SESSIONS=off` is set (also `0`, `false`, `no`), or `FIRE_DRY_RUN=true`;
+- you pass `--fg` (`fire --fg x`) or set `FIRE_SESSIONS=off`, or it is a dry run (`--dry-run`,
+  `FIRE_DRY_RUN=true`);
 - fire is already running inside a session (`FIRE_SESSION` is set), so commands never nest;
 - the command was started in the background with `&`.
 
-The session's note defaults to the command's description; set `FIRE_SESSION_NOTE` to override it.
+The session's note defaults to the command's description; pass `-m "note"` (`fire -m "why" x`)
+or set `FIRE_SESSION_NOTE` to override it, and `--new` to start a separate session instead of
+reusing an ended one.
 
 ```yaml
 commands:
@@ -60,17 +63,17 @@ commands:
 Without a terminal, `fire web` then starts a **detached** session, prints its id on stdout plus how
 to read its output, and exits 0 right away. If a running session with the same command and
 directory already exists, it reports that one instead of starting a duplicate (and updates its note
-when `FIRE_SESSION_NOTE` is set). With a terminal the
+when `-m` or `FIRE_SESSION_NOTE` is given). With a terminal the
 flag changes nothing (sessions are already on); it also tells agents, through the MCP server's
-command list, to use `start_session`. Scripts that need to block until the command exits can set
-`FIRE_SESSIONS=off`.
+command list, to use `start_session`. Scripts that need to block until the command exits run it
+with `fire --fg <command>` (or set `FIRE_SESSIONS=off` once for the whole script or CI job).
 
 Both `session` and `long_running` can be set at the file level, as defaults for every command in
 the file, and on a command group, for everything below it. The closest setting wins.
 
 ## Managing sessions
 ```bash
-fire cli bg -m "api for auth e2e tests" api dev   # start detached, prints the session id
+fire --bg -m "api for auth e2e tests" api dev     # start detached, prints the session id
 fire cli ps                                        # list running sessions (all projects)
 fire cli ps --failed --stopped                     # ...or ended ones (-a/--all, --exited, --failed, --stopped)
 fire cli logs api-dev-3f2a [lines]                 # last lines of output as text (default 50)
@@ -85,16 +88,21 @@ fire cli kill api-dev-3f2a                         # stop it: TERM, then KILL af
 - `-m` / `--note` is a **very short context** about why the command was started. It shows up in
   `fire cli ps` and in the MCP `list_sessions` tool, so other agents know what is going on. Agents
   should always pass it.
+- `--bg`, `-m` and `--new` are [global flags](commands-and-args.md#global-flags): they go before
+  the command (`fire api dev --bg` passes `--bg` to the command) and combine with `--dry-run` and
+  `--no-log`. `--bg --dry-run` prints what would run and starts nothing.
 - Everything after the flags is a normal fire command path plus its arguments, resolved from the
   current directory (the session keeps that directory as its `cwd`).
 - **One command in one directory is one session.** If the same command (same arguments) is already
-  running from that directory, `bg` prints its id and replaces its note instead of starting a
+  running from that directory, `--bg` prints its id and replaces its note instead of starting a
   duplicate. If it ended (crashed, finished or was stopped), it starts again under the **same id**,
   with the new note, and the previous run's output moves to `output.prev.log`. Restarting a server
-  is `fire cli kill <id>` and the same `bg` again. Running it in a terminal or detached by
+  is `fire cli kill <id>` and the same `fire --bg` again. Running it in a terminal or detached by
   `long_running` reuses an ended session the same way. Pass `--new` to force a separate session.
-- `fire cli bg` starts the pty with your terminal's size, or 120x40 without one. Whoever attaches
+- `fire --bg` starts the pty with your terminal's size, or 120x40 without one. Whoever attaches
   or resizes last sets the size.
+- `fire cli bg [-m "note"] [--new] <command>` still works as a deprecated alias of `fire --bg` and
+  prints a hint; it will be removed in a future release.
 - `send --raw` understands `\r` (Enter), `\n`, `\t`, `\e` (Esc), `\\` and `\xHH` for any byte, e.g.
   `\e[A` for the up arrow.
 - Signals go to the pty's foreground process group, like a keyboard signal would. `TERM`, `KILL`

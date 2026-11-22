@@ -225,7 +225,7 @@ struct SearchCommandsRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct SessionOutputRequest {
-    /// Session id, as returned by `list_sessions` or `fire cli bg`.
+    /// Session id, as returned by `list_sessions` or `fire --bg`.
     id: String,
     /// How many trailing lines of output to return (default 100).
     lines: Option<usize>,
@@ -270,14 +270,17 @@ struct CliResult {
     stderr: String,
 }
 
-/// Session management reuses the CLI (`fire cli bg|send|kill`) so both paths behave the same.
+/// Session management reuses the CLI (`fire --bg`, `fire cli send|kill`) so both paths behave the same.
 fn run_fire_cli(args: &[&str], cwd: Option<&str>) -> String {
+    let mut full = vec!["cli"];
+    full.extend_from_slice(args);
+    run_fire(&full, cwd)
+}
+
+fn run_fire(args: &[&str], cwd: Option<&str>) -> String {
     let exe = std::env::current_exe().unwrap_or_else(|_| "fire".into());
     let mut command = std::process::Command::new(exe);
-    command
-        .arg("cli")
-        .args(args)
-        .stdin(std::process::Stdio::null());
+    command.args(args).stdin(std::process::Stdio::null());
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -341,7 +344,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "List detached `fire` sessions across all projects (started with `fire cli bg`, by any agent or the user): id, command, note (why it was started), cwd, status (`running`, `exited`, `stopped` = stopped on purpose, `lost`), pid and exit code. Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `session_output` first: it usually shows why it failed (e.g. port in use)."
+        description = "List detached `fire` sessions across all projects (started with `fire --bg` or `start_session`, by any agent or the user): id, command, note (why it was started), cwd, status (`running`, `exited`, `stopped` = stopped on purpose, `lost`), pid and exit code. Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `session_output` first: it usually shows why it failed (e.g. port in use)."
     )]
     fn list_sessions(&self) -> String {
         let sessions: Vec<_> = crate::session::list_sessions()
@@ -374,9 +377,9 @@ impl FireMcpServer {
         &self,
         Parameters(StartSessionRequest { command, note, cwd }): Parameters<StartSessionRequest>,
     ) -> String {
-        let mut args = vec!["bg", "--agent", "-m", note.as_str()];
+        let mut args = vec!["--bg", "--agent", "-m", note.as_str()];
         args.extend(command.iter().map(String::as_str));
-        run_fire_cli(&args, cwd.as_deref())
+        run_fire(&args, cwd.as_deref())
     }
 
     #[tool(

@@ -61,7 +61,7 @@ tools   ~/code/tools    fire.yaml
 
 `remove` and `edit` take a namespace or a path. An argument with `/`, `.`, `..` or a leading `~` is a path (`./api`, `~/code/api`); anything else is a namespace. A namespace found in several registered directories is an error that lists them, so pass the path instead. `edit` without a file opens the directory's only config file; with several, it asks which one in a terminal and otherwise lists them.
 
-The first time you run a command in an unregistered directory with fire files, Fire asks once whether to register it (`[y/N]`). The answer is remembered, and `fire cli global remove` counts as a "no". It only asks in an interactive terminal: never in sessions (`fire cli bg`, MCP), pipes, completion or when `CI` is set.
+The first time you run a command in an unregistered directory with fire files, Fire asks once whether to register it (`[y/N]`). The answer is remembered, and `fire cli global remove` counts as a "no". It only asks in an interactive terminal: never in sessions (`fire --bg`, MCP), pipes, completion or when `CI` is set.
 
 The registry lives in Fire's config directory (`installed-dirs.yml`, which also stores the merged namespaces, and `declined-dirs.yml` for the answered prompts). `fire cli install` still works as a deprecated alias of `fire cli global add`.
 

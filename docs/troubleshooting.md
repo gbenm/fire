@@ -19,7 +19,7 @@ Common issues and quick fixes.
 ## `the input device is not a TTY`
 The runner has `-t` but Fire writes the commands to its stdin (no `{fire.exec}` in the runner), so stdin is not a terminal. Either:
 - remove `-t` (keep `-i`), or
-- use `{fire.exec}` so stdin stays free: `docker run --rm -it node sh -c {fire.exec}`. Outside a terminal (CI, agents, `fire cli bg` without a pty) `-t` still fails, so
+- use `{fire.exec}` so stdin stays free: `docker run --rm -it node sh -c {fire.exec}`. Outside a terminal (CI, agents, `fire --bg` without a pty) `-t` still fails, so
 - add `-t` only when there is a terminal: `docker run --rm -i $([ -t 0 ] && echo -t) node sh -c {fire.exec}`.
 
 Fire runs runners exactly as written: it no longer strips `-t` or picks an "attached" mode based on the terminal. Runners that relied on that (e.g. `docker exec -it db bash` to type a password) need `-c {fire.exec}`.

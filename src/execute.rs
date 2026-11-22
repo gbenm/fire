@@ -2232,25 +2232,11 @@ fn log_color_enabled() -> bool {
 }
 
 fn execution_logging_enabled() -> bool {
-    match std::env::var("FIRE_LOG_COMMANDS") {
-        Ok(raw) => !is_disabled_flag(raw.trim()),
-        Err(_) => true,
-    }
-}
-
-fn is_disabled_flag(value: &str) -> bool {
-    value == "false"
+    crate::flags::env_bool("FIRE_LOG_COMMANDS") != Some(false)
 }
 
 fn execution_dry_run_enabled() -> bool {
-    match std::env::var("FIRE_DRY_RUN") {
-        Ok(raw) => is_enabled_flag(raw.trim()),
-        Err(_) => false,
-    }
-}
-
-fn is_enabled_flag(value: &str) -> bool {
-    value == "true"
+    crate::flags::env_bool("FIRE_DRY_RUN") == Some(true)
 }
 
 fn success_exit_status() -> process::ExitStatus {
@@ -2489,29 +2475,6 @@ mod tests {
             "bash".to_string()
         )));
         assert!(should_execute_before(&RunnerMode::Direct));
-    }
-
-    #[test]
-    fn disabled_flag_accepts_only_false() {
-        assert!(is_disabled_flag("false"));
-    }
-
-    #[test]
-    fn disabled_flag_rejects_non_false_values() {
-        assert!(!is_disabled_flag(""));
-        assert!(!is_disabled_flag("FALSE"));
-        assert!(!is_disabled_flag("1"));
-        assert!(!is_disabled_flag("true"));
-        assert!(!is_disabled_flag("off"));
-        assert!(!is_disabled_flag("no"));
-    }
-
-    #[test]
-    fn enabled_flag_accepts_only_true() {
-        assert!(is_enabled_flag("true"));
-        assert!(!is_enabled_flag("TRUE"));
-        assert!(!is_enabled_flag("1"));
-        assert!(!is_enabled_flag("false"));
     }
 
     #[test]

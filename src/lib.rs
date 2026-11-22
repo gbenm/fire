@@ -6,6 +6,7 @@ mod config;
 mod container;
 mod env;
 mod execute;
+mod flags;
 mod global;
 mod help;
 mod mcp;
@@ -51,7 +52,32 @@ pub fn setup_cli() {
         return;
     }
 
-    let command_args = &args[1..];
+    let (flags, consumed) = flags::parse(&args[1..]).unwrap_or_else(|message| {
+        eprintln!("[fire] {message}");
+        eprintln!("{}", flags::USAGE);
+        process::exit(1);
+    });
+    let command_args = &args[1 + consumed..];
+
+    if consumed > 0 {
+        let first = command_args.first().map(String::as_str);
+        if first.is_none() || first == Some(":h") {
+            eprintln!("[fire] flags need a command");
+            eprintln!("{}", flags::USAGE);
+            process::exit(1);
+        }
+        if first == Some("cli") {
+            eprintln!(
+                "[fire] flags before the command only apply to your commands, not to `fire cli`"
+            );
+            process::exit(1);
+        }
+        if let Err(message) = flags.validate() {
+            eprintln!("[fire] {message}");
+            process::exit(1);
+        }
+        flags.export();
+    }
 
     if command_args.first().map(String::as_str) == Some("cli") {
         handle_cli_command(command_args);
@@ -100,8 +126,17 @@ pub fn setup_cli() {
             eprintln!("[fire] {message}");
             process::exit(1);
         }
+        if flags.agent {
+            session::refuse_if_not_for_agents(command_args, &resolved);
+        }
+        // A dry run starts nothing, so `--bg --dry-run` just prints what would run.
+        let dry_run = flags::env_bool("FIRE_DRY_RUN") == Some(true);
+        if flags.bg && !dry_run {
+            session::start_detached(command_args, flags.note, flags.new, flags.agent);
+            return;
+        }
         global::offer_registration(&config);
-        session::run_in_session_if_enabled(command_args, &resolved);
+        session::run_in_session_if_enabled(command_args, &resolved, flags.new);
         execute_resolved_command(resolved);
     }
 

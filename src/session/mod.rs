@@ -190,6 +190,7 @@ pub(crate) fn defer_signals_when_supervised() {
     }
 }
 
+/// `fire cli bg`, deprecated in favor of `fire --bg`.
 fn start(args: &[String]) {
     let mut note = None;
     let mut from_agent = false;
@@ -214,21 +215,45 @@ fn start(args: &[String]) {
         index += 2;
     }
     let command = &args[index..];
-    if command.is_empty() {
-        fail("Usage: fire cli bg [-m \"short context\"] [--new] <command> [args...]");
+    if !from_agent {
+        eprintln!(
+            "[fire] `fire cli bg` is deprecated and will be removed; use: fire --bg [-m \"note\"] [--new] <command>"
+        );
     }
+    if command.is_empty() {
+        fail("Usage: fire --bg [-m \"short context\"] [--new] <command> [args...]");
+    }
+    start_detached(command, note, force_new, from_agent);
+}
 
+/// Refuses commands the user reserved for humans (`agents: false` on it or an ancestor).
+pub(crate) fn refuse_if_not_for_agents(command: &[String], resolved: &ResolvedCommand<'_>) {
+    if !resolved
+        .command_chain
+        .iter()
+        .all(|entry| entry.allows_agents())
+    {
+        fail(&format!(
+            "fire {} is not available to agents (the user set `agents: false`); do not run it any other way either, ask the user to run it",
+            command[..resolved.consumed].join(" ")
+        ))
+    }
+}
+
+/// `fire --bg <command>`: starts `command` in a detached session, or reports the one already
+/// running for it in this directory (unless `force_new`). Prints the session id.
+pub(crate) fn start_detached(
+    command: &[String],
+    note: Option<String>,
+    force_new: bool,
+    from_agent: bool,
+) {
     let config = crate::config::load_config();
     match crate::resolve::resolve_command(&config, command) {
-        Some(resolved)
-            if from_agent && !resolved.command_chain.iter().all(|entry| entry.allows_agents()) =>
-        {
-            fail(&format!(
-                "fire {} is not available to agents (the user set `agents: false`); do not run it any other way either, ask the user to run it",
-                command[..resolved.consumed].join(" ")
-            ))
-        }
         Some(resolved) if resolved.command.is_runnable() => {
+            if from_agent {
+                refuse_if_not_for_agents(command, &resolved);
+            }
             let existing = if force_new {
                 None
             } else {
@@ -248,7 +273,9 @@ fn start(args: &[String]) {
                 );
                 return;
             }
-            let restarted = existing.as_ref().is_some_and(|session| session.is_restartable());
+            let restarted = existing
+                .as_ref()
+                .is_some_and(|session| session.is_restartable());
             let id = spawn_session(command, resolved.consumed, note, false, existing)
                 .unwrap_or_else(|err| fail(&err));
             print_started(&id, command, restarted);
@@ -425,7 +452,11 @@ fn choose_launch(context: LaunchContext) -> Launch {
 /// pick up again anywhere. Without one (agents, scripts), only `long_running` commands use a
 /// session, detached, so they don't block the caller. Returns when the command should run
 /// directly in this process.
-pub(crate) fn run_in_session_if_enabled(command_args: &[String], resolved: &ResolvedCommand<'_>) {
+pub(crate) fn run_in_session_if_enabled(
+    command_args: &[String],
+    resolved: &ResolvedCommand<'_>,
+    force_new: bool,
+) {
     let setting = |pick: fn(&crate::config::CommandSpec) -> Option<bool>| {
         resolved
             .command_chain
@@ -436,7 +467,8 @@ pub(crate) fn run_in_session_if_enabled(command_args: &[String], resolved: &Reso
     let terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
     let context = LaunchContext {
         inside_session: std::env::var_os("FIRE_SESSION").is_some(),
-        disabled: env_flag_off("FIRE_SESSIONS") || env_flag_on("FIRE_DRY_RUN"),
+        disabled: crate::flags::env_bool("FIRE_SESSIONS") == Some(false)
+            || crate::flags::env_bool("FIRE_DRY_RUN") == Some(true),
         session_setting: setting(|spec| spec.session),
         long_running: setting(|spec| spec.long_running) == Some(true),
         // Started with `&`: keep today's behavior rather than stopping on the terminal.
@@ -453,7 +485,7 @@ pub(crate) fn run_in_session_if_enabled(command_args: &[String], resolved: &Reso
                     .and_then(|text| text.lines().next())
                     .map(|line| line.trim().to_string())
             });
-            let previous = same_session(command_args);
+            let previous = (!force_new).then(|| same_session(command_args)).flatten();
             // If the supervisor can't start, fall back to running directly.
             if let Ok(id) = spawn_session(command_args, resolved.consumed, note, true, previous) {
                 attach::attach(
@@ -467,7 +499,7 @@ pub(crate) fn run_in_session_if_enabled(command_args: &[String], resolved: &Reso
         }
         Launch::Detach => {
             let note = std::env::var("FIRE_SESSION_NOTE").ok();
-            let previous = same_session(command_args);
+            let previous = (!force_new).then(|| same_session(command_args)).flatten();
             if let Some(existing) = previous.as_ref().filter(|session| session.is_running()) {
                 update_note(existing.clone(), note);
                 println!("{}", existing.id);
@@ -499,20 +531,7 @@ fn print_detached_hints(id: &str) {
     eprintln!(
         "[fire] output: fire cli logs {id} (MCP: session_output) | attach: fire cli fg {id} | stop: fire cli kill {id}"
     );
-    eprintln!("[fire] to block until it exits instead, set FIRE_SESSIONS=off");
-}
-
-fn env_flag_off(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "off" | "0" | "false" | "no"
-        )
-    })
-}
-
-fn env_flag_on(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| value.trim() == "true")
+    eprintln!("[fire] to block until it exits instead, run it with: fire --fg <command>");
 }
 
 // ---------------------------------------------------------------- list / logs
@@ -616,7 +635,7 @@ fn print_sessions(args: &[String]) {
     };
     if sessions.is_empty() {
         if hidden.is_empty() {
-            println!("No sessions. Start one with: fire cli bg -m \"why\" <command>");
+            println!("No sessions. Start one with: fire --bg -m \"why\" <command>");
         } else {
             println!(
                 "{}",

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::{CommandEntry, FileScope, ImplicitNamespaces, LoadedConfig, SourceKind};
+use crate::flags::{completion_position, CompletionPosition, BG_FLAGS, GLOBAL_FLAGS};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CompletionSuggestion {
@@ -12,6 +13,52 @@ pub(crate) fn completion_suggestions(
     config: &LoadedConfig,
     words: &[String],
 ) -> Vec<CompletionSuggestion> {
+    let all: Vec<&'static str> = GLOBAL_FLAGS.iter().map(|(name, _)| *name).collect();
+    match completion_position(words, &all) {
+        CompletionPosition::Flags(offered) => flag_suggestions(&offered),
+        CompletionPosition::NoteValue => Vec::new(),
+        CompletionPosition::Command(0) => command_suggestions(config, words),
+        CompletionPosition::Command(consumed) => after_flags(config, &words[consumed..]),
+    }
+}
+
+/// `fire cli bg ...` (deprecated): its flags, then any command, like `fire --bg ...`.
+fn cli_bg_suggestions(config: &LoadedConfig, words: &[String]) -> Vec<CompletionSuggestion> {
+    match completion_position(words, &BG_FLAGS) {
+        CompletionPosition::Flags(offered) => flag_suggestions(&offered),
+        CompletionPosition::NoteValue => Vec::new(),
+        CompletionPosition::Command(consumed) => after_flags(config, &words[consumed..]),
+    }
+}
+
+/// Completion after the flags: the root completion, without `cli` (flags only apply to user
+/// commands).
+fn after_flags(config: &LoadedConfig, words: &[String]) -> Vec<CompletionSuggestion> {
+    if words.first().map(String::as_str) == Some("cli") {
+        return Vec::new();
+    }
+    command_suggestions(config, words)
+        .into_iter()
+        .filter(|suggestion| !(words.len() == 1 && suggestion.value == "cli"))
+        .collect()
+}
+
+fn flag_suggestions(offered: &[&str]) -> Vec<CompletionSuggestion> {
+    GLOBAL_FLAGS
+        .iter()
+        .filter(|(name, _)| offered.contains(name))
+        .map(|(name, description)| CompletionSuggestion {
+            value: name.to_string(),
+            description: Some(description.to_string()),
+        })
+        .collect()
+}
+
+fn command_suggestions(config: &LoadedConfig, words: &[String]) -> Vec<CompletionSuggestion> {
+    if words.len() >= 3 && words[0] == "cli" && words[1] == "bg" {
+        return cli_bg_suggestions(config, &words[2..]);
+    }
+
     if words.is_empty() {
         return root_suggestions(config, "");
     }
@@ -979,6 +1026,76 @@ commands:
         let values = completion_suggestions(&config, &[]);
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
         assert_eq!(names, vec!["cli", "dev", "run", "ex", "backend", "ping"]);
+    }
+
+    fn names(config: &LoadedConfig, words: &[&str]) -> Vec<String> {
+        let words: Vec<String> = words.iter().map(|word| word.to_string()).collect();
+        completion_suggestions(config, &words)
+            .into_iter()
+            .map(|it| it.value)
+            .collect()
+    }
+
+    #[test]
+    fn dash_lists_global_flags_with_descriptions() {
+        let config = config_with_scopes();
+        let words = vec!["-".to_string()];
+        let values = completion_suggestions(&config, &words);
+        let flags: Vec<&str> = values.iter().map(|it| it.value.as_str()).collect();
+        assert_eq!(
+            flags,
+            vec![
+                "--bg",
+                "--new",
+                "-m",
+                "--note",
+                "--fg",
+                "--dry-run",
+                "--no-log"
+            ]
+        );
+        assert!(values.iter().all(|it| it.description.is_some()));
+    }
+
+    #[test]
+    fn completion_after_flags_equals_root_completion_without_cli() {
+        let config = config_with_scopes();
+        let mut root = names(&config, &[""]);
+        root.retain(|name| name != "cli");
+        assert_eq!(names(&config, &["--bg", ""]), root);
+        assert_eq!(names(&config, &["--bg", "-m", "why", "--no-log", ""]), root);
+        assert_eq!(
+            names(&config, &["--dry-run", "ex", ""]),
+            names(&config, &["ex", ""])
+        );
+        assert_eq!(names(&config, &["--bg", "ex", "ops", "de"]), vec!["deploy"]);
+        assert!(names(&config, &["--bg", "cli"]).is_empty());
+        assert!(names(&config, &["--bg", "cli", ""]).is_empty());
+    }
+
+    #[test]
+    fn completion_skips_note_values_and_typed_flags() {
+        let config = config_with_scopes();
+        assert!(names(&config, &["--bg", "-m", ""]).is_empty());
+        assert!(names(&config, &["--note", "d"]).is_empty());
+        assert_eq!(
+            names(&config, &["--bg", "--"]),
+            vec!["--new", "--note", "--dry-run", "--no-log"]
+        );
+        assert_eq!(names(&config, &["--fg", "--n"]), vec!["--no-log"]);
+    }
+
+    #[test]
+    fn deprecated_cli_bg_completes_its_flags_then_commands() {
+        let config = config_with_scopes();
+        assert_eq!(
+            names(&config, &["cli", "bg", "-"]),
+            vec!["--new", "-m", "--note"]
+        );
+        let mut root = names(&config, &[""]);
+        root.retain(|name| name != "cli");
+        assert_eq!(names(&config, &["cli", "bg", "-m", "why", ""]), root);
+        assert_eq!(names(&config, &["cli", "bg", "ex", ""]), vec!["api", "ops"]);
     }
 
     #[test]

@@ -19,6 +19,9 @@ The installer writes scripts to standard user locations and appends managed bloc
 - Fire reads the merged config, resolves scopes (namespace/group), and emits candidates.
 - When a command has a `description`, zsh displays it alongside the value.
 - Bash uses the `complete -C` protocol, which only consumes the values.
+- `fire -<TAB>` lists the [global flags](commands-and-args.md#global-flags) not typed yet. After
+  them, completion is the same as for `fire <TAB>` (without `cli`); the note after `-m` is free text,
+  so nothing is offered there.
 
 ## Updating after config changes
 Re-run `fire cli completion install` if you move the binary or want to refresh shell init files. Otherwise, completion picks up config changes automatically on the next invocation.

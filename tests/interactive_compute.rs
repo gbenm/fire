@@ -1,5 +1,5 @@
 //! End-to-end tests for interactive shell `compute` (#23): the real `fire` binary run inside a
-//! pseudo-terminal (like a regular terminal or a `fire cli bg` / MCP session) and without one.
+//! pseudo-terminal (like a regular terminal or a `fire --bg` / MCP session) and without one.
 
 #![cfg(unix)]
 
@@ -120,8 +120,14 @@ fn shell_compute_ignores_piped_stdin() {
 fn shell_compute_prompt_in_a_session_is_answered_with_send() {
     let mut project = Project::new("session", CONFIG);
 
-    let (code, _, stderr) = project.cli(&["bg", "-m", "test #23", "--new", "ask"]);
-    assert_eq!(code, 0, "fire cli bg failed: {stderr}");
+    let output = project
+        .fire(&["--bg", "-m", "test #23", "--new", "ask"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("run fire --bg");
+    let code = output.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&output.stderr).replace('\r', "");
+    assert_eq!(code, 0, "fire --bg failed: {stderr}");
     let id = stderr
         .split("as session ")
         .nth(1)

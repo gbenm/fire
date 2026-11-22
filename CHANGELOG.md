@@ -34,6 +34,11 @@ reconstructed from the git history.
   never takes a first word that another command, group or namespace already uses, and two merged
   namespaces with the same command report a collision. See
   [merged namespaces](https://github.com/gbenm/fire/blob/main/docs/overview.md#merged-namespaces). (#20)
+- Global flags before the command: `--bg`, `--new`, `-m/--note`, `--fg`, `--dry-run` and
+  `--no-log` (`fire --bg -m "auth tests" api dev`, `fire --dry-run api deploy`). They combine in
+  any order, set their environment variable so nested `fire` calls inherit them, show up in root
+  help and complete with `fire -<TAB>`. See
+  [global flags](https://github.com/gbenm/fire/blob/main/docs/commands-and-args.md#global-flags). (#50)
 - `namespace: tools` as shorthand for `namespace: { prefix: tools }`. (#32)
 - Container object for `runner` / `fallback_runner` (commands and runtimes), with Compose key
   names (`image`, `engine`, `tty`, `command`, `volumes`, `working_dir`, `environment`, `user`,
@@ -46,6 +51,10 @@ reconstructed from the git history.
 
 ### Changed
 - The runtime `runner` and its `check` are launched through the command's `shell`. (#21)
+- Boolean environment variables (`FIRE_SESSIONS`, `FIRE_DRY_RUN`, `FIRE_LOG_COMMANDS`) all accept
+  `1/true/yes/on` and `0/false/no/off`, any case; before, `FIRE_DRY_RUN` only took `true` and
+  `FIRE_LOG_COMMANDS` only `false`. (#50)
+- The MCP `start_session` tool runs `fire --bg` instead of `fire cli bg`. (#50)
 - Documented rule: a runtime `runner` is the sdk's executable, or a command that ends in it. (#21)
 - `fire cli init` writes `fire.yaml` / `<base>.fire.yaml` (a typed `.yml` name is kept) and adds
   `---` after the schema comment, so linters like yamllint's `document-start` rule pass. It warns

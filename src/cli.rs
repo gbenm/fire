@@ -55,7 +55,6 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("  fire cli upgrade");
             eprintln!("  fire cli completion install [bash|zsh|all]");
             eprintln!("  fire cli mcp");
-            eprintln!("  fire cli bg [-m \"note\"] [--new] <command> [args...]");
             eprintln!("  fire cli ps [-a|--all] [--exited] [--failed] [--stopped] | logs <id> [lines] | fg <id> | send <id> <text> | kill <id> [SIGNAL]");
             process::exit(1);
         }
@@ -139,9 +138,7 @@ fn print_cli_help() {
     println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");
     println!("  completion  Manage shell completion scripts");
     println!("  mcp      Start an MCP server (stdio) exposing fire's command tree to agents");
-    println!(
-        "  bg [-m \"note\"] [--new] <command>  Run a fire command detached (reuses its session in this directory unless --new)"
-    );
+    println!("  bg       Deprecated: use fire --bg [-m \"note\"] [--new] <command>");
     println!("  ps [-a|--all] [--exited] [--failed] [--stopped]  List running sessions (all projects); flags show ended ones");
     println!("  logs <id> [lines]  Show the last lines of a session's output");
     println!("  fg <id>  Attach to a session (Ctrl+Z detaches, shell `fg` reattaches)");

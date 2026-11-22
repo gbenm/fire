@@ -232,18 +232,14 @@ By default, Fire prints each shell command before executing it:
 
 Logs are label-based for readability (`cmd`, `runner`, `check`, `before`, `compute`), and use subtle ANSI colors when stderr is a TTY. Set `NO_COLOR=1` to force plain output.
 
-To disable this and keep output behavior like before:
-```bash
-export FIRE_LOG_COMMANDS=false
-```
-
-Only the literal value `false` disables execution logs.
+To disable it for one run, pass `--no-log` (`fire --no-log api test`); to disable it by default,
+set `FIRE_LOG_COMMANDS=false` (see [environment variables](#environment-variables)).
 
 ## Dry run (log only)
-Set this variable to avoid executing shell commands while still showing what Fire would run:
+Pass `--dry-run` to see what Fire would run without running it:
 
 ```bash
-export FIRE_DRY_RUN=true
+fire --dry-run api deploy
 ```
 
 Behavior:
@@ -251,6 +247,41 @@ Behavior:
 - Fire does **not** execute shell commands (`exec`, `before`, runner/fallback shell commands, and command arrays returned by `eval`).
 - `compute` still runs normally.
 - Runtime `eval` still runs normally; only shell command execution is skipped.
+- No session is started, even with `--bg`.
+
+## Global flags
+Flags that change how a command runs go **before** the command. Anything after the first command
+word belongs to the command, so `fire api dev --bg` passes `--bg` to `api dev`.
+
+| Flag | Effect | Environment variable |
+|---|---|---|
+| `--bg` | Run detached, in a [session](sessions.md#managing-sessions); prints its id | |
+| `--new` | Start a new session even if this command already has one here | |
+| `-m`, `--note <text>` | Short note on why the session is running | `FIRE_SESSION_NOTE` |
+| `--fg` | Run attached in this process, without a session | `FIRE_SESSIONS=off` |
+| `--dry-run` | Print what would run without running it | `FIRE_DRY_RUN=true` |
+| `--no-log` | Don't log the commands Fire runs | `FIRE_LOG_COMMANDS=false` |
+
+```bash
+fire --bg -m "auth tests" --no-log api dev   # same as: fire --no-log --bg --note "auth tests" api dev
+fire --dry-run api deploy
+```
+
+- Flags combine in any order. A repeated flag is fine; a repeated `-m` keeps the last note.
+- `--bg` and `--fg` can't go together. `-m` and `--new` apply to sessions (with `--bg`, or to the
+  session a command starts on its own in a terminal), so they fail with `--fg`.
+- An unknown flag (`fire --foo api dev`) is an error that lists the valid ones; it is never looked
+  up as a command. Flags need a command, and they don't apply to `fire cli ...`.
+- `fire` (root help) lists them, and `fire -<TAB>` completes them.
+
+### Environment variables
+Each flag with a variable sets it for the command it runs, so nested `fire` calls inherit it: a
+script started with `fire --dry-run deploy` that runs `fire build` is a dry run too. Set the
+variables yourself for a default that lasts a whole shell, CI job or agent; a flag always wins
+(`--bg` starts a session even with `FIRE_SESSIONS=off`).
+
+Boolean variables accept `1`, `true`, `yes`, `on` and `0`, `false`, `no`, `off` (any case).
+Anything else is ignored.
 
 ## Positional placeholders
 Placeholders are **opt-in**: nothing is substituted unless you set `placeholder` on the command (or via an anchor like `x-arg-config`).
@@ -316,7 +347,7 @@ commands:
 With `shell: zsh` you can use `vared`: `vared -cp "Name: " name && echo $name`.
 
 - Write prompts to stderr (`>&2`); anything on stdout becomes part of the value.
-- Background sessions (`fire cli bg`, MCP `start_session`) run in a terminal too: the prompt shows up in the session output, and you answer it with `fire cli send <id> <text>` (MCP `send_input`) or by attaching with `fire cli fg <id>`.
+- Background sessions (`fire --bg`, MCP `start_session`) run in a terminal too: the prompt shows up in the session output, and you answer it with `fire cli send <id> <text>` (MCP `send_input`) or by attaching with `fire cli fg <id>`.
 - Without a terminal (pipes, CI, cron, `fire x < file`) stdin is closed, so a compute that reads input gets EOF instead of waiting.
 - If a compute fails, fire reports the command and its exit code; its stderr has already been shown.
 

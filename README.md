@@ -148,12 +148,12 @@ running: `fg` brings it back, and `fire cli fg <id>` attaches to it from any oth
 your agents can list sessions from any project, read their output, type into them, signal or stop
 them:
 ```bash
-fire cli bg -m "api for auth tests" api dev   # start one detached
+fire --bg -m "api for auth tests" api dev     # start one detached
 fire cli ps                                   # running ones; -a/--failed/--stopped/--exited for the rest
 fire cli fg <id>
 ```
 Mark servers and watchers with `long_running: true` so they detach on their own when an agent or a
-script runs them without a terminal. Details: see [docs/sessions.md](./docs/sessions.md).
+script runs them without a terminal. Flags like `--bg`, `--fg`, `--dry-run` and `--no-log` go before the command ([global flags](./docs/commands-and-args.md#global-flags)). Details: see [docs/sessions.md](./docs/sessions.md).
 
 ## Documentation map
 - [Overview](./docs/overview.md)
