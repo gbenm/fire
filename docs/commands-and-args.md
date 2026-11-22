@@ -211,6 +211,22 @@ exec: echo "{service} => {hash}"
 - Compute sees the original user args and can use placeholders in the compute expression (for example `{1}`, `...{{n}}` based on your configured `placeholder`).
 - The computed token can be reused in `exec`, `eval`, `before`, `check`, `runner`, and `fallback_runner`.
 
+### Interactive shell compute
+A shell compute's stdout is its value. Its stderr goes straight to your terminal, and when fire runs in a terminal its stdin is too, so a compute can ask for input:
+```yaml
+commands:
+  greet:
+    compute:
+      "{name}": 'printf "Name: " >&2; read name; echo "$name"'
+    exec: echo "Hello {name}"
+```
+With `shell: zsh` you can use `vared`: `vared -cp "Name: " name && echo $name`.
+
+- Write prompts to stderr (`>&2`); anything on stdout becomes part of the value.
+- Background sessions (`fire cli bg`, MCP `start_session`) run in a terminal too: the prompt shows up in the session output, and you answer it with `fire cli send <id> <text>` (MCP `send_input`) or by attaching with `fire cli fg <id>`.
+- Without a terminal (pipes, CI, cron, `fire x < file`) stdin is closed, so a compute that reads input gets EOF instead of waiting.
+- If a compute fails, fire reports the command and its exit code; its stderr has already been shown.
+
 ## Nested commands and greedy resolution
 Fire resolves the deepest matching path, then passes remaining tokens to the target command:
 ```yaml

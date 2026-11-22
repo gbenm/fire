@@ -1995,10 +1995,20 @@ fn run_shell_command_capture(
     environment: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     log_compute(command);
+    // stdout is the computed value; stderr is inherited so prompts and errors show live.
+    // stdin is inherited only from a terminal (including session ptys), so a compute can
+    // ask for input there, and never blocks in pipes, CI or cron.
+    let stdin = if std::io::stdin().is_terminal() {
+        Stdio::inherit()
+    } else {
+        Stdio::null()
+    };
     let output = shell
         .command(command)
         .current_dir(dir)
         .envs(environment)
+        .stdin(stdin)
+        .stderr(Stdio::inherit())
         .output()
         .map_err(|err| {
             format!(
@@ -2009,15 +2019,8 @@ fn run_shell_command_capture(
 
     if !output.status.success() {
         let code = output.status.code().unwrap_or(1);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.trim().is_empty() {
-            return Err(format!(
-                "Compute command `{command}` failed with exit code {code}"
-            ));
-        }
         return Err(format!(
-            "Compute command `{command}` failed with exit code {code}: {}",
-            stderr.trim()
+            "Compute command `{command}` failed with exit code {code}"
         ));
     }
 
