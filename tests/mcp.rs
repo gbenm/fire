@@ -3,6 +3,7 @@
 mod common;
 
 use std::{
+    fs,
     io::{BufRead, BufReader, Write},
     process::{Child, ChildStdin, ChildStdout, Stdio},
 };
@@ -17,10 +18,144 @@ struct McpClient {
     next_id: u64,
 }
 
+#[test]
+fn list_sessions_filters_by_cwd_unless_all_is_requested() {
+    let mut project = Project::new(
+        "mcp-session-filter",
+        r#"
+namespace: local
+commands:
+  server:
+    long_running: true
+    exec: sleep 30
+"#,
+    );
+    let other = project.dir.join("other-project");
+    fs::create_dir(&other).expect("create other project");
+    fs::write(
+        other.join("fire.yml"),
+        r#"
+namespace: other
+commands:
+  server:
+    long_running: true
+    exec: sleep 30
+"#,
+    )
+    .expect("write other project config");
+    for directory in [&project.dir, &other] {
+        let status = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(directory)
+            .status()
+            .expect("initialize git project");
+        assert!(
+            status.success(),
+            "git init failed in {}",
+            directory.display()
+        );
+    }
+    let mut mcp = McpClient::start(&project);
+
+    let local = mcp.call(
+        "start_session",
+        json!({ "command": ["server"], "note": "local server" }),
+    );
+    let local_id = local["structuredContent"]["session_id"]
+        .as_str()
+        .expect("local session id")
+        .to_string();
+    project.session = Some(local_id.clone());
+    let nested = project.dir.join("nested");
+    fs::create_dir(&nested).expect("create nested project directory");
+    let nested_session = mcp.call(
+        "start_session",
+        json!({
+            "command": ["server"],
+            "note": "nested server",
+            "cwd": nested.display().to_string()
+        }),
+    );
+    let nested_id = nested_session["structuredContent"]["session_id"]
+        .as_str()
+        .expect("nested session id")
+        .to_string();
+    let elsewhere = mcp.call(
+        "start_session",
+        json!({
+            "command": ["server"],
+            "note": "other server",
+            "cwd": other.display().to_string()
+        }),
+    );
+    let other_id = elsewhere["structuredContent"]["session_id"]
+        .as_str()
+        .expect("other session id")
+        .to_string();
+
+    let default = text_json(&mcp.call("list_sessions", json!({})));
+    assert!(default
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["id"] == local_id));
+    assert!(!default
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["id"] == other_id));
+    assert!(default
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["id"] == nested_id));
+
+    let nested_project = text_json(&mcp.call(
+        "list_sessions",
+        json!({ "cwd": nested.display().to_string() }),
+    ));
+    assert!(nested_project
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["id"] == local_id));
+    assert!(nested_project
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["id"] == nested_id));
+
+    let selected = text_json(&mcp.call("list_sessions", json!({ "cwd": "other-project" })));
+    assert!(!selected
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["id"] == local_id));
+    assert!(selected
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["id"] == other_id));
+
+    let all = text_json(&mcp.call("list_sessions", json!({ "cwd": "not-used", "all": true })));
+    assert!(all.as_array().unwrap().iter().any(|s| s["id"] == local_id));
+    assert!(all.as_array().unwrap().iter().any(|s| s["id"] == other_id));
+
+    let stopped = mcp.call("stop_session", json!({ "id": other_id }));
+    assert_eq!(stopped["structuredContent"]["ok"], true);
+    let stopped = mcp.call("stop_session", json!({ "id": nested_id }));
+    assert_eq!(stopped["structuredContent"]["ok"], true);
+}
+
 impl McpClient {
     fn start(project: &Project) -> Self {
+        Self::start_in(project, &project.dir)
+    }
+
+    fn start_in(project: &Project, cwd: &std::path::Path) -> Self {
         let mut child = project
             .fire(&["cli", "mcp"])
+            .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -80,6 +215,64 @@ impl McpClient {
             json!({ "name": name, "arguments": arguments }),
         )
     }
+}
+
+#[test]
+fn command_tools_resolve_and_run_local_commands_from_cwd() {
+    let project = Project::new(
+        "mcp-command-cwd",
+        r#"
+namespace: local
+commands:
+  where:
+    placeholder: "@{n}"
+    exec: printf 'cwd=%s\narg=%s\n' "$PWD" @1
+"#,
+    );
+    let server_dir = project.dir.join("home");
+    let mut mcp = McpClient::start_in(&project, &server_dir);
+
+    let server_commands = text_json(&mcp.call("search_commands", json!({})));
+    assert!(
+        server_commands
+            .as_array()
+            .expect("command matches")
+            .is_empty(),
+        "commands without cwd should resolve from the MCP server directory: {server_commands}"
+    );
+
+    let cwd = project.dir.display().to_string();
+    let project_commands =
+        text_json(&mcp.call("search_commands", json!({ "query": "where", "cwd": cwd })));
+    assert_eq!(
+        project_commands.as_array().expect("command matches").len(),
+        1
+    );
+    assert_eq!(project_commands[0]["path"], "fire local where");
+    assert_eq!(project_commands[0]["source"], "local");
+
+    let argument = "  exact argument; $HOME  ";
+    let result = mcp.call(
+        "run_command",
+        json!({
+            "path": "fire local where",
+            "args": [argument],
+            "cwd": project.dir.display().to_string()
+        }),
+    );
+    let structured = &result["structuredContent"];
+    assert_eq!(structured["exit_code"], 0, "result: {result}");
+    assert_eq!(
+        structured["stdout"],
+        format!(
+            "cwd={}\narg={argument}\n",
+            project
+                .dir
+                .canonicalize()
+                .expect("canonical project cwd")
+                .display()
+        )
+    );
 }
 
 impl Drop for McpClient {
@@ -197,4 +390,151 @@ commands:
     assert_eq!(forgotten["structuredContent"]["ok"], true);
     assert!(!project.cli(&["ps", "-a"]).1.contains(&id));
     project.session = None;
+}
+
+#[test]
+fn run_command_returns_structured_output_and_rejects_ineligible_commands() {
+    let project = Project::new(
+        "mcp-run-command",
+        r#"
+namespace: firetest
+commands:
+  check:
+    placeholder: "{{n}}"
+    exec: printf 'stdout:%s\n' {1}; printf 'stderr:%s\n' {2} >&2; exit 7
+  server:
+    long_running: true
+    exec: sleep 30
+  deploy:
+    agents: false
+    exec: echo deployed
+  group:
+    commands:
+      child: echo child
+  large:
+    exec: awk 'BEGIN { for (i = 0; i < 70000; i++) printf "x" }'
+"#,
+    );
+    let mut mcp = McpClient::start(&project);
+
+    let found = text_json(&mcp.call("search_commands", json!({})));
+    assert_eq!(
+        found.as_array().expect("commands").len(),
+        5,
+        "found: {found}"
+    );
+
+    let tools = mcp.request("tools/list", json!({}));
+    let run = tools["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .find(|tool| tool["name"] == "run_command")
+        .expect("run_command tool");
+    assert!(run["inputSchema"]["required"]
+        .as_array()
+        .expect("required fields")
+        .iter()
+        .any(|field| field == "path"));
+    for field in [
+        "exit_code",
+        "stdout",
+        "stderr",
+        "timed_out",
+        "stdout_truncated",
+        "stderr_truncated",
+    ] {
+        assert!(
+            run["outputSchema"]["properties"].get(field).is_some(),
+            "missing output field `{field}`"
+        );
+    }
+
+    let result = mcp.call(
+        "run_command",
+        json!({
+            "path": "fire firetest check",
+            "args": ["hello world", "error text"]
+        }),
+    );
+    assert_eq!(result["isError"], false);
+    let structured = &result["structuredContent"];
+    assert_eq!(structured["exit_code"], 7, "result: {result}");
+    assert_eq!(structured["timed_out"], false);
+    assert_eq!(structured["stdout_truncated"], false);
+    assert_eq!(structured["stderr_truncated"], false);
+    assert_eq!(structured["stdout"], "stdout:hello world\n");
+    assert!(structured["stderr"]
+        .as_str()
+        .expect("stderr string")
+        .contains("stderr:error text\n"));
+
+    let long_running = mcp.call("run_command", json!({ "path": "fire firetest server" }));
+    assert_eq!(long_running["structuredContent"]["exit_code"], Value::Null);
+    assert!(long_running["structuredContent"]["stderr"]
+        .as_str()
+        .expect("stderr string")
+        .contains("start_session"));
+
+    let restricted = mcp.call("run_command", json!({ "path": "fire firetest deploy" }));
+    assert_eq!(restricted["structuredContent"]["exit_code"], Value::Null);
+    assert!(restricted["structuredContent"]["stderr"]
+        .as_str()
+        .expect("stderr string")
+        .contains("agents: false"));
+
+    let non_runnable = mcp.call("run_command", json!({ "path": "fire firetest group" }));
+    assert_eq!(non_runnable["structuredContent"]["exit_code"], Value::Null);
+    assert!(non_runnable["structuredContent"]["stderr"]
+        .as_str()
+        .expect("stderr string")
+        .contains("no executable action"));
+
+    let unknown = mcp.call("run_command", json!({ "path": "fire firetest missing" }));
+    assert_eq!(unknown["structuredContent"]["exit_code"], Value::Null);
+    assert!(unknown["structuredContent"]["stderr"]
+        .as_str()
+        .expect("stderr string")
+        .contains("unknown configured command path"));
+
+    let large = mcp.call("run_command", json!({ "path": "fire firetest large" }));
+    assert_eq!(large["structuredContent"]["exit_code"], 0);
+    assert_eq!(
+        large["structuredContent"]["stdout"]
+            .as_str()
+            .expect("stdout string")
+            .len(),
+        64 * 1024
+    );
+    assert_eq!(large["structuredContent"]["stdout_truncated"], true);
+}
+
+#[test]
+fn run_command_uses_the_cli_resolution_when_config_paths_overlap() {
+    let project = Project::new(
+        "mcp-run-command-resolution",
+        r#"
+namespace: overlap
+commands:
+  task:
+    commands:
+      child: echo child
+"#,
+    );
+    fs::write(
+        project.dir.join("z.fire.yml"),
+        r#"
+namespace: overlap
+group: null
+commands:
+  task: printf resolved
+"#,
+    )
+    .expect("write overlapping config");
+    let mut mcp = McpClient::start(&project);
+
+    let result = mcp.call("run_command", json!({ "path": "fire overlap task" }));
+
+    assert_eq!(result["structuredContent"]["exit_code"], 0, "{result}");
+    assert_eq!(result["structuredContent"]["stdout"], "resolved");
 }

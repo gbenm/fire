@@ -4,19 +4,22 @@
 stdio. It gives agents two things:
 
 1. **The commands you already configured.** Every available `fire` command, with its exact
-   invocation path and description, so the agent runs `fire ...` instead of guessing or writing
-   its own build/test/run commands. Commands marked `long_running: true` say so, so the agent
-   knows to start them with `start_session`.
+   invocation path and description, so the agent uses `run_command` instead of guessing or
+   writing its own build/test/run commands. Commands marked `long_running: true` say so, so the
+   agent knows to start them with `start_session`.
 2. **Managed long-running processes.** Agents start dev servers, watchers, and similar processes
    as [detached sessions](./sessions.md), each with a short note explaining why. You and every
-   other agent, in any project, can then see them, read their output, send input or signals, and
-   stop them, and you can attach with `fire cli fg <id>`.
+   other agent can then see them from that project (or explicitly list every project), read their
+   output, send input or signals, and stop them, and you can attach with `fire cli fg <id>`.
 
-The server's instructions tell agents to do both: search configured commands first, and always
-launch long-running processes through `start_session` (checking `list_sessions` first to avoid
-duplicates). Commands resolve against the same merged config Fire uses (local `fire.yaml` /
-`*.fire.yaml` plus registered global directories; see
+The server's instructions tell agents to do both: search configured commands first, run finite
+ones through `run_command`, and always launch long-running processes through `start_session`
+(checking `list_sessions` first to avoid duplicates). Commands resolve against the same merged
+config Fire uses (local `fire.yaml` / `*.fire.yaml` plus registered global directories; see
 [Overview](./overview.md#file-discovery-and-merge-order)).
+
+Pass your working directory as `cwd` to see and run that project's local commands when the MCP
+server was started elsewhere.
 
 ## Usage
 Register `fire cli mcp` as a stdio server in your agent. Use user (global) scope so it's available
@@ -94,8 +97,8 @@ commands:
 ```
 - The command, and everything under it, is left out of `search_commands`. A
   subcommand can't opt back in under a group marked `agents: false`.
-- `start_session` refuses to run it, with an error telling the agent not to run it any other way
-  and to ask you instead.
+- `run_command` and `start_session` refuse to run it, with an error telling the agent not to run
+  it any other way and to ask you instead.
 - The server's instructions tell agents that these commands are off-limits, including from their
   own shell.
 - `fire` help marks them as `[no agents]`, so you can see what's restricted without opening the
@@ -112,6 +115,8 @@ own permissions (for example, in Claude Code: `"deny": ["Bash(fire deploy:*)"]`)
 ### `search_commands`
 The single command-discovery tool. Omit `query` (or pass an empty string) to return every command,
 or provide a case-insensitive substring to match against `path`, `description`, `exec`, or `eval`.
+Pass `cwd` to discover local commands as if Fire were run from that directory; without it, Fire
+uses the MCP server's directory. Relative paths resolve from the server's directory.
 Each flat result puts `path` first: it is the exact canonical invocation to run, such as
 `"fire ex backend logs"`. Results also include `description`, `runnable`, `source` (`local` or
 `global`), a custom `placeholder` when configured, and `long_running: true` for commands that
@@ -120,10 +125,27 @@ must use `start_session`.
 Underlying `exec` and `eval` templates are omitted by default. Pass `include_exec: true` only when
 their implementation is useful as context; run the returned `path`, never a copied template.
 
+### `run_command`
+Runs a finite configured command to completion. Pass `path` exactly as returned by
+`search_commands` (including the leading `fire`) and optional `args` as an array; each argument is
+appended as one unchanged token. Pass the same `cwd` used for discovery so the command resolves
+and runs in that project; without it, Fire uses the MCP server's directory. The command is stopped
+after 60 seconds. For longer builds or tests, run Fire from your shell; commands intended to keep
+running must be marked `long_running: true` and started with `start_session`.
+
+The structured result contains `exit_code`, separate `stdout` and `stderr`, `timed_out`, and
+`stdout_truncated` / `stderr_truncated`. Each output stream is capped at 64 KiB. `exit_code` is
+null when the command times out, cannot start, has no executable action, is unknown, is marked
+`long_running: true`, or is unavailable because of `agents: false`. A long-running refusal points
+the agent to `start_session`.
+
 ### `list_sessions`
-Returns every detached session (started by any agent or by you, from any project): `id`,
-`command`, `note` (the short reason it was started), `cwd`, `status` (`running`, `exited`,
-`stopped` when someone stopped it on purpose, `lost`),
+Returns detached sessions started in the current Fire project by default, including sessions
+started from another directory that resolves to the same project. Pass `cwd` to select another
+project (relative paths resolve from the MCP server's directory), or `all: true` to return
+sessions from every project; `all: true` ignores `cwd`. Sessions may have been started by any
+agent or by you. Each result contains `id`, `command`, `note` (the short reason it was started),
+`cwd`, `status` (`running`, `exited`, `stopped` when someone stopped it on purpose, `lost`),
 `pid`, `exit_code`, and timestamps.
 
 ### `session_output`

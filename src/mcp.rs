@@ -1,3 +1,11 @@
+use std::{
+    io::{ErrorKind, Read},
+    os::{fd::AsRawFd, unix::process::CommandExt},
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
 use serde::Serialize;
 
 use rmcp::{
@@ -34,6 +42,8 @@ pub(crate) struct CommandNode {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) long_running: bool,
     pub(crate) subcommands: Vec<CommandNode>,
+    #[serde(skip)]
+    command: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,6 +65,13 @@ pub(crate) struct CommandMatch {
 }
 
 pub(crate) fn build_command_context(config: &LoadedConfig) -> CommandContext {
+    build_command_context_with_restricted(config, false)
+}
+
+fn build_command_context_with_restricted(
+    config: &LoadedConfig,
+    include_restricted: bool,
+) -> CommandContext {
     let mut commands = Vec::new();
 
     for file in &config.files {
@@ -66,19 +83,19 @@ pub(crate) fn build_command_context(config: &LoadedConfig) -> CommandContext {
         let scope_prefix: Vec<String> = namespace.iter().chain(group.iter()).cloned().collect();
 
         for (name, entry) in &file.commands {
-            if !entry.allows_agents() {
+            if !include_restricted && !entry.allows_agents() {
                 continue;
             }
             let mut path_tokens = scope_prefix.clone();
             path_tokens.push(name.clone());
             commands.push(build_node(
                 &path_tokens,
-                name,
                 entry,
                 namespace.as_deref(),
                 group.as_deref(),
                 source,
                 None,
+                include_restricted,
             ));
         }
     }
@@ -99,12 +116,12 @@ fn scope_labels(scope: &FileScope) -> (Option<String>, Option<String>) {
 
 fn build_node(
     path_tokens: &[String],
-    name: &str,
     entry: &CommandEntry,
     namespace: Option<&str>,
     group: Option<&str>,
     source: &'static str,
     inherited_long_running: Option<bool>,
+    include_restricted: bool,
 ) -> CommandNode {
     let long_running = entry
         .spec()
@@ -114,18 +131,18 @@ fn build_node(
         .subcommands()
         .map(|map| {
             map.iter()
-                .filter(|(_, sub_entry)| sub_entry.allows_agents())
+                .filter(|(_, sub_entry)| include_restricted || sub_entry.allows_agents())
                 .map(|(sub_name, sub_entry)| {
                     let mut sub_path = path_tokens.to_vec();
                     sub_path.push(sub_name.clone());
                     build_node(
                         &sub_path,
-                        sub_name,
                         sub_entry,
                         namespace,
                         group,
                         source,
                         long_running,
+                        include_restricted,
                     )
                 })
                 .collect()
@@ -134,7 +151,7 @@ fn build_node(
 
     CommandNode {
         path: format!("fire {}", path_tokens.join(" ")),
-        name: name.to_string(),
+        name: path_tokens.last().cloned().unwrap_or_default(),
         namespace: namespace.map(str::to_string),
         group: group.map(str::to_string),
         source,
@@ -145,6 +162,7 @@ fn build_node(
         placeholder: entry.spec().and_then(|spec| non_empty(&spec.placeholder)),
         long_running: long_running == Some(true),
         subcommands,
+        command: path_tokens.to_vec(),
     }
 }
 
@@ -221,6 +239,26 @@ struct SearchCommandsRequest {
     query: Option<String>,
     /// Include underlying exec/eval templates for context. Never run these directly; run `path`.
     include_exec: Option<bool>,
+    /// Project directory whose local commands should be discovered. Defaults to the server's cwd.
+    cwd: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct RunCommandRequest {
+    /// Exact command path returned by `search_commands`, including the leading `fire`.
+    path: String,
+    /// Arguments appended as separate, unchanged tokens.
+    args: Option<Vec<String>>,
+    /// Project directory to resolve and run the command from. Defaults to the server's cwd.
+    cwd: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ListSessionsRequest {
+    /// Project directory to select. Relative paths resolve from the MCP server's directory.
+    cwd: Option<String>,
+    /// Return sessions from every project. When true, `cwd` is ignored.
+    all: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -284,6 +322,33 @@ struct StartSessionResult {
     stderr: String,
 }
 
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct RunCommandResult {
+    /// Process exit code, or null if the command was refused, could not start, or timed out.
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+}
+
+const RUN_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+const RUN_COMMAND_MAX_OUTPUT: usize = 64 * 1024;
+
+impl RunCommandResult {
+    fn rejected(message: impl Into<String>) -> Self {
+        Self {
+            exit_code: None,
+            stdout: String::new(),
+            stderr: message.into(),
+            timed_out: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
+        }
+    }
+}
+
 impl From<CliResult> for StartSessionResult {
     fn from(result: CliResult) -> Self {
         let session_id = result
@@ -327,6 +392,213 @@ fn run_fire_result(args: &[&str], cwd: Option<&str>) -> CliResult {
     }
 }
 
+fn find_command_node<'a>(context: &'a CommandContext, path: &str) -> Option<&'a CommandNode> {
+    fn find<'a>(nodes: &'a [CommandNode], path: &str) -> Option<&'a CommandNode> {
+        for node in nodes {
+            if node.path == path {
+                return Some(node);
+            }
+            if let Some(found) = find(&node.subcommands, path) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    find(&context.commands, path)
+}
+
+fn run_command_process(
+    command_args: &[String],
+    cwd: Option<&std::path::Path>,
+    timeout: Duration,
+) -> RunCommandResult {
+    let exe = std::env::current_exe().unwrap_or_else(|_| "fire".into());
+    let mut command = Command::new(exe);
+    // `--fg` also exports sessions=off to nested fire calls, so a supposedly finite command
+    // cannot leak a detached session if its config changes after the policy check.
+    command.args(["--agent", "--fg"]).args(command_args);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    capture_process(command, timeout)
+}
+
+fn requested_cwd(cwd: Option<&str>) -> std::path::PathBuf {
+    let cwd = cwd
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+    let cwd = if cwd.is_absolute() {
+        cwd
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| ".".into())
+            .join(cwd)
+    };
+    cwd.canonicalize().unwrap_or(cwd)
+}
+
+fn capture_process(mut command: Command, timeout: Duration) -> RunCommandResult {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Fire commands commonly launch a shell. A separate process group lets a timeout stop the
+    // whole command tree and close its output pipes, rather than orphaning the shell's children.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => return RunCommandResult::rejected(format!("failed to run fire: {err}")),
+    };
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    if let Err(err) = set_nonblocking(&stdout).and_then(|_| set_nonblocking(&stderr)) {
+        stop_process_group(&mut child);
+        return RunCommandResult::rejected(format!("failed to capture fire output: {err}"));
+    }
+    let mut captured_stdout = BoundedOutput::new(RUN_COMMAND_MAX_OUTPUT);
+    let mut captured_stderr = BoundedOutput::new(RUN_COMMAND_MAX_OUTPUT);
+    let mut stdout_open = true;
+    let mut stderr_open = true;
+
+    let started = Instant::now();
+    let mut status = None;
+    let mut timed_out = false;
+    loop {
+        if stdout_open {
+            stdout_open = captured_stdout.read_available(&mut stdout);
+        }
+        if stderr_open {
+            stderr_open = captured_stderr.read_available(&mut stderr);
+        }
+
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(next) => status = next,
+                Err(err) => {
+                    stop_process_group(&mut child);
+                    captured_stderr.push(format!("failed to wait for fire: {err}").as_bytes());
+                    break;
+                }
+            }
+        }
+        if status.is_some() && !stdout_open && !stderr_open {
+            break;
+        }
+        if started.elapsed() >= timeout {
+            timed_out = true;
+            stop_process_group(&mut child);
+            captured_stderr.push(
+                format!(
+                    "[fire] command timed out after {} seconds",
+                    timeout.as_secs()
+                )
+                .as_bytes(),
+            );
+            // A descendant may have detached into another process group while retaining an output
+            // pipe. Drain bytes already available, but never let that escaped process extend this
+            // tool's timeout.
+            if stdout_open {
+                captured_stdout.read_available(&mut stdout);
+            }
+            if stderr_open {
+                captured_stderr.read_available(&mut stderr);
+            }
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let (stdout, stdout_truncated) = captured_stdout.finish();
+    let (stderr, stderr_truncated) = captured_stderr.finish();
+    RunCommandResult {
+        exit_code: (!timed_out)
+            .then(|| status.and_then(|status| status.code()))
+            .flatten(),
+        stdout,
+        stderr,
+        timed_out,
+        stdout_truncated,
+        stderr_truncated,
+    }
+}
+
+fn set_nonblocking(pipe: &impl AsRawFd) -> std::io::Result<()> {
+    let fd = pipe.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn stop_process_group(child: &mut std::process::Child) {
+    let process_group = -(child.id() as i32);
+    if unsafe { libc::kill(process_group, libc::SIGKILL) } == -1 {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+struct BoundedOutput {
+    bytes: Vec<u8>,
+    limit: usize,
+    truncated: bool,
+}
+
+impl BoundedOutput {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            truncated: false,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        let available = self.limit.saturating_sub(self.bytes.len());
+        self.bytes
+            .extend_from_slice(&bytes[..bytes.len().min(available)]);
+        self.truncated |= bytes.len() > available;
+    }
+
+    /// Drains a bounded amount so a process that writes continuously cannot hide the deadline.
+    /// Returns whether the pipe is still open.
+    fn read_available(&mut self, reader: &mut impl Read) -> bool {
+        let mut chunk = [0_u8; 8192];
+        for _ in 0..8 {
+            match reader.read(&mut chunk) {
+                Ok(0) => return false,
+                Ok(read) => self.push(&chunk[..read]),
+                Err(err) if err.kind() == ErrorKind::WouldBlock => return true,
+                Err(_) => return false,
+            }
+        }
+        true
+    }
+
+    fn finish(self) -> (String, bool) {
+        let mut text = String::from_utf8_lossy(&self.bytes).into_owned();
+        let truncated = self.truncated || text.len() > self.limit;
+        if text.len() > self.limit {
+            let mut end = self.limit;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+        }
+        (text, truncated)
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct SessionOutput {
     #[serde(flatten)]
@@ -351,16 +623,17 @@ impl FireMcpServer {
 #[tool_router]
 impl FireMcpServer {
     #[tool(
-        description = "Discover the user's configured `fire` commands. `path` is the exact command to run in a shell. Omit `query` or pass an empty string to list everything; otherwise it is a case-insensitive substring over paths, descriptions, and exec/eval templates. Underlying templates are hidden by default; request `include_exec` only for context, and never copy or run them directly. Use this first when the user names an app, service or task you don't recognize, and before writing your own build/test/run/deploy commands."
+        description = "Discover the user's configured `fire` commands. Pass your working directory as `cwd` to see that project's local commands; omit it to use the server's directory. `path` is the exact command to run. Omit `query` or pass an empty string to list everything; otherwise it is a case-insensitive substring over paths, descriptions, and exec/eval templates. Underlying templates are hidden by default; request `include_exec` only for context, and never copy or run them directly. Use this first when the user names an app, service or task you don't recognize, and before writing your own build/test/run/deploy commands."
     )]
     fn search_commands(
         &self,
         Parameters(SearchCommandsRequest {
             query,
             include_exec,
+            cwd,
         }): Parameters<SearchCommandsRequest>,
     ) -> String {
-        let config = crate::config::load_config();
+        let config = crate::config::load_config_from(&requested_cwd(cwd.as_deref()));
         let context = build_command_context(&config);
         to_json(&search_context(
             &context,
@@ -370,11 +643,82 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "List detached `fire` sessions across all projects (started with `fire --bg` or `start_session`, by any agent or the user): id, command, note (why it was started), cwd, status (`running`, `exited`, `stopped` = stopped on purpose, `lost`), pid and exit code. Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `session_output` first: it usually shows why it failed (e.g. port in use)."
+        description = "Run a finite configured command to completion. Pass the exact `path` from `search_commands`, the same `cwd` used for discovery, and optional `args` as separate unchanged tokens. `cwd` defaults to the server's directory. Returns its exit code and separate stdout/stderr, capped at 64 KiB each. Commands have a fixed 60-second timeout. Long-running commands are refused with a hint to use `start_session`; commands marked `agents: false` are also refused."
     )]
-    fn list_sessions(&self) -> String {
+    fn run_command(
+        &self,
+        Parameters(RunCommandRequest { path, args, cwd }): Parameters<RunCommandRequest>,
+    ) -> Json<RunCommandResult> {
+        let cwd = requested_cwd(cwd.as_deref());
+        let config = crate::config::load_config_from(&cwd);
+        let context = build_command_context_with_restricted(&config, true);
+        let Some(node) = find_command_node(&context, &path) else {
+            return Json(RunCommandResult::rejected(format!(
+                "unknown configured command path `{path}`; use search_commands and pass its exact path"
+            )));
+        };
+        let Some(resolved) = crate::resolve::resolve_command(&config, &node.command) else {
+            return Json(RunCommandResult::rejected(format!(
+                "unknown configured command path `{path}`; use search_commands and pass its exact path"
+            )));
+        };
+        if !resolved
+            .command_chain
+            .iter()
+            .all(|entry| entry.allows_agents())
+        {
+            return Json(RunCommandResult::rejected(format!(
+                "{path} is not available to agents (the user set `agents: false`); do not run it any other way either, ask the user to run it"
+            )));
+        }
+        if !resolved.command.is_runnable() {
+            return Json(RunCommandResult::rejected(format!(
+                "{path} has no executable action; choose a runnable subcommand from search_commands"
+            )));
+        }
+        let long_running = resolved
+            .command_chain
+            .iter()
+            .rev()
+            .find_map(|entry| entry.spec().and_then(|spec| spec.long_running))
+            == Some(true);
+        if long_running {
+            return Json(RunCommandResult::rejected(format!(
+                "{path} is marked `long_running: true`; use start_session instead"
+            )));
+        }
+
+        let mut command = node.command.clone();
+        command.extend(args.unwrap_or_default());
+        Json(run_command_process(
+            &command,
+            Some(&cwd),
+            RUN_COMMAND_TIMEOUT,
+        ))
+    }
+
+    #[tool(
+        description = "List detached `fire` sessions for the current project by default, including other directories that resolve to it (started with `fire --bg` or `start_session`, by any agent or the user): id, command, note (why it was started), cwd, status (`running`, `exited`, `stopped` = stopped on purpose, `lost`), pid and exit code. Pass `cwd` to select another project directory, or `all: true` to list every project (`cwd` is then ignored). Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `session_output` first: it usually shows why it failed (e.g. port in use)."
+    )]
+    fn list_sessions(
+        &self,
+        Parameters(ListSessionsRequest { cwd, all }): Parameters<ListSessionsRequest>,
+    ) -> String {
+        let project_root = if all == Some(true) {
+            None
+        } else {
+            Some(crate::config::local_project_root_from(&requested_cwd(
+                cwd.as_deref(),
+            )))
+        };
         let sessions: Vec<_> = crate::session::list_sessions()
             .into_iter()
+            .filter(|session| {
+                project_root.as_ref().is_none_or(|project_root| {
+                    crate::config::local_project_root_from(std::path::Path::new(&session.cwd))
+                        == *project_root
+                })
+            })
             .map(crate::session::Session::info)
             .collect();
         to_json(&sessions)
@@ -482,14 +826,15 @@ const INSTRUCTIONS: &str = "Run long-running fire commands (servers, `start`/`de
 workers, tunnels) with the `start_session` tool, never in your own shell, and call `list_sessions` \
 first to reuse what is already running; find the user's configured commands with \
 `search_commands` (an app or service name you don't recognize is probably one) before writing your own. Details: these MCP tools beat running fire ad hoc. \
+Pass your working directory as `cwd` to discover and run that project's local commands when the server was started elsewhere. \
 Commands the user marked `agents: false` are not listed and are off-limits: never run them, not \
 even through your own shell. \
-Sessions are shared with the user and other agents across projects, so give `start_session` a \
+Sessions are shared with the user and other agents across projects; `list_sessions` shows the current project by default and accepts `all: true`, so give `start_session` a \
 short `note` saying why; read output with `session_output`, write stdin with `send_input`, \
 send a specific signal with `signal_session`, stop with `stop_session`, and remove an exited \
 record with `forget_session`; the user can attach with `fire cli fg <id>`. \
 `search_commands` returns each command's exact `path` (e.g. `fire backend test`); \
-run that path in your shell with any arguments. Omit its query to list all commands. Underlying \
+run finite commands with `run_command`, passing arguments as separate tokens. Omit its query to list all commands. Underlying \
 `exec`/`eval` templates are hidden unless explicitly requested and are context only. \
 https://github.com/gbenm/fire";
 
@@ -529,6 +874,26 @@ mod tests {
     fn instructions_are_one_line_with_critical_rule_first() {
         assert!(!INSTRUCTIONS.contains('\n'));
         assert!(INSTRUCTIONS[..120].contains("start_session"));
+    }
+
+    #[test]
+    fn finite_command_capture_times_out_and_truncates_output() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf 123456; sleep 5 &"]);
+        let started = Instant::now();
+        let result = capture_process(command, Duration::from_millis(30));
+
+        assert!(result.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.stdout, "123456");
+        assert!(result.stderr.contains("timed out"));
+
+        let mut captured = BoundedOutput::new(4);
+        captured.push(b"abcdef");
+        let (output, truncated) = captured.finish();
+        assert_eq!(output, "abcd");
+        assert!(truncated);
     }
 
     #[test]

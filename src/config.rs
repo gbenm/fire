@@ -591,8 +591,13 @@ impl CommandAction {
 }
 
 pub(crate) fn load_config() -> LoadedConfig {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    load_config_from(&cwd)
+}
+
+pub(crate) fn load_config_from(cwd: &Path) -> LoadedConfig {
     let mut loaded = LoadedConfig::default();
-    let project_root = local_project_root();
+    let project_root = local_project_root_from(cwd);
 
     // Local project commands.
     loaded
@@ -619,7 +624,11 @@ pub(crate) fn load_config() -> LoadedConfig {
 /// namespace, else the current directory.
 pub(crate) fn local_project_root() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    detect_git_root(&cwd).unwrap_or(cwd)
+    local_project_root_from(&cwd)
+}
+
+pub(crate) fn local_project_root_from(cwd: &Path) -> PathBuf {
+    detect_git_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
 }
 
 /// Files a registered directory contributes, scoped as when loaded globally.

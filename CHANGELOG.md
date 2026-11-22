@@ -14,6 +14,8 @@ reconstructed from the git history.
   [troubleshooting](https://github.com/gbenm/fire/blob/main/docs/troubleshooting.md#the-input-device-is-not-a-tty). (#21)
 
 ### Added
+- MCP `run_command` runs finite configured commands with structured exit code and output, a
+  timeout, and refusals for `long_running` or `agents: false` commands. (#38)
 - `{fire.exec}` in a command `runner`: replaced by the commands as one quoted argument, leaving
   stdin free for interactive programs (`docker run --rm -it node sh -c {fire.exec}`). Without it,
   the commands go to the runner's stdin, with and without a terminal. (#21)
@@ -55,6 +57,11 @@ reconstructed from the git history.
 - Docs: comparison with other task runners, MCP setup per host, schema `$id`.
 
 ### Changed
+- MCP `search_commands` and `run_command` accept `cwd` to discover and run another project's
+  local commands when the server was started elsewhere. (#46)
+- MCP `list_sessions` defaults to the current Fire project, including sessions started from
+  another directory that resolves to it; pass `cwd` to select a project or `all: true` to list
+  sessions across projects. (#42)
 - MCP command discovery is consolidated in `search_commands`: omit its query to list every
   command, use each result's prominent `path` to run it, retain its source and custom placeholder,
   and opt in to `exec`/`eval` templates with `include_exec`. (#39)
