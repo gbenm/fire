@@ -55,7 +55,7 @@ pub(crate) struct Session {
     /// while someone is attached.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) auto: bool,
-    /// Stopped on purpose (`fire cli kill`, MCP `signal_session`) rather than ending on its own.
+    /// Stopped on purpose (`fire cli kill`, MCP `stop_session`) rather than ending on its own.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) stopped: bool,
 }
@@ -138,6 +138,14 @@ pub(crate) fn handle(args: &[String]) {
             [id] => kill(id),
             [id, signal] => send_signal(id, signal),
             _ => fail("Usage: fire cli kill <id> [SIGNAL]"),
+        },
+        Some("__stop") => match &rest[1..] {
+            [id] => stop(id),
+            _ => process::exit(2),
+        },
+        Some("__forget") => match &rest[1..] {
+            [id] => forget(id),
+            _ => process::exit(2),
         },
         Some("send") => match &rest[1..] {
             [flag, id, text @ ..] if flag == "--raw" && !text.is_empty() => {
@@ -857,9 +865,19 @@ fn kill(id: &str) {
         fail(&format!("No session `{id}`. See: fire cli ps"))
     };
     if !session.is_running() {
-        remove_session(id);
-        println!("[fire] {id} was not running; removed");
+        forget(id);
         return;
+    }
+
+    stop(id);
+}
+
+fn stop(id: &str) {
+    let Some(session) = load(id) else {
+        fail(&format!("No session `{id}`. See: fire cli ps"))
+    };
+    if !session.is_running() {
+        fail(&format!("Session `{id}` is not running"));
     }
 
     mark_stopped(id);
@@ -873,6 +891,17 @@ fn kill(id: &str) {
     }
     signal_group(&session, libc::SIGKILL);
     println!("[fire] {id} killed");
+}
+
+fn forget(id: &str) {
+    let Some(session) = load(id) else {
+        fail(&format!("No session `{id}`. See: fire cli ps"))
+    };
+    if session.is_running() {
+        fail(&format!("Session `{id}` is still running"));
+    }
+    remove_session(id);
+    println!("[fire] {id} was not running; removed");
 }
 
 fn send_signal(id: &str, name: &str) {

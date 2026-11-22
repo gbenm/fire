@@ -144,7 +144,7 @@ the server's). Same as `fire --bg -m "<note>" <command...>`, except that it refu
 marked `agents: false`. Returns the session id in `session_id` (and, for compatibility, `stdout`).
 One command in one `cwd` is one session: if it is already running, the tool returns that id and
 replaces its note; if it ended, it starts again under the same id. So a restart is
-`signal_session` followed by `start_session`, and the session list doesn't fill up with copies of
+`stop_session` followed by `start_session`, and the session list doesn't fill up with copies of
 the same server.
 
 The result has the same CLI envelope as the other management tools, with `session_id` added on
@@ -165,10 +165,16 @@ Takes `id` and `text`, and types the text followed by Enter into the session's t
 `\n`, `\t`, `\e`, `\\` and `\xHH`: e.g. `q`, `\x03` (Ctrl+C) or `\e[A` (up arrow)
 (`fire cli send --raw`).
 
+### `stop_session`
+Takes `id` and stops that running session gracefully (`TERM`, then `KILL` after 5s if needed).
+
 ### `signal_session`
-Takes `id` and an optional `signal` (name like `INT`, `HUP`, `USR1`, or a number), which is sent to
-the session's foreground process group, as a keyboard signal would be. Without `signal`, it stops the session (`TERM`, then `KILL` after 5s), or
-removes the record of an already-exited one (`fire cli kill`).
+Takes `id` and a required `signal` (name like `INT`, `HUP`, `USR1`, or a number), which is sent to
+the running session's foreground process group, as a keyboard signal would be.
+
+### `forget_session`
+Takes `id` and removes the saved record of an exited session. It refuses to remove a running
+session; stop it first with `stop_session` if that is the intent.
 
 Management tools return `{ ok, stdout, stderr }` from the equivalent CLI command. `start_session`
 also returns `session_id` on success.

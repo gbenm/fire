@@ -126,7 +126,7 @@ A session started by an agent is the same as one you started: attach to it, type
 - `fire cli ps` shows only `running` sessions, and says how many ended ones are hidden. Show those
   with flags, which combine: `-a`/`--all` (everything), `--exited` (every ended session),
   `--failed` (ended with a non-zero code on its own, or `lost`: the supervisor itself was killed)
-  and `--stopped` (stopped on purpose with `fire cli kill` / MCP `signal_session`, so it isn't
+  and `--stopped` (stopped on purpose with `fire cli kill` / MCP `stop_session`, so it isn't
   counted as a failure even though the exit code is non-zero). The flags complete in your shell.
 - Statuses: `running`, `exited(<code>)`, `stopped` or `lost`.
 - Exited sessions are removed automatically after 24 hours, or right away with `fire cli kill <id>`.
@@ -141,6 +141,7 @@ Sessions are Unix-only (macOS and Linux).
 
 ## Agents
 The [MCP server](./mcp.md) exposes all of this: `list_sessions`, `session_output`,
-`start_session`, `send_input` and `signal_session`. Its instructions tell agents to launch
-long-running processes this way and check existing sessions first. Without MCP, agents can use the
-same `fire cli` commands from a shell, and commands marked `long_running` detach by themselves.
+`start_session`, `send_input`, `stop_session`, `signal_session` and `forget_session`. Its instructions
+tell agents to launch long-running processes this way and check existing sessions first. Without
+MCP, agents can use the same `fire cli` commands from a shell, and commands marked `long_running`
+detach by themselves.

@@ -255,12 +255,17 @@ struct SendInputRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SessionIdRequest {
+    /// Session id.
+    id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct SignalSessionRequest {
     /// Session id.
     id: String,
-    /// Signal name or number (INT, TERM, HUP, USR1, USR2, QUIT, KILL, STOP, CONT, 9...). Omit to
-    /// stop the session gracefully (TERM, then KILL after 5s) or to remove an exited session.
-    signal: Option<String>,
+    /// Signal name or number (INT, TERM, HUP, USR1, USR2, QUIT, KILL, STOP, CONT, 9...).
+    signal: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -294,7 +299,8 @@ impl From<CliResult> for StartSessionResult {
     }
 }
 
-/// Session management reuses the CLI (`fire --bg`, `fire cli send|kill`) so both paths behave the same.
+/// Session management reuses the CLI (`fire --bg` and `fire cli` session actions) so both paths
+/// behave the same.
 fn run_fire_cli(args: &[&str], cwd: Option<&str>) -> String {
     let mut full = vec!["cli"];
     full.extend_from_slice(args);
@@ -398,7 +404,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. `command` must be a configured fire command (find it with `search_commands`). One command in one cwd is one session: if it is already running, this returns its id and replaces its note instead of starting a duplicate; if it ended (crashed or stopped), it starts again under the same id with the new note. So to restart a server, stop it with `signal_session` and call this again. Returns the session id as `session_id`; then confirm it came up with `session_output`. Fails for commands the user reserved for humans (`agents: false`)."
+        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. `command` must be a configured fire command (find it with `search_commands`). One command in one cwd is one session: if it is already running, this returns its id and replaces its note instead of starting a duplicate; if it ended (crashed or stopped), it starts again under the same id with the new note. So to restart a server, stop it with `stop_session` and call this again. Returns the session id as `session_id`; then confirm it came up with `session_output`. Fails for commands the user reserved for humans (`agents: false`)."
     )]
     fn start_session(
         &self,
@@ -427,16 +433,45 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Send a signal to a session's process group (e.g. INT, HUP, USR1), or omit `signal` to stop it (TERM, then KILL after 5s). On an already-exited session, removes its record."
+        description = "Stop a running session gracefully with TERM, then KILL after 5 seconds if needed."
+    )]
+    fn stop_session(
+        &self,
+        Parameters(SessionIdRequest { id }): Parameters<SessionIdRequest>,
+    ) -> String {
+        if !crate::session::is_running_id(&id) {
+            return to_json(&CliResult {
+                ok: false,
+                stdout: String::new(),
+                stderr: format!("session `{id}` is not running"),
+            });
+        }
+        run_fire_cli(&["__stop", &id], None)
+    }
+
+    #[tool(
+        description = "Send a specific signal to a running session's process group (e.g. INT, HUP, USR1)."
     )]
     fn signal_session(
         &self,
         Parameters(SignalSessionRequest { id, signal }): Parameters<SignalSessionRequest>,
     ) -> String {
-        match signal {
-            Some(signal) => run_fire_cli(&["kill", &id, &signal], None),
-            None => run_fire_cli(&["kill", &id], None),
+        run_fire_cli(&["kill", &id, &signal], None)
+    }
+
+    #[tool(description = "Remove the saved record of an exited session.")]
+    fn forget_session(
+        &self,
+        Parameters(SessionIdRequest { id }): Parameters<SessionIdRequest>,
+    ) -> String {
+        if crate::session::is_running_id(&id) {
+            return to_json(&CliResult {
+                ok: false,
+                stdout: String::new(),
+                stderr: format!("session `{id}` is still running; stop it before forgetting it"),
+            });
         }
+        run_fire_cli(&["__forget", &id], None)
     }
 }
 
@@ -455,7 +490,8 @@ Commands the user marked `agents: false` are not listed and are off-limits: neve
 even through your own shell. \
 Sessions are shared with the user and other agents across projects, so give `start_session` a \
 short `note` saying why; read output with `session_output`, write stdin with `send_input`, \
-signal or stop with `signal_session`; the user can attach with `fire cli fg <id>`. \
+send a specific signal with `signal_session`, stop with `stop_session`, and remove an exited \
+record with `forget_session`; the user can attach with `fire cli fg <id>`. \
 `search_commands`/`list_commands` return each command's exact `path` (e.g. `fire backend test`); \
 run short ones in your shell as `fire <path> [args]`. `exec`/`eval` are context only. \
 https://github.com/gbenm/fire";
@@ -524,6 +560,57 @@ mod tests {
 
         assert_eq!(result.session_id, None);
         assert_eq!(result.stderr, "unknown command");
+    }
+
+    #[test]
+    fn session_lifecycle_tools_have_single_purpose_contracts() {
+        let router = FireMcpServer::tool_router();
+        for name in ["stop_session", "signal_session", "forget_session"] {
+            assert!(router.has_route(name), "missing `{name}` tool");
+        }
+
+        let signal = router.get("signal_session").expect("signal tool");
+        let required = signal
+            .input_schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .expect("required fields");
+        assert!(required.iter().any(|field| field == "signal"));
+
+        let stop_description = router
+            .get("stop_session")
+            .and_then(|tool| tool.description.as_deref())
+            .expect("stop description");
+        assert!(stop_description.contains("running session"));
+        assert!(!stop_description.contains("signal"));
+        assert!(!stop_description.contains("remove"));
+
+        let signal_description = signal.description.as_deref().expect("signal description");
+        assert!(signal_description.contains("specific signal"));
+        assert!(!signal_description.contains("stop it"));
+        assert!(!signal_description.contains("remove"));
+
+        let forget_description = router
+            .get("forget_session")
+            .and_then(|tool| tool.description.as_deref())
+            .expect("forget description");
+        assert!(forget_description.contains("exited session"));
+        assert!(!forget_description.contains("running session"));
+        assert!(!forget_description.contains("signal"));
+    }
+
+    #[test]
+    fn stop_session_does_not_forget_an_exited_or_missing_session() {
+        let result = FireMcpServer::new().stop_session(Parameters(SessionIdRequest {
+            id: "definitely-not-a-session".to_string(),
+        }));
+        let result: serde_json::Value = serde_json::from_str(&result).expect("JSON result");
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(
+            result["stderr"],
+            "session `definitely-not-a-session` is not running"
+        );
     }
 
     #[test]
