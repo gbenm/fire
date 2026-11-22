@@ -128,6 +128,9 @@ fire cli mcp
 Mark commands agents shouldn't touch (deploys, destructive DB tasks) with `agents: false`.
 Details: see [docs/mcp.md](./docs/mcp.md).
 
+- Claude Code: `claude mcp add fire -- fire cli mcp`
+- MCP Registry name: `mcp-name: io.github.gbenm/fire`
+
 ## Sessions
 In a terminal, every `fire` command runs on a pty under a small supervisor. It behaves exactly as if
 run directly (colors, prompts, Ctrl+C, exit code), but **Ctrl+Z detaches it** while it keeps
