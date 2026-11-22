@@ -793,7 +793,9 @@ fn scope_from_raw(
     forced_namespace: Option<&NamespaceScope>,
     inferred_group: Option<&str>,
 ) -> FileScope {
+    // A file without commands never creates a group, explicit or inferred.
     let group = match &raw.group {
+        _ if raw.commands.is_empty() => "",
         GroupSetting::Value(value) => value.trim(),
         GroupSetting::Null => "",
         GroupSetting::Unset => inferred_group.unwrap_or("").trim(),
@@ -984,6 +986,13 @@ fn normalize_relative_include_path(path: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    fn one_command() -> BTreeMap<String, CommandEntry> {
+        BTreeMap::from([(
+            "run".to_string(),
+            CommandEntry::Shorthand("echo run".to_string()),
+        )])
+    }
+
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1075,7 +1084,7 @@ mod tests {
             }),
             include: Vec::new(),
             runtimes: BTreeMap::new(),
-            commands: BTreeMap::new(),
+            commands: one_command(),
             _extra: BTreeMap::new(),
             ..FireFileRaw::default()
         };
@@ -1106,6 +1115,7 @@ mod tests {
         let raw = FireFileRaw {
             group: GroupSetting::Value("backend".to_string()),
             description: "Backend commands".to_string(),
+            commands: one_command(),
             ..FireFileRaw::default()
         };
 
@@ -1124,7 +1134,10 @@ mod tests {
 
     #[test]
     fn omitted_group_is_inferred_from_filename() {
-        let raw = FireFileRaw::default();
+        let raw = FireFileRaw {
+            commands: one_command(),
+            ..FireFileRaw::default()
+        };
         let scope = scope_from_raw(&raw, None, None, Some("tracking"));
         match scope {
             FileScope::Group { group, .. } => assert_eq!(group, "tracking"),
@@ -1133,9 +1146,34 @@ mod tests {
     }
 
     #[test]
+    fn file_without_commands_does_not_infer_group() {
+        let raw = FireFileRaw::default();
+        let scope = scope_from_raw(&raw, None, None, Some("tracking"));
+        assert!(matches!(scope, FileScope::Root), "got {scope:?}");
+    }
+
+    #[test]
+    fn file_without_commands_ignores_explicit_group() {
+        let raw = FireFileRaw {
+            group: GroupSetting::Value("backend".to_string()),
+            ..FireFileRaw::default()
+        };
+        let forced = NamespaceScope {
+            prefix: "ex".to_string(),
+            description: "Example".to_string(),
+        };
+        let scope = scope_from_raw(&raw, None, Some(&forced), Some("tracking"));
+        assert!(
+            matches!(&scope, FileScope::Namespace { namespace, .. } if namespace == "ex"),
+            "got {scope:?}"
+        );
+    }
+
+    #[test]
     fn null_group_stays_ungrouped() {
         let raw = FireFileRaw {
             group: GroupSetting::Null,
+            commands: one_command(),
             ..FireFileRaw::default()
         };
         let scope = scope_from_raw(&raw, None, None, Some("tracking"));
@@ -1149,6 +1187,7 @@ mod tests {
     fn explicit_group_overrides_inferred() {
         let raw = FireFileRaw {
             group: GroupSetting::Value("backend".to_string()),
+            commands: one_command(),
             ..FireFileRaw::default()
         };
         let scope = scope_from_raw(&raw, None, None, Some("tracking"));
@@ -1198,7 +1237,10 @@ mod tests {
     fn to_file_configs_infers_group_from_filename() {
         let parsed = vec![ParsedFireFile {
             path: PathBuf::from("/tmp/project/tracking.fire.yml"),
-            raw: FireFileRaw::default(),
+            raw: FireFileRaw {
+                commands: one_command(),
+                ..FireFileRaw::default()
+            },
         }];
         let files = to_file_configs(
             &parsed,

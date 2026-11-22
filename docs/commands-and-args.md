@@ -24,6 +24,7 @@ Rules:
 - An explicit `group` in the YAML always takes precedence over the inferred value.
 - Set `group: null` to opt out and keep the file ungrouped (the pre-inference default behavior).
 - The base `fire.yml` / `fire.yaml` files never infer a group, since they have no prefix before the extension.
+- A file with no commands never creates a group, whether inferred or explicit.
 
 ## Command shapes
 A command spec supports:
