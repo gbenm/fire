@@ -24,6 +24,7 @@ reconstructed from the git history.
 - Interactive shell `compute`: stderr goes to the terminal and stdin is inherited from a terminal
   (including session ptys, answered with `fire cli send`), so a compute can prompt. Without a
   terminal stdin is closed and the compute never blocks. (#23)
+- `namespace: tools` as shorthand for `namespace: { prefix: tools }`. (#32)
 - Docs: comparison with other task runners, MCP setup per host, schema `$id`.
 
 ### Changed
@@ -35,6 +36,8 @@ reconstructed from the git history.
   `Cannot connect to fire at …`), like python; python also reports refused connections. (#21)
 - A `*.fire.yml` file with no commands no longer creates an empty inferred group. (#31)
 - Runtime `fallback_runner` example in the docs works as written. (#21)
+- The schema no longer requires `namespace.description`, so editors stop flagging a namespace
+  with only a `prefix`. (#32)
 
 ## [2.10.1] - 2026-11-22
 

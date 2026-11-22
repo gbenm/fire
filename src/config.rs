@@ -204,12 +204,42 @@ impl<'de> Deserialize<'de> for EnvFileSetting {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+/// `namespace: tools` is shorthand for `namespace: { prefix: tools }`.
+#[derive(Debug, Clone, Default)]
 struct NamespaceRaw {
-    #[serde(default)]
     prefix: String,
-    #[serde(default)]
     description: String,
+}
+
+impl<'de> Deserialize<'de> for NamespaceRaw {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Spec {
+            #[serde(default)]
+            prefix: String,
+            #[serde(default)]
+            description: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Prefix(String),
+            Spec(Spec),
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Prefix(prefix) => Self {
+                prefix,
+                description: String::new(),
+            },
+            Raw::Spec(spec) => Self {
+                prefix: spec.prefix,
+                description: spec.description,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1243,6 +1273,23 @@ mod tests {
         let value: FireFileRaw =
             yaml_serde::from_str("group: backend\ncommands: {}").expect("deserialize");
         assert_eq!(value.group, GroupSetting::Value("backend".to_string()));
+    }
+
+    #[test]
+    fn namespace_string_is_prefix_shorthand() {
+        let short: FireFileRaw =
+            yaml_serde::from_str("namespace: tools\ncommands: {}").expect("deserialize");
+        let ns = short.namespace.expect("namespace");
+        assert_eq!(ns.prefix, "tools");
+        assert_eq!(ns.description, "");
+
+        let long: FireFileRaw = yaml_serde::from_str(
+            "namespace:\n  prefix: tools\n  description: Tools\ncommands: {}",
+        )
+        .expect("deserialize");
+        let ns = long.namespace.expect("namespace");
+        assert_eq!(ns.prefix, "tools");
+        assert_eq!(ns.description, "Tools");
     }
 
     #[test]

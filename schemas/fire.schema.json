@@ -16,7 +16,15 @@
       "description": "Project working directory. Defaults to '.'. Use null to run from the current process directory."
     },
     "namespace": {
-      "$ref": "#/$defs/namespace"
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Shorthand for { prefix: <value> }."
+        },
+        {
+          "$ref": "#/$defs/namespace"
+        }
+      ]
     },
     "group": {
       "type": [
@@ -97,8 +105,7 @@
         }
       },
       "required": [
-        "prefix",
-        "description"
+        "prefix"
       ]
     },
     "runtime": {

@@ -34,7 +34,7 @@ Paths are relative to the current directory. Included files follow the same scop
 Each Fire file loads its adjacent `.env` automatically. For included files, Fire merges the including directory's `.env` with the included directory's `.env`, with the included file taking precedence. Configure `env_file` (string, list, or `null`) and inline `environment` values at file or command scope when a command needs a different environment. See [Writing Commands](./commands-and-args.md#environment) for interpolation and precedence details.
 
 ## Scopes: namespace and group
-- `namespace.prefix` and `namespace.description` define a logical namespace.
+- `namespace.prefix` defines a logical namespace; `namespace.description` is optional and labels it in listings and completion. With only a prefix, `namespace: tools` is shorthand for `namespace: { prefix: tools }`.
 - `group` provides an additional path segment, often for team/area partitioning.
 - `description` at file root describes that `group` in help/completion.
 - Files in the same directory inherit `namespace.prefix` from a peer file if they do not set one.
