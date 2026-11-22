@@ -12,7 +12,7 @@ use crate::config::{
 };
 use crate::registry::{
     decline_directory, install_directory, load_declined_directories, load_installed_directories,
-    save_installed_directories, InstallResult,
+    load_merged_namespaces, save_installed_directories, set_namespace_merged, InstallResult,
 };
 
 pub(crate) const SUBCOMMANDS: &[(&str, &str)] = &[
@@ -33,6 +33,11 @@ pub(crate) const SUBCOMMANDS: &[(&str, &str)] = &[
         "edit",
         "Open a config file of a directory with $VISUAL / $EDITOR",
     ),
+    (
+        "merge",
+        "Call a registered namespace's commands without the namespace word",
+    ),
+    ("unmerge", "Require the namespace word again"),
 ];
 
 /// A registered directory and what it contributes.
@@ -132,6 +137,8 @@ pub(crate) fn handle(args: &[String]) {
             ("edit", []) => edit(".", None),
             ("edit", [target]) => edit(target, None),
             ("edit", [target, file]) => edit(target, Some(file)),
+            ("merge", [namespace]) => merge(namespace),
+            ("unmerge", [namespace]) => unmerge(namespace),
             _ => Err(usage()),
         },
     };
@@ -156,6 +163,8 @@ fn usage() -> String {
     text.push_str("\n  fire cli global list");
     text.push_str("\n  fire cli global prune");
     text.push_str("\n  fire cli global edit [namespace|path] [file]");
+    text.push_str("\n  fire cli global merge <namespace>");
+    text.push_str("\n  fire cli global unmerge <namespace>");
     text
 }
 
@@ -168,6 +177,8 @@ pub(crate) fn print_help() {
     println!("  list                          {}", SUBCOMMANDS[2].1);
     println!("  prune                         {}", SUBCOMMANDS[3].1);
     println!("  edit [namespace|path] [file]  {}", SUBCOMMANDS[4].1);
+    println!("  merge <namespace>             {}", SUBCOMMANDS[5].1);
+    println!("  unmerge <namespace>           {}", SUBCOMMANDS[6].1);
     println!();
     println!(
         "An argument with `/`, `.`, `..` or a leading `~` is a path; anything else is a namespace."
@@ -198,6 +209,37 @@ fn add(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn merge(namespace: &str) -> Result<(), String> {
+    if !entries().iter().any(|entry| entry.has_namespace(namespace)) {
+        return Err(format!(
+            "No registered directory has namespace `{namespace}` (see `fire cli global list`)."
+        ));
+    }
+    if set_namespace_merged(namespace, true)? {
+        println!(
+            "Merged `{namespace}`: call its commands without `{namespace}` (`fire {namespace} <command>` still works)."
+        );
+        println!(
+            "A first word another command, group or namespace already uses keeps pointing there; for those, write `fire {namespace} ...`."
+        );
+    } else {
+        println!("Already merged: {namespace}");
+    }
+    Ok(())
+}
+
+fn unmerge(namespace: &str) -> Result<(), String> {
+    if set_namespace_merged(namespace, false)? {
+        println!("Unmerged `{namespace}`: call its commands as `fire {namespace} <command>`.");
+        Ok(())
+    } else {
+        Err(format!(
+            "`{namespace}` is not merged (merged: {}).",
+            list_or_none(&load_merged_namespaces())
+        ))
+    }
+}
+
 fn remove(target: &str) -> Result<(), String> {
     let installed = load_installed_directories();
     let directory = resolve_registered(target, &installed)?;
@@ -223,6 +265,7 @@ fn list() {
         return;
     }
 
+    let merged = load_merged_namespaces();
     // (rank, namespace column, directory column, files column)
     let mut rows: Vec<(u8, String, String, String)> = Vec::new();
     for entry in &entries {
@@ -238,6 +281,7 @@ fn list() {
         }
         for scope in &entry.scopes {
             let (rank, name) = match &scope.namespace {
+                Some(name) if merged.contains(name) => (0, format!("{name} (merged)")),
                 Some(name) => (0, name.clone()),
                 None => (1, "(root)".to_string()),
             };
@@ -531,6 +575,25 @@ pub(crate) fn target_suggestions(entries: &[GlobalEntry]) -> Vec<(String, String
         suggestions.push((entry.dir.display().to_string(), entry.summary()));
     }
     suggestions
+}
+
+/// Completion values for `fire cli global merge <TAB>`: registered namespaces not merged yet.
+pub(crate) fn merge_suggestions(entries: &[GlobalEntry]) -> Vec<(String, String)> {
+    let merged = load_merged_namespaces();
+    target_suggestions(entries)
+        .into_iter()
+        .filter(|(value, _)| {
+            matches!(parse_target(value), Target::Namespace(_)) && !merged.contains(value)
+        })
+        .collect()
+}
+
+/// Completion values for `fire cli global unmerge <TAB>`: merged namespaces.
+pub(crate) fn unmerge_suggestions() -> Vec<(String, String)> {
+    load_merged_namespaces()
+        .into_iter()
+        .map(|name| (name, "merged".to_string()))
+        .collect()
 }
 
 /// Completion values for `fire cli global edit <target> <TAB>`: that directory's files.

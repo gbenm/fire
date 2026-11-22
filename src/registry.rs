@@ -1,5 +1,6 @@
-//! Directories registered with `fire cli global add` (`installed-dirs.yml`) and the ones whose
-//! first-use registration prompt was declined (`declined-dirs.yml`), both in fire's config dir.
+//! Directories registered with `fire cli global add` and the namespaces merged with
+//! `fire cli global merge` (`installed-dirs.yml`), and the directories whose first-use
+//! registration prompt was declined (`declined-dirs.yml`), both in fire's config dir.
 
 use std::{
     fs,
@@ -12,6 +13,8 @@ use serde::{Deserialize, Serialize};
 struct RegistryFile {
     #[serde(default)]
     installed_dirs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    merged_namespaces: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -26,11 +29,37 @@ pub(crate) enum InstallResult {
     AlreadyInstalled,
 }
 
+fn load_registry() -> RegistryFile {
+    read_yaml::<RegistryFile>(&registry_path()).unwrap_or_default()
+}
+
 pub(crate) fn load_installed_directories() -> Vec<PathBuf> {
-    let Some(parsed) = read_yaml::<RegistryFile>(&registry_path()) else {
-        return Vec::new();
-    };
-    absolute_paths(parsed.installed_dirs)
+    absolute_paths(load_registry().installed_dirs)
+}
+
+/// Namespaces whose commands can be called without the namespace word.
+pub(crate) fn load_merged_namespaces() -> Vec<String> {
+    load_registry().merged_namespaces
+}
+
+/// Adds or removes `namespace` from the merged set; `false` when it was already so.
+pub(crate) fn set_namespace_merged(namespace: &str, merged: bool) -> Result<bool, String> {
+    let mut registry = load_registry();
+    let present = registry
+        .merged_namespaces
+        .iter()
+        .any(|name| name == namespace);
+    if present == merged {
+        return Ok(false);
+    }
+    if merged {
+        registry.merged_namespaces.push(namespace.to_string());
+        registry.merged_namespaces.sort();
+    } else {
+        registry.merged_namespaces.retain(|name| name != namespace);
+    }
+    write_yaml(&registry_path(), &registry)?;
+    Ok(true)
 }
 
 /// Registers `directory` (already canonical) and clears any declined prompt for it.
@@ -54,10 +83,9 @@ pub(crate) fn install_directory(directory: &Path) -> Result<InstallResult, Strin
 }
 
 pub(crate) fn save_installed_directories(installed: &[PathBuf]) -> Result<(), String> {
-    let data = RegistryFile {
-        installed_dirs: path_strings(installed),
-    };
-    write_yaml(&registry_path(), &data)
+    let mut registry = load_registry();
+    registry.installed_dirs = path_strings(installed);
+    write_yaml(&registry_path(), &registry)
 }
 
 pub(crate) fn load_declined_directories() -> Vec<PathBuf> {

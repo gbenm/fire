@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::config::{local_implicit_namespace, CommandEntry, LoadedConfig, RuntimeConfig};
+use crate::config::{CommandEntry, ImplicitNamespaces, LoadedConfig, RuntimeConfig};
 
 pub(crate) struct ResolvedCommand<'a> {
     pub(crate) project_dir: &'a Path,
@@ -20,12 +20,11 @@ pub(crate) fn resolve_command<'a>(
     args: &'a [String],
 ) -> Option<ResolvedCommand<'a>> {
     let mut best: Option<ResolvedCommand<'a>> = None;
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
 
     for file in &config.files {
         for (command_name, command_entry) in &file.commands {
-            let Some(base_consumed) =
-                scope_match_consumed(file, command_name, args, implicit_namespace.as_deref())
+            let Some(base_consumed) = scope_match_consumed(file, command_name, args, &implicit)
             else {
                 continue;
             };
@@ -74,13 +73,12 @@ pub(crate) fn detect_terminal_command_collision(
     args: &[String],
     consumed: usize,
 ) -> Result<(), String> {
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     let mut paths: BTreeSet<PathBuf> = BTreeSet::new();
 
     for file in &config.files {
         for (command_name, command_entry) in &file.commands {
-            let Some(base_consumed) =
-                scope_match_consumed(file, command_name, args, implicit_namespace.as_deref())
+            let Some(base_consumed) = scope_match_consumed(file, command_name, args, &implicit)
             else {
                 continue;
             };
@@ -122,7 +120,7 @@ fn scope_match_consumed(
     file: &crate::config::FileConfig,
     command_name: &str,
     args: &[String],
-    implicit_namespace: Option<&str>,
+    implicit: &ImplicitNamespaces,
 ) -> Option<usize> {
     let explicit_match = match &file.scope {
         crate::config::FileScope::Root => {
@@ -168,29 +166,26 @@ fn scope_match_consumed(
         return explicit_match;
     }
 
-    // Implicit namespace matching: when there is one local active namespace,
-    // namespace-prefixed commands can omit the namespace token.
-    if let Some(active_namespace) = implicit_namespace {
-        match &file.scope {
-            crate::config::FileScope::Namespace { namespace, .. } => {
-                if namespace == active_namespace
-                    && args.first().map(String::as_str) == Some(command_name)
-                {
-                    return Some(1);
-                }
+    // Implicit namespace matching: the local implicit namespace and merged namespaces can omit
+    // the namespace token (merged ones only for first words nothing else takes).
+    let first = args.first().map(String::as_str)?;
+    match &file.scope {
+        crate::config::FileScope::Namespace { namespace, .. } => {
+            if first == command_name && implicit.allows(namespace, first) {
+                return Some(1);
             }
-            crate::config::FileScope::NamespaceGroup {
-                namespace, group, ..
-            } => {
-                if namespace == active_namespace
-                    && args.first().map(String::as_str) == Some(group.as_str())
-                    && args.get(1).map(String::as_str) == Some(command_name)
-                {
-                    return Some(2);
-                }
-            }
-            crate::config::FileScope::Root | crate::config::FileScope::Group { .. } => {}
         }
+        crate::config::FileScope::NamespaceGroup {
+            namespace, group, ..
+        } => {
+            if first == group
+                && args.get(1).map(String::as_str) == Some(command_name)
+                && implicit.allows(namespace, first)
+            {
+                return Some(2);
+            }
+        }
+        crate::config::FileScope::Root | crate::config::FileScope::Group { .. } => {}
     }
 
     None
@@ -244,6 +239,7 @@ commands:
     exec: npm run
 "#;
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
@@ -269,6 +265,7 @@ commands:
     exec: npm run api
 "#;
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Global,
                 project_dir: PathBuf::from("."),
@@ -305,6 +302,7 @@ commands:
 "#;
         // Case 1: Local source (Implicit allowed)
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
@@ -331,6 +329,7 @@ commands:
 
         // Case 2: Global source (implicit allowed when local namespace is active)
         let config_global = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
@@ -389,6 +388,7 @@ commands:
     exec: echo one
 "#;
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
@@ -436,6 +436,7 @@ commands:
         exec: echo one
 "#;
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
@@ -477,6 +478,7 @@ commands:
     exec: echo one
 "#;
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
@@ -529,6 +531,7 @@ commands:
     #[test]
     fn terminal_and_non_terminal_same_name_both_work() {
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
@@ -586,6 +589,7 @@ commands:
     exec: echo run
 "#;
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("/tmp/project"),
@@ -602,5 +606,168 @@ commands:
             resolved.runtime_paths_base_dir,
             Path::new("/tmp/project/configs")
         );
+    }
+    fn namespace_file(namespace: &str, path: &str, yaml: &str) -> FileConfig {
+        FileConfig {
+            source: SourceKind::Global,
+            project_dir: PathBuf::from("."),
+            config_path: PathBuf::from(path),
+            scope: FileScope::Namespace {
+                namespace: namespace.to_string(),
+                namespace_description: String::new(),
+            },
+            runtimes: BTreeMap::new(),
+            commands: parse_commands(yaml),
+        }
+    }
+
+    /// Leaked so a resolved command can borrow it in one expression (tests only).
+    fn words(values: &[&str]) -> &'static [String] {
+        let owned: Vec<String> = values.iter().map(|value| value.to_string()).collect();
+        Box::leak(owned.into_boxed_slice())
+    }
+
+    fn merged(names: &[&str]) -> std::collections::BTreeSet<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn merged_namespace_resolves_without_prefix_and_explicit_form_still_works() {
+        let mut group = namespace_file(
+            "acme",
+            "/tmp/acme-db.fire.yml",
+            "commands:\n  migrate: echo m\n",
+        );
+        group.scope = FileScope::NamespaceGroup {
+            namespace: "acme".to_string(),
+            namespace_description: String::new(),
+            group: "db".to_string(),
+            group_description: String::new(),
+        };
+        let config = LoadedConfig {
+            merged_namespaces: merged(&["acme"]),
+            files: vec![
+                namespace_file(
+                    "acme",
+                    "/tmp/acme.fire.yml",
+                    "commands:\n  deploy: echo d\n",
+                ),
+                group,
+            ],
+        };
+
+        let resolved =
+            resolve_command(&config, words(&["deploy", "--now"])).expect("merged command");
+        assert_eq!(resolved.consumed, 1);
+        let resolved = resolve_command(&config, words(&["db", "migrate"])).expect("merged group");
+        assert_eq!(resolved.consumed, 2);
+        let resolved = resolve_command(&config, words(&["acme", "deploy"])).expect("explicit");
+        assert_eq!(resolved.consumed, 2);
+
+        let unmerged = LoadedConfig {
+            merged_namespaces: merged(&[]),
+            files: config.files.clone(),
+        };
+        assert!(resolve_command(&unmerged, words(&["deploy"])).is_none());
+    }
+
+    #[test]
+    fn merged_namespace_never_takes_a_word_used_without_merging() {
+        let config = LoadedConfig {
+            merged_namespaces: merged(&["acme"]),
+            files: vec![
+                namespace_file(
+                    "acme",
+                    "/tmp/acme.fire.yml",
+                    "commands:\n  deploy: echo merged\n  tools: echo merged\n",
+                ),
+                FileConfig {
+                    source: SourceKind::Global,
+                    project_dir: PathBuf::from("."),
+                    config_path: PathBuf::from("/tmp/scripts.fire.yml"),
+                    scope: FileScope::Root,
+                    runtimes: BTreeMap::new(),
+                    commands: parse_commands("commands:\n  deploy: echo direct\n"),
+                },
+                namespace_file(
+                    "tools",
+                    "/tmp/tools.fire.yml",
+                    "commands:\n  lint: echo lint\n",
+                ),
+            ],
+        };
+
+        // the global direct command keeps `deploy`: no collision, no shadowing
+        let args = words(&["deploy"]);
+        let resolved = resolve_command(&config, args).expect("direct");
+        assert_eq!(
+            resolved.command.execution_commands().unwrap(),
+            vec!["echo direct"]
+        );
+        assert!(detect_terminal_command_collision(&config, args, resolved.consumed).is_ok());
+
+        // a namespace keeps its name too
+        assert!(resolve_command(&config, words(&["tools"])).is_none());
+        let resolved = resolve_command(&config, words(&["tools", "lint"])).expect("namespace");
+        assert_eq!(
+            resolved.command.execution_commands().unwrap(),
+            vec!["echo lint"]
+        );
+    }
+
+    #[test]
+    fn local_implicit_namespace_wins_over_merged() {
+        let mut local = namespace_file(
+            "web",
+            "/tmp/web.fire.yml",
+            "commands:\n  deploy: echo local\n",
+        );
+        local.source = SourceKind::Local;
+        let config = LoadedConfig {
+            merged_namespaces: merged(&["acme"]),
+            files: vec![
+                local,
+                namespace_file(
+                    "acme",
+                    "/tmp/acme.fire.yml",
+                    "commands:\n  deploy: echo merged\n  ship: echo ship\n",
+                ),
+            ],
+        };
+
+        let args = words(&["deploy"]);
+        let resolved = resolve_command(&config, args).expect("local");
+        assert_eq!(
+            resolved.command.execution_commands().unwrap(),
+            vec!["echo local"]
+        );
+        assert!(detect_terminal_command_collision(&config, args, resolved.consumed).is_ok());
+        assert!(resolve_command(&config, words(&["ship"])).is_some());
+    }
+
+    #[test]
+    fn same_command_in_two_merged_namespaces_is_a_collision() {
+        let config = LoadedConfig {
+            merged_namespaces: merged(&["acme", "corp"]),
+            files: vec![
+                namespace_file(
+                    "acme",
+                    "/tmp/acme.fire.yml",
+                    "commands:\n  deploy: echo a\n",
+                ),
+                namespace_file(
+                    "corp",
+                    "/tmp/corp.fire.yml",
+                    "commands:\n  deploy: echo c\n",
+                ),
+            ],
+        };
+
+        let args = words(&["deploy"]);
+        let resolved = resolve_command(&config, args).expect("resolved");
+        let error = detect_terminal_command_collision(&config, args, resolved.consumed)
+            .expect_err("must report collision");
+        assert!(error.contains("/tmp/acme.fire.yml") && error.contains("/tmp/corp.fire.yml"));
+        assert!(resolve_command(&config, words(&["corp", "deploy"])).is_some());
     }
 }

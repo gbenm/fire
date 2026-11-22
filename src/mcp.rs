@@ -14,6 +14,9 @@ use crate::config::{local_implicit_namespace, CommandEntry, FileScope, LoadedCon
 pub(crate) struct CommandContext {
     pub(crate) fire_version: String,
     pub(crate) implicit_local_namespace: Option<String>,
+    /// Namespaces merged by the user (`fire cli global merge`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) merged_namespaces: Vec<String>,
     pub(crate) notes: Vec<String>,
     pub(crate) commands: Vec<CommandNode>,
 }
@@ -80,9 +83,11 @@ pub(crate) fn build_command_context(config: &LoadedConfig) -> CommandContext {
     CommandContext {
         fire_version: crate::FIRE_VERSION.to_string(),
         implicit_local_namespace,
+        merged_namespaces: config.merged_namespaces.iter().cloned().collect(),
         notes: vec![
             "`path` is the canonical invocation, e.g. `fire backend logs`. Run it directly in a shell.".to_string(),
             "When a single local namespace is active (see `implicit_local_namespace`), its prefix token can be omitted.".to_string(),
+            "Commands of `merged_namespaces` can also omit the prefix, unless another command, group or namespace uses that first word; the full `path` always works.".to_string(),
             "Nodes with `runnable: false` are command groups; invoke one of their `subcommands` instead.".to_string(),
             "`exec`/`eval` show the underlying template(s) a command runs, for context only — invoke via `fire <path>`, not by copying these templates.".to_string(),
             "`long_running: true` marks servers, watchers and workers: start them with `start_session`. Run from a shell without a terminal, they detach on their own and print a session id.".to_string(),
@@ -463,6 +468,7 @@ mod tests {
     #[test]
     fn agents_false_hides_command_and_its_subcommands() {
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
@@ -509,6 +515,7 @@ commands:
     #[test]
     fn root_scope_produces_bare_path() {
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
@@ -541,6 +548,7 @@ commands:
     #[test]
     fn namespace_group_scope_prefixes_path() {
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Global,
                 project_dir: PathBuf::from("."),
@@ -576,6 +584,7 @@ commands:
     #[test]
     fn nested_subcommands_build_full_path() {
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
@@ -622,6 +631,7 @@ commands:
     #[test]
     fn eval_only_command_captures_eval_expressions() {
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
@@ -654,6 +664,7 @@ commands:
     #[test]
     fn search_matches_on_description_and_exec() {
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),

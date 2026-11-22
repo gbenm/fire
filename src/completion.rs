@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::config::{local_implicit_namespace, CommandEntry, FileScope, LoadedConfig, SourceKind};
+use crate::config::{CommandEntry, FileScope, ImplicitNamespaces, LoadedConfig, SourceKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CompletionSuggestion {
@@ -76,6 +76,7 @@ fn root_suggestions(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSugges
     let local_commands = local_commands(config, prefix);
     let local_namespaces = local_namespaces(config, prefix);
     let local_groups = local_groups(config, prefix);
+    let merged = merged_entries(config, prefix);
     let namespaces = global_namespaces(config, prefix);
     let groups = global_groups(config, prefix);
     let global_commands = global_direct_commands(config, prefix);
@@ -84,6 +85,7 @@ fn root_suggestions(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSugges
         local_commands,
         local_namespaces,
         local_groups,
+        merged,
         namespaces,
         groups,
         global_commands,
@@ -246,6 +248,8 @@ fn core_cli_global_children(typed: &[String], prefix: &str) -> Vec<CompletionSug
         [sub] if sub == "remove" || sub == "edit" => {
             crate::global::target_suggestions(&crate::global::entries())
         }
+        [sub] if sub == "merge" => crate::global::merge_suggestions(&crate::global::entries()),
+        [sub] if sub == "unmerge" => crate::global::unmerge_suggestions(),
         [sub, target] if sub == "edit" => {
             crate::global::file_suggestions(&crate::global::entries(), target)
         }
@@ -334,7 +338,7 @@ fn children_for_exact_path(config: &LoadedConfig, path: &[String]) -> Vec<Comple
 
 fn local_commands(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggestion> {
     let mut map = BTreeMap::new();
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     for file in &config.files {
         match &file.scope {
             FileScope::Root if file.source == SourceKind::Local => {
@@ -345,7 +349,7 @@ fn local_commands(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggesti
                 }
             }
             FileScope::Namespace { namespace, .. } => {
-                if implicit_namespace.as_deref() == Some(namespace.as_str()) {
+                if implicit.is_local(namespace) {
                     for (name, entry) in &file.commands {
                         if name.starts_with(prefix) {
                             map.insert(name.clone(), command_suggestion(name, entry));
@@ -360,6 +364,25 @@ fn local_commands(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggesti
         }
     }
     map.into_values().collect()
+}
+
+/// Commands and groups of merged namespaces as direct entries, labeled with the namespace.
+fn merged_entries(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggestion> {
+    ImplicitNamespaces::of(config)
+        .merged_entries(config)
+        .into_iter()
+        .filter(|entry| entry.name.starts_with(prefix))
+        .map(|entry| {
+            let description = match entry.command {
+                Some(command) => command.description(),
+                None => Some(entry.group_description),
+            };
+            CompletionSuggestion {
+                value: entry.name.to_string(),
+                description: Some(entry.label(description)),
+            }
+        })
+        .collect()
 }
 
 fn global_namespaces(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggestion> {
@@ -470,7 +493,7 @@ fn local_namespaces(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSugges
 
 fn local_groups(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggestion> {
     let mut map = BTreeMap::new();
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     for file in &config.files {
         match &file.scope {
             FileScope::Group {
@@ -486,9 +509,7 @@ fn local_groups(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggestion
                 group,
                 group_description,
                 ..
-            } if implicit_namespace.as_deref() == Some(namespace.as_str())
-                && group.starts_with(prefix) =>
-            {
+            } if implicit.is_local(namespace) && group.starts_with(prefix) => {
                 map.insert(group.clone(), non_empty(group_description));
             }
             _ => {}
@@ -566,7 +587,7 @@ fn namespace_groups(
 
 fn group_children(config: &LoadedConfig, group: &str, prefix: &str) -> Vec<CompletionSuggestion> {
     let mut map = BTreeMap::new();
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     for file in &config.files {
         match &file.scope {
             FileScope::Group {
@@ -584,9 +605,7 @@ fn group_children(config: &LoadedConfig, group: &str, prefix: &str) -> Vec<Compl
                 namespace,
                 group: file_alias,
                 ..
-            } if implicit_namespace.as_deref() == Some(namespace.as_str())
-                && file_alias == group =>
-            {
+            } if file_alias == group && implicit.allows(namespace, group) => {
                 for (name, entry) in &file.commands {
                     if name.starts_with(prefix) {
                         map.insert(name.clone(), command_suggestion(name, entry));
@@ -600,14 +619,12 @@ fn group_children(config: &LoadedConfig, group: &str, prefix: &str) -> Vec<Compl
 }
 
 fn root_command_children(config: &LoadedConfig, command_name: &str) -> Vec<CompletionSuggestion> {
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     let mut map = BTreeMap::new();
     for file in &config.files {
         let root_invocable = match &file.scope {
             FileScope::Root => true,
-            FileScope::Namespace { namespace, .. } => {
-                implicit_namespace.as_deref() == Some(namespace.as_str())
-            }
+            FileScope::Namespace { namespace, .. } => implicit.allows(namespace, command_name),
             FileScope::Group { .. } | FileScope::NamespaceGroup { .. } => false,
         };
         if !root_invocable {
@@ -627,13 +644,11 @@ fn nested_from_root_command(
     path: &[String],
 ) -> Option<Vec<CompletionSuggestion>> {
     let root_command = &path[0];
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     let entries = config.files.iter().filter_map(|file| {
         let root_invocable = match &file.scope {
             FileScope::Root => true,
-            FileScope::Namespace { namespace, .. } => {
-                implicit_namespace.as_deref() == Some(namespace.as_str())
-            }
+            FileScope::Namespace { namespace, .. } => implicit.allows(namespace, root_command),
             FileScope::Group { .. } | FileScope::NamespaceGroup { .. } => false,
         };
         if !root_invocable {
@@ -678,7 +693,7 @@ fn nested_from_group_scope(
     let group = &path[0];
     let command_name = &path[1];
 
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     let entries = config.files.iter().filter_map(|file| {
         let matches = match &file.scope {
             FileScope::Group {
@@ -688,7 +703,7 @@ fn nested_from_group_scope(
                 namespace,
                 group: file_alias,
                 ..
-            } => implicit_namespace.as_deref() == Some(namespace.as_str()) && file_alias == group,
+            } => file_alias == group && implicit.allows(namespace, group),
             _ => false,
         };
         if matches {
@@ -863,6 +878,7 @@ mod tests {
         }
 
         LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
@@ -1016,6 +1032,7 @@ commands:
         }
 
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
@@ -1054,6 +1071,7 @@ commands:
         }
 
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
@@ -1103,7 +1121,10 @@ commands:
         let values =
             completion_suggestions(&config, &["cli".into(), "global".into(), String::new()]);
         let names: Vec<String> = values.iter().map(|it| it.value.clone()).collect();
-        assert_eq!(names, vec!["add", "remove", "list", "prune", "edit"]);
+        assert_eq!(
+            names,
+            vec!["add", "remove", "list", "prune", "edit", "merge", "unmerge"]
+        );
         assert!(values.iter().all(|it| it.description.is_some()));
     }
 
@@ -1186,6 +1207,7 @@ commands:
         }
 
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
@@ -1260,6 +1282,7 @@ commands:
         }
 
         let config = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
@@ -1295,5 +1318,48 @@ commands:
         let children = completion_suggestions(&config, &["example".to_string()]);
         let names: Vec<String> = children.into_iter().map(|it| it.value).collect();
         assert_eq!(names, vec!["nested"]);
+    }
+    #[test]
+    fn merged_namespace_entries_complete_at_root_with_namespace_label() {
+        let mut config = config_with_scopes();
+        config.merged_namespaces.insert("ex".to_string());
+
+        let values = completion_suggestions(&config, &[]);
+        let names: Vec<&str> = values.iter().map(|it| it.value.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["cli", "dev", "run", "api", "ops", "ex", "backend", "ping"]
+        );
+        let api = values.iter().find(|it| it.value == "api").unwrap();
+        assert_eq!(api.description.as_deref(), Some("ex · api command"));
+        let ops = values.iter().find(|it| it.value == "ops").unwrap();
+        assert_eq!(ops.description.as_deref(), Some("ex"));
+
+        let nested = completion_suggestions(&config, &["ops".to_string(), String::new()]);
+        let nested: Vec<&str> = nested.iter().map(|it| it.value.as_str()).collect();
+        assert_eq!(nested, vec!["deploy"]);
+    }
+
+    #[test]
+    fn merged_namespace_does_not_complete_taken_words() {
+        let mut config = config_with_scopes();
+        config.merged_namespaces.insert("ex".to_string());
+        // `ping` is a global direct command: a merged `ping` must not appear twice
+        if let Some(file) = config
+            .files
+            .iter_mut()
+            .find(|file| matches!(&file.scope, FileScope::Namespace { .. }))
+        {
+            file.commands.insert(
+                "ping".to_string(),
+                CommandEntry::Shorthand("echo merged".to_string()),
+            );
+        }
+        let values = completion_suggestions(&config, &["pi".to_string()]);
+        assert_eq!(values.len(), 1);
+        assert_eq!(
+            values[0].description.as_deref(),
+            Some("global direct command")
+        );
     }
 }

@@ -46,6 +46,8 @@ fire cli global remove [namespace|path]       # unregister it (default: current)
 fire cli global list                          # registered directories, by namespace
 fire cli global prune                         # unregister directories that no longer exist
 fire cli global edit [namespace|path] [file]  # open a config file with $VISUAL / $EDITOR
+fire cli global merge <namespace>             # call its commands without the namespace word
+fire cli global unmerge <namespace>           # require the namespace word again
 ```
 
 `list` shows one row per namespace, with the directory and the files that contribute to it:
@@ -61,7 +63,20 @@ tools   ~/code/tools    fire.yaml
 
 The first time you run a command in an unregistered directory with fire files, Fire asks once whether to register it (`[y/N]`). The answer is remembered, and `fire cli global remove` counts as a "no". It only asks in an interactive terminal: never in sessions (`fire cli bg`, MCP), pipes, completion or when `CI` is set.
 
-The registry lives in Fire's config directory (`installed-dirs.yml`, and `declined-dirs.yml` for the answered prompts). `fire cli install` still works as a deprecated alias of `fire cli global add`.
+The registry lives in Fire's config directory (`installed-dirs.yml`, which also stores the merged namespaces, and `declined-dirs.yml` for the answered prompts). `fire cli install` still works as a deprecated alias of `fire cli global add`.
+
+### Merged namespaces
+On a machine where most commands come from one registered namespace, merge it to drop the namespace word everywhere:
+
+```text
+fire cli global merge acme
+fire deploy        # → fire acme deploy
+fire db migrate    # → fire acme db migrate
+```
+
+The explicit form (`fire acme deploy`) keeps working. `fire cli global list` marks merged namespaces with `(merged)`, and `fire <TAB>` and root help (`Merged Commands`) list their commands and groups with the namespace in the description.
+
+Merging is only a shortcut: it never changes what an existing invocation runs. A merged namespace doesn't get a first word that is already in use without merging, meaning a local command, the local implicit namespace's commands and groups, a global direct command, a group without namespace, or any namespace name. For those, write the namespace (`fire acme ping`). If two merged namespaces define the same command, running it reports a collision and you need the explicit form.
 
 ## Scopes: namespace and group
 - `namespace.prefix` defines a logical namespace; `namespace.description` is optional and labels it in listings and completion. With only a prefix, `namespace: tools` is shorthand for `namespace: { prefix: tools }`.
@@ -87,10 +102,11 @@ Depending on scope, users call commands as:
 - `fire <namespace> <group> <command>` (namespace + group)
 
 ### Resolution priority at root completion (`fire <TAB>`)
-1. Root-local commands (no namespace/group)
-2. Global namespaces
-3. Global groups without namespace
-4. Global direct commands
+1. Root-local commands (no namespace/group), then local namespaces and groups
+2. Merged namespaces' commands and groups (only first words nothing above or below uses)
+3. Global namespaces
+4. Global groups without namespace
+5. Global direct commands
 
 `cli` is reserved by Fire and cannot be defined under `commands`.
 

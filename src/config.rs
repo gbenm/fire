@@ -10,11 +10,13 @@ use serde::{
     Deserialize, Deserializer,
 };
 
-use crate::registry::load_installed_directories;
+use crate::registry::{load_installed_directories, load_merged_namespaces};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LoadedConfig {
     pub(crate) files: Vec<FileConfig>,
+    /// Namespaces merged with `fire cli global merge`: callable without the namespace word.
+    pub(crate) merged_namespaces: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -608,6 +610,7 @@ pub(crate) fn load_config() -> LoadedConfig {
             .files
             .extend(load_global_file_configs(&directory, SourceKind::Global));
     }
+    loaded.merged_namespaces = load_merged_namespaces().into_iter().collect();
 
     loaded
 }
@@ -655,6 +658,127 @@ pub(crate) fn local_implicit_namespace(config: &LoadedConfig) -> Option<String> 
         namespaces.into_iter().next()
     } else {
         None
+    }
+}
+
+/// Namespaces whose commands and groups can be called without the namespace word: the local
+/// implicit namespace, and the merged ones for first words nothing else takes.
+pub(crate) struct ImplicitNamespaces {
+    local: Option<String>,
+    merged: BTreeSet<String>,
+    /// First words reachable without merging. A merged namespace never takes them, so merging
+    /// can't change what an existing invocation runs.
+    taken: BTreeSet<String>,
+}
+
+impl ImplicitNamespaces {
+    pub(crate) fn of(config: &LoadedConfig) -> Self {
+        let local = local_implicit_namespace(config);
+        let mut taken: BTreeSet<String> = BTreeSet::from(["cli".to_string()]);
+        for file in &config.files {
+            match &file.scope {
+                FileScope::Root => taken.extend(file.commands.keys().cloned()),
+                FileScope::Group { group, .. } => {
+                    taken.insert(group.clone());
+                }
+                FileScope::Namespace { namespace, .. } => {
+                    taken.insert(namespace.clone());
+                    if local.as_deref() == Some(namespace.as_str()) {
+                        taken.extend(file.commands.keys().cloned());
+                    }
+                }
+                FileScope::NamespaceGroup {
+                    namespace, group, ..
+                } => {
+                    taken.insert(namespace.clone());
+                    if local.as_deref() == Some(namespace.as_str()) {
+                        taken.insert(group.clone());
+                    }
+                }
+            }
+        }
+        let merged = config
+            .merged_namespaces
+            .iter()
+            .filter(|namespace| local.as_deref() != Some(namespace.as_str()))
+            .cloned()
+            .collect();
+        Self {
+            local,
+            merged,
+            taken,
+        }
+    }
+
+    pub(crate) fn is_local(&self, namespace: &str) -> bool {
+        self.local.as_deref() == Some(namespace)
+    }
+
+    /// Whether `fire <first_word> ...` may resolve inside `namespace` without its prefix.
+    pub(crate) fn allows(&self, namespace: &str, first_word: &str) -> bool {
+        self.is_local(namespace) || self.allows_merged(namespace, first_word)
+    }
+
+    /// Like `allows`, but only through merging (not the local implicit namespace).
+    pub(crate) fn allows_merged(&self, namespace: &str, first_word: &str) -> bool {
+        self.merged.contains(namespace) && !self.taken.contains(first_word)
+    }
+
+    /// Commands and groups that merged namespaces add at the root, by name (first one wins).
+    pub(crate) fn merged_entries<'a>(&self, config: &'a LoadedConfig) -> Vec<MergedEntry<'a>> {
+        let mut entries: BTreeMap<&'a str, MergedEntry<'a>> = BTreeMap::new();
+        for file in &config.files {
+            match &file.scope {
+                FileScope::Namespace { namespace, .. } => {
+                    for (name, command) in &file.commands {
+                        if self.allows_merged(namespace, name) {
+                            entries.entry(name).or_insert(MergedEntry {
+                                name,
+                                namespace,
+                                command: Some(command),
+                                group_description: "",
+                            });
+                        }
+                    }
+                }
+                FileScope::NamespaceGroup {
+                    namespace,
+                    group,
+                    group_description,
+                    ..
+                } if self.allows_merged(namespace, group) => {
+                    let entry = entries.entry(group).or_insert(MergedEntry {
+                        name: group,
+                        namespace,
+                        command: None,
+                        group_description,
+                    });
+                    if entry.group_description.trim().is_empty() {
+                        entry.group_description = group_description;
+                    }
+                }
+                _ => {}
+            }
+        }
+        entries.into_values().collect()
+    }
+}
+
+/// A root entry added by a merged namespace: a command (`command`) or a group.
+pub(crate) struct MergedEntry<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) namespace: &'a str,
+    pub(crate) command: Option<&'a CommandEntry>,
+    pub(crate) group_description: &'a str,
+}
+
+impl MergedEntry<'_> {
+    /// `acme · <description>`, or just `acme`.
+    pub(crate) fn label(&self, description: Option<&str>) -> String {
+        match description.map(str::trim).filter(|text| !text.is_empty()) {
+            Some(text) => format!("{} · {text}", self.namespace),
+            None => self.namespace.to_string(),
+        }
     }
 }
 
@@ -1726,6 +1850,7 @@ commands:
     #[test]
     fn local_implicit_namespace_requires_single_value() {
         let config_single = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![FileConfig {
                 source: SourceKind::Local,
                 project_dir: PathBuf::from("."),
@@ -1744,6 +1869,7 @@ commands:
         );
 
         let config_multiple = LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,

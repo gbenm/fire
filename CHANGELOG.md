@@ -29,6 +29,11 @@ reconstructed from the git history.
   namespace or a path, and completion suggests registered namespaces and directories. Fire also
   offers once, in an interactive terminal, to register a directory the first time you run one of
   its commands. See [global directories](https://github.com/gbenm/fire/blob/main/docs/overview.md#global-directories). (#43)
+- `fire cli global merge|unmerge <namespace>`: call a registered namespace's commands and groups
+  without the namespace word, from any directory (`fire deploy` for `fire acme deploy`). Merging
+  never takes a first word that another command, group or namespace already uses, and two merged
+  namespaces with the same command report a collision. See
+  [merged namespaces](https://github.com/gbenm/fire/blob/main/docs/overview.md#merged-namespaces). (#20)
 - `namespace: tools` as shorthand for `namespace: { prefix: tools }`. (#32)
 - Container object for `runner` / `fallback_runner` (commands and runtimes), with Compose key
   names (`image`, `engine`, `tty`, `command`, `volumes`, `working_dir`, `environment`, `user`,

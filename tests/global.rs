@@ -363,3 +363,96 @@ fn no_prompt_without_a_terminal_or_in_ci() {
     let out = run_with_prompt(&project, Some("n"));
     assert!(out.contains("Not registered"), "{out}");
 }
+
+#[test]
+fn merged_namespace_runs_without_prefix_and_explicit_paths_win() {
+    let project = Project::new("global-merge", LOCAL);
+    let api = api_dir(&project);
+    let tools = tools_dir(&project);
+    let scripts = dir_with(
+        &project,
+        "scripts",
+        &[("fire.yaml", "commands:\n  ping: echo direct-ping\n")],
+    );
+    let corp = dir_with(
+        &project,
+        "corp",
+        &[
+            ("fire.yaml", "namespace: corp\ncommands: {}\n"),
+            ("db.fire.yaml", "commands:\n  migrate: echo corp-migrated\n"),
+        ],
+    );
+    for dir in [&api, &tools, &scripts, &corp] {
+        ok(project.cli(&["global", "add", path_str(dir)]));
+    }
+    let elsewhere = dir_with(&project, "elsewhere", &[]);
+
+    assert!(fails(run_in(&project, &elsewhere, &["db", "migrate"])).contains("Unknown command"));
+    let merged = ok(project.cli(&["global", "merge", "api"]));
+    assert!(merged.contains("Merged `api`"), "{merged}");
+    assert!(ok(project.cli(&["global", "merge", "api"])).contains("Already merged"));
+    assert!(fails(project.cli(&["global", "merge", "nope"])).contains("No registered directory"));
+
+    // merged group runs without the prefix; the explicit form still works
+    assert!(ok(run_in(&project, &elsewhere, &["db", "migrate"])).contains("migrated"));
+    assert!(ok(run_in(&project, &elsewhere, &["api", "ping"])).contains("api-pong"));
+    // `ping` is a global direct command: merging never takes it over
+    assert!(ok(run_in(&project, &elsewhere, &["ping"])).contains("direct-ping"));
+
+    let list = ok(project.cli(&["global", "list"]));
+    assert!(
+        list.lines().any(|line| line.starts_with("api (merged) ")),
+        "{list}"
+    );
+    assert!(
+        list.lines().any(|line| line.starts_with("tools ")),
+        "{list}"
+    );
+
+    let complete = |words: &[&str]| {
+        let mut args = vec!["__complete", "fire"];
+        args.extend_from_slice(words);
+        let output = project
+            .fire(&args)
+            .current_dir(&elsewhere)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let root = complete(&[""]);
+    assert!(root.contains("db\tapi"), "{root}");
+    assert!(!root.contains("ping\tapi"), "{root}");
+    let help = ok(run_in(&project, &elsewhere, &[]));
+    assert!(
+        help.contains("Merged Commands:") && help.contains("db"),
+        "{help}"
+    );
+    let to_merge = complete(&["cli", "global", "merge", ""]);
+    assert!(
+        to_merge.contains("tools\t") && !to_merge.contains("api\t"),
+        "{to_merge}"
+    );
+    let to_unmerge = complete(&["cli", "global", "unmerge", ""]);
+    assert!(to_unmerge.contains("api\t"), "{to_unmerge}");
+
+    // two merged namespaces with the same command: reported, explicit form required
+    ok(project.cli(&["global", "merge", "corp"]));
+    let collision = fails(run_in(&project, &elsewhere, &["db", "migrate"]));
+    assert!(
+        collision.contains("Duplicate terminal command"),
+        "{collision}"
+    );
+    assert!(ok(run_in(&project, &elsewhere, &["corp", "db", "migrate"])).contains("corp-migrated"));
+
+    assert!(ok(project.cli(&["global", "unmerge", "api"])).contains("Unmerged `api`"));
+    assert!(fails(project.cli(&["global", "unmerge", "api"])).contains("not merged"));
+    assert!(ok(run_in(&project, &elsewhere, &["db", "migrate"])).contains("corp-migrated"));
+    ok(project.cli(&["global", "unmerge", "corp"]));
+    assert!(fails(run_in(&project, &elsewhere, &["db", "migrate"])).contains("Unknown command"));
+
+    // add/remove keep the merged set in the same registry file
+    ok(project.cli(&["global", "merge", "tools"]));
+    ok(project.cli(&["global", "remove", path_str(&scripts)]));
+    assert!(ok(run_in(&project, &elsewhere, &["lint"])).contains("linted"));
+}

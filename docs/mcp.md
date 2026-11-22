@@ -111,7 +111,7 @@ own permissions (for example, in Claude Code: `"deny": ["Bash(fire deploy:*)"]`)
 
 ### `list_commands`
 Returns the full command tree as JSON: `fire_version`, the active `implicit_local_namespace` (if
-any), usage notes, and a `commands` array. Each node has:
+any), the `merged_namespaces` (if any, see [merged namespaces](./overview.md#merged-namespaces)), usage notes, and a `commands` array. Each node has:
 - `path` — the canonical invocation, e.g. `"fire ex backend logs"`
 - `name`, `namespace`, `group`, `source` (`local` or `global`)
 - `description`

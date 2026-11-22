@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
-use crate::config::{local_implicit_namespace, CommandEntry, FileScope, LoadedConfig};
+use crate::config::{CommandEntry, FileScope, ImplicitNamespaces, LoadedConfig};
 
 pub(crate) fn print_root_help(config: &LoadedConfig) {
     let local_commands = local_commands(config);
     let namespaces = namespaces(config);
     let groups = groups(config);
+    let merged = merged_entries(config);
     let global_commands = global_direct_commands(config);
     let builtin_commands = vec![(
         "cli".to_string(),
@@ -16,6 +17,7 @@ pub(crate) fn print_root_help(config: &LoadedConfig) {
     print_section("Commands", &local_commands);
     print_section("Namespaces", &namespaces);
     print_section("Groups", &groups);
+    print_section("Merged Commands", &merged);
     print_section("Global Commands", &global_commands);
     print_section("Built-in Commands", &builtin_commands);
 
@@ -162,7 +164,7 @@ fn print_section(title: &str, items: &[(String, Option<String>)]) {
 
 fn local_commands(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
     let mut map = BTreeMap::new();
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     for file in &config.files {
         match &file.scope {
             FileScope::Root if file.source == crate::config::SourceKind::Local => {
@@ -171,7 +173,7 @@ fn local_commands(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
                 }
             }
             FileScope::Namespace { namespace, .. } => {
-                if implicit_namespace.as_deref() == Some(namespace.as_str()) {
+                if implicit.is_local(namespace) {
                     for (name, entry) in &file.commands {
                         map.insert(name.clone(), optional_description(entry));
                     }
@@ -209,7 +211,7 @@ fn namespaces(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
 
 fn groups(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
     let mut map = BTreeMap::new();
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     for file in &config.files {
         match &file.scope {
             FileScope::Group {
@@ -223,13 +225,31 @@ fn groups(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
                 group,
                 group_description,
                 ..
-            } if implicit_namespace.as_deref() == Some(namespace.as_str()) => {
+            } if implicit.is_local(namespace) => {
                 map.insert(group.clone(), non_empty(group_description));
             }
             _ => {}
         }
     }
     map.into_iter().collect()
+}
+
+/// Commands and groups of merged namespaces (`fire cli global merge`), labeled with the namespace.
+fn merged_entries(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
+    ImplicitNamespaces::of(config)
+        .merged_entries(config)
+        .into_iter()
+        .map(|entry| {
+            let description = match entry.command {
+                Some(command) => optional_description(command),
+                None => non_empty(entry.group_description),
+            };
+            (
+                entry.name.to_string(),
+                Some(entry.label(description.as_deref())),
+            )
+        })
+        .collect()
 }
 
 fn global_direct_commands(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
@@ -298,7 +318,7 @@ fn namespace_groups(config: &LoadedConfig, namespace: &str) -> Vec<(String, Opti
 
 fn group_commands(config: &LoadedConfig, group: &str) -> Vec<(String, Option<String>)> {
     let mut map = BTreeMap::new();
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     for file in &config.files {
         let is_match = match &file.scope {
             FileScope::Group {
@@ -308,7 +328,7 @@ fn group_commands(config: &LoadedConfig, group: &str) -> Vec<(String, Option<Str
                 namespace,
                 group: file_alias,
                 ..
-            } => implicit_namespace.as_deref() == Some(namespace.as_str()) && file_alias == group,
+            } => file_alias == group && implicit.allows(namespace, group),
             _ => false,
         };
 
@@ -363,7 +383,7 @@ fn has_namespace(config: &LoadedConfig, namespace: &str) -> bool {
 }
 
 fn has_root_group(config: &LoadedConfig, group: &str) -> bool {
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     config.files.iter().any(|file| match &file.scope {
         FileScope::Group {
             group: file_alias, ..
@@ -372,7 +392,7 @@ fn has_root_group(config: &LoadedConfig, group: &str) -> bool {
             namespace,
             group: file_alias,
             ..
-        } => implicit_namespace.as_deref() == Some(namespace.as_str()) && file_alias == group,
+        } => file_alias == group && implicit.allows(namespace, group),
         _ => false,
     })
 }
@@ -419,7 +439,7 @@ fn namespace_description(config: &LoadedConfig, namespace: &str) -> Option<Strin
 }
 
 fn group_description(config: &LoadedConfig, group: &str) -> Option<String> {
-    let implicit_namespace = local_implicit_namespace(config);
+    let implicit = ImplicitNamespaces::of(config);
     for file in &config.files {
         match &file.scope {
             FileScope::Group {
@@ -436,9 +456,7 @@ fn group_description(config: &LoadedConfig, group: &str) -> Option<String> {
                 group: file_alias,
                 group_description,
                 ..
-            } if implicit_namespace.as_deref() == Some(namespace.as_str())
-                && file_alias == group =>
-            {
+            } if file_alias == group && implicit.allows(namespace, group) => {
                 let value = non_empty(group_description);
                 if value.is_some() {
                     return value;
@@ -516,6 +534,7 @@ mod tests {
 
     fn sample_config() -> LoadedConfig {
         LoadedConfig {
+            merged_namespaces: Default::default(),
             files: vec![
                 FileConfig {
                     source: SourceKind::Local,
@@ -605,5 +624,25 @@ commands:
             groups,
             vec![("backend".to_string(), Some("Backend commands".to_string()))]
         );
+    }
+    #[test]
+    fn merged_namespace_shows_in_root_help_and_group_help() {
+        let mut config = sample_config();
+        config.merged_namespaces.insert("ex".to_string());
+        let merged = merged_entries(&config);
+        assert!(!merged.is_empty());
+        assert!(merged
+            .iter()
+            .all(|(_, label)| label.as_deref().is_some_and(|text| text.starts_with("ex"))));
+        for (name, _) in &merged {
+            assert!(
+                print_scope_help(&config, std::slice::from_ref(name))
+                    || resolve_target_exists(&config, name)
+            );
+        }
+    }
+
+    fn resolve_target_exists(config: &LoadedConfig, name: &str) -> bool {
+        crate::resolve::resolve_command(config, &[name.to_string()]).is_some()
     }
 }
