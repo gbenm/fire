@@ -36,6 +36,7 @@ A command spec supports:
 - `commands`: nested subcommands. Resolution is greedy—the deepest valid path wins.
 - `before`: shell command that runs before execution unless `fallback_runner` is selected.
 - `dir`: working directory for this command (overrides file-level `dir`).
+- `shell`: interpreter for every shell snippet of the command (default: `sh`). See [Shell](#shell).
 - `runner`: prefix to execute commands inside another environment (e.g., container shell).
 - `fallback_runner`: alternative runner used when `check` fails.
 - `check`: health probe; if it fails (exit code != 0), Fire switches to `fallback_runner` (or errors if none).
@@ -82,6 +83,32 @@ commands:
     eval: py:sayHello("{1}", ...{{n}})
 ```
 
+## Shell
+Every shell snippet of a command runs with `sh -c` by default: `exec`, shell `compute`, `before` and `check`. Set `shell` to use another interpreter for all of them, per command or at file level as a default:
+```yaml
+shell: zsh            # file-level default
+
+commands:
+  release:
+    shell: bash       # overrides the file default
+    compute:
+      "{branch}": git branch --show-current
+    check: '[[ -n "$CI" ]]'
+    exec: ./scripts/release.sh "{branch}"
+
+  mine:
+    shell: $SHELL     # the user's login shell
+    exec: echo "running in $0"
+```
+- **The default is `sh`**, on purpose: `fire.yml` files are shared, and `$SHELL` changes between users (fish isn't even POSIX), CI, agents and background sessions.
+- Accepts any executable, optionally with arguments (`zsh`, `/bin/zsh`, `bash -l`), or a variable such as `$SHELL` / `${SHELL}`. Variables are read from the command's [environment](#environment) first, then from fire's own; an unset variable is an error.
+- For your personal commands, put `shell: $SHELL` at the top of the fire files in the directories you registered with `fire cli install`: it only affects those commands, never shared repos.
+- Non-interactive shells don't load `.zshrc` / `.bashrc`, so aliases and functions defined there aren't available. Use `bash -l` / `zsh -l` if you need your login profile.
+- Fire runs `<shell> [args] -c '<script>'`, so the shell must accept `-c` (sh, bash, zsh, dash, ksh, fish, nu, elvish, xonsh, tcsh, pwsh all do). It's meant for shells: interpreters such as `node` or `python` belong in [`runtimes`](./runtimes-and-eval.md).
+- Commands in an `exec` array stop at the first failure (`set -e`) with sh, bash, zsh, dash, ash, ksh, mksh and yash. With `fish`, which has no `set -e`, they are chained with `and` instead. Other shells (nu, tcsh, …) run every line and don't stop on failure.
+- `shell` takes precedence over `runner`: the runner itself is launched through it (`<shell> -c '<runner>'`). The shell *inside* the runner (a container, ssh, …) is whatever the runner starts.
+- `runtimes` (`eval` and runtime `compute`) are not affected.
+
 ## Hooks and runners
 ```yaml
 commands:
@@ -97,7 +124,7 @@ commands:
       - npm run start
 ```
 - `before` runs once before execution on direct mode or primary runner mode; it is skipped on fallback.
-- `runner` pipes commands through another process.
+- `runner` pipes commands through another process. It's launched through the command's [`shell`](#shell).
 - `fallback_runner` engages when `check` is defined and fails.
 - For shell-based runners (for example `docker exec -it <container> bash` or plain `bash`), Fire uses attached shell mode when a TTY is available so interactive prompts (passwords) work correctly.
 

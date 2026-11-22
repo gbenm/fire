@@ -44,6 +44,12 @@
         "$ref": "#/$defs/runtime"
       }
     },
+    "shell": {
+      "type": "string",
+      "default": "sh",
+      "description": "File-level default for `shell` on every command in this file. Interpreter for every shell snippet of the command: `exec`, shell `compute`, `before` and `check`; the `runner` is also launched through it (`<shell> -c '<runner>'`). Defaults to `sh`. Accepts any executable with optional arguments (`zsh`, `/bin/bash -l`) or a variable such as `$SHELL` for the user's login shell. Non-interactive shells don't load `.zshrc`/`.bashrc`, so aliases and functions defined there aren't available.",
+      "examples": ["zsh", "bash", "$SHELL"]
+    },
     "session": {
       "type": "boolean",
       "default": true,
@@ -186,6 +192,12 @@
         "check": {
           "type": "string",
           "description": "Pre-check command; can be paired with `fallback_runner`."
+        },
+        "shell": {
+          "type": "string",
+          "default": "sh",
+          "description": "Interpreter for every shell snippet of the command: `exec`, shell `compute`, `before` and `check`; the `runner` is also launched through it (`<shell> -c '<runner>'`). Defaults to `sh`. Accepts any executable with optional arguments (`zsh`, `/bin/bash -l`) or a variable such as `$SHELL` for the user's login shell. Non-interactive shells don't load `.zshrc`/`.bashrc`, so aliases and functions defined there aren't available.",
+          "examples": ["zsh", "bash", "$SHELL"]
         },
         "runner": {
           "type": "string",

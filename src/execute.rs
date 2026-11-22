@@ -93,6 +93,7 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
     });
 
     let selected_runner = select_runner_mode(
+        &context.shell,
         &context.dir,
         &context.environment,
         rendered_check.as_deref(),
@@ -111,7 +112,12 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
                 RenderMode::Shell,
                 &mut ignored_stats,
             );
-            let status = run_shell_command(&rendered_before, &context.dir, &context.environment);
+            let status = run_shell_command(
+                &context.shell,
+                &rendered_before,
+                &context.dir,
+                &context.environment,
+            );
             let code = status.code().unwrap_or(1);
             if code != 0 {
                 process::exit(code);
@@ -140,14 +146,18 @@ pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
 
     let exit_code = match selected_runner {
         RunnerMode::Runner(runner) | RunnerMode::Fallback(runner) => run_with_runner(
+            &context.shell,
             &runner,
             &context.dir,
             &commands_to_run,
             &context.environment,
         ),
-        RunnerMode::Direct => {
-            run_in_single_shell(&context.dir, &commands_to_run, &context.environment)
-        }
+        RunnerMode::Direct => run_in_single_shell(
+            &context.shell,
+            &context.dir,
+            &commands_to_run,
+            &context.environment,
+        ),
     };
 
     process::exit(exit_code);
@@ -256,7 +266,12 @@ fn run_evals_with_runtime(
     }
 
     if !commands_to_run.is_empty() {
-        let code = run_in_single_shell(&context.dir, &commands_to_run, &context.environment);
+        let code = run_in_single_shell(
+            &context.shell,
+            &context.dir,
+            &commands_to_run,
+            &context.environment,
+        );
         if code != 0 {
             for (_, mut engine) in engines {
                 engine.close();
@@ -319,6 +334,7 @@ fn start_runtime_engine_for_key(
     });
 
     let selected = select_runner_mode(
+        &Shell::default(),
         &context.dir,
         &context.environment,
         rendered_check.as_deref(),
@@ -444,8 +460,13 @@ fn compute_expression_value(
                 RenderMode::Shell,
                 stats,
             );
-            run_shell_command_capture(&rendered_command, &context.dir, &context.environment)
-                .map(trim_trailing_newlines)
+            run_shell_command_capture(
+                &context.shell,
+                &rendered_command,
+                &context.dir,
+                &context.environment,
+            )
+            .map(trim_trailing_newlines)
         }
     }
 }
@@ -1164,6 +1185,7 @@ fn should_execute_before(mode: &RunnerMode) -> bool {
 
 #[derive(Debug, Default)]
 struct ExecutionContext {
+    shell: Shell,
     before: Option<String>,
     dir: PathBuf,
     runner: Option<String>,
@@ -1176,6 +1198,86 @@ struct ExecutionContext {
     env_file: EnvFileSetting,
     inline_environment: BTreeMap<String, String>,
     environment: BTreeMap<String, String>,
+}
+
+/// Interpreter for every shell snippet of a command (`exec`, shell `compute`, `before`, `check`)
+/// and for launching its runner. Defaults to `sh`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Shell {
+    program: String,
+    args: Vec<String>,
+}
+
+impl Default for Shell {
+    fn default() -> Self {
+        Self {
+            program: "sh".to_string(),
+            args: Vec::new(),
+        }
+    }
+}
+
+impl Shell {
+    /// Parses a `shell:` value such as `zsh`, `/bin/bash -l` or `$SHELL`. Tokens that are a
+    /// single variable (`$NAME` / `${NAME}`) are read from the command environment first, then
+    /// from fire's own environment.
+    fn parse(value: &str, environment: &BTreeMap<String, String>) -> Result<Self, String> {
+        let mut tokens = value
+            .split_whitespace()
+            .map(|token| expand_shell_variable(token, environment));
+        let program = match tokens.next() {
+            Some(program) => program?,
+            None => return Ok(Self::default()),
+        };
+        let args = tokens.collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { program, args })
+    }
+
+    fn command(&self, script: &str) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.args).arg("-c").arg(script);
+        command
+    }
+
+    fn name(&self) -> &str {
+        Path::new(&self.program)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(&self.program)
+    }
+
+    /// Script that runs `commands` in order and stops at the first failure.
+    fn script(&self, commands: &[String]) -> String {
+        match self.name() {
+            // fish has no errexit: chain with `and` instead.
+            "fish" => commands.join("\nand "),
+            "sh" | "bash" | "zsh" | "dash" | "ash" | "ksh" | "mksh" | "yash" | "busybox" => {
+                build_runner_script(commands)
+            }
+            _ => commands.join("\n"),
+        }
+    }
+}
+
+fn expand_shell_variable(
+    token: &str,
+    environment: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    let name = token
+        .strip_prefix("${")
+        .and_then(|rest| rest.strip_suffix('}'))
+        .or_else(|| token.strip_prefix('$'));
+    let Some(name) = name.filter(|name| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }) else {
+        return Ok(token.to_string());
+    };
+    environment
+        .get(name)
+        .cloned()
+        .or_else(|| std::env::var(name).ok())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("`shell: {token}` is empty: `{name}` is not set."))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1209,6 +1311,7 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
         dir: resolved.project_dir.to_path_buf(),
         ..ExecutionContext::default()
     };
+    let mut shell = None;
 
     for entry in &resolved.command_chain {
         let Some(spec) = entry.spec() else {
@@ -1227,6 +1330,9 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
         }
         if let Some(fallback_runner) = non_empty(&spec.fallback_runner) {
             context.fallback_runner = Some(fallback_runner.to_string());
+        }
+        if let Some(value) = non_empty(&spec.shell) {
+            shell = Some(value.to_string());
         }
         if let Some(placeholder) = non_empty(&spec.placeholder) {
             context.placeholder = Some(placeholder.to_string());
@@ -1264,6 +1370,13 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
         eprintln!("[fire] {err}");
         process::exit(1);
     });
+
+    if let Some(value) = shell {
+        context.shell = Shell::parse(&value, &context.environment).unwrap_or_else(|err| {
+            eprintln!("[fire] {err}");
+            process::exit(1);
+        });
+    }
 
     context
 }
@@ -1670,6 +1783,7 @@ fn ensure_working_directory(dir: &Path) {
 }
 
 fn select_runner_mode(
+    shell: &Shell,
     dir: &Path,
     environment: &BTreeMap<String, String>,
     check: Option<&str>,
@@ -1677,7 +1791,7 @@ fn select_runner_mode(
     fallback_runner: Option<&str>,
 ) -> RunnerMode {
     let check_passed = check
-        .map(|command| run_shell_command_silent(command, dir, environment).success())
+        .map(|command| run_shell_command_silent(shell, command, dir, environment).success())
         .unwrap_or(true);
 
     if check_passed {
@@ -1704,6 +1818,7 @@ fn select_runner_mode(
 }
 
 fn run_with_runner(
+    shell: &Shell,
     runner: &str,
     dir: &Path,
     commands: &[String],
@@ -1728,15 +1843,14 @@ fn run_with_runner(
             for command in commands {
                 log_command(command);
             }
-            return run_shell_command_passthrough(&invocation, dir, environment);
+            return run_shell_command_passthrough(shell, &invocation, dir, environment);
         }
     }
 
     let normalized_runner = normalize_runner_for_piped_stdin(runner);
     log_runner_start(&normalized_runner);
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(&normalized_runner)
+    let mut child = shell
+        .command(&normalized_runner)
         .current_dir(dir)
         .envs(environment)
         .stdin(Stdio::piped())
@@ -1784,6 +1898,7 @@ fn run_with_runner(
 }
 
 fn run_in_single_shell(
+    shell: &Shell,
     dir: &Path,
     commands: &[String],
     environment: &BTreeMap<String, String>,
@@ -1791,25 +1906,21 @@ fn run_in_single_shell(
     if commands.is_empty() {
         return 0;
     }
-    let mut script = String::from("set -e\n");
     for command in commands {
         log_command(command);
-        script.push_str(command);
-        script.push('\n');
     }
 
     if execution_dry_run_enabled() {
         return 0;
     }
 
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(&script)
+    let status = shell
+        .command(&shell.script(commands))
         .current_dir(dir)
         .envs(environment)
         .status()
         .unwrap_or_else(|err| {
-            eprintln!("[fire] Failed to execute command script: {err}");
+            eprintln!("[fire] Failed to start shell `{}`: {err}", shell.program);
             process::exit(1);
         });
 
@@ -1817,18 +1928,18 @@ fn run_in_single_shell(
 }
 
 fn run_shell_command_passthrough(
+    shell: &Shell,
     command: &str,
     dir: &Path,
     environment: &BTreeMap<String, String>,
 ) -> i32 {
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    let status = shell
+        .command(command)
         .current_dir(dir)
         .envs(environment)
         .status()
         .unwrap_or_else(|err| {
-            eprintln!("[fire] Failed to execute command script: {err}");
+            eprintln!("[fire] Failed to start shell `{}`: {err}", shell.program);
             process::exit(1);
         });
 
@@ -1854,6 +1965,7 @@ fn commands_with_remaining_args(commands: &[String], remaining_args: &[String]) 
 }
 
 fn run_shell_command(
+    shell: &Shell,
     command: &str,
     dir: &Path,
     environment: &BTreeMap<String, String>,
@@ -1862,31 +1974,38 @@ fn run_shell_command(
     if execution_dry_run_enabled() {
         return success_exit_status();
     }
-    Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    shell
+        .command(command)
         .current_dir(dir)
         .envs(environment)
         .status()
         .unwrap_or_else(|err| {
-            eprintln!("[fire] Failed to execute `{command}`: {err}");
+            eprintln!(
+                "[fire] Failed to run `{command}` with shell `{}`: {err}",
+                shell.program
+            );
             process::exit(1);
         })
 }
 
 fn run_shell_command_capture(
+    shell: &Shell,
     command: &str,
     dir: &Path,
     environment: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     log_compute(command);
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    let output = shell
+        .command(command)
         .current_dir(dir)
         .envs(environment)
         .output()
-        .map_err(|err| format!("Failed to execute `{command}`: {err}"))?;
+        .map_err(|err| {
+            format!(
+                "Failed to run `{command}` with shell `{}`: {err}",
+                shell.program
+            )
+        })?;
 
     if !output.status.success() {
         let code = output.status.code().unwrap_or(1);
@@ -1906,6 +2025,7 @@ fn run_shell_command_capture(
 }
 
 fn run_shell_command_silent(
+    shell: &Shell,
     command: &str,
     dir: &Path,
     environment: &BTreeMap<String, String>,
@@ -1914,9 +2034,8 @@ fn run_shell_command_silent(
     if execution_dry_run_enabled() {
         return success_exit_status();
     }
-    Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    shell
+        .command(command)
         .current_dir(dir)
         .envs(environment)
         .stdin(Stdio::null())
@@ -1924,7 +2043,10 @@ fn run_shell_command_silent(
         .stderr(Stdio::null())
         .status()
         .unwrap_or_else(|err| {
-            eprintln!("[fire] Failed to execute `{command}`: {err}");
+            eprintln!(
+                "[fire] Failed to run `{command}` with shell `{}`: {err}",
+                shell.program
+            );
             process::exit(1);
         })
 }
@@ -2032,7 +2154,12 @@ fn shell_escape(value: &str) -> String {
         return value.to_string();
     }
 
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
+    // `'"'"'` and `'"\\"'` mean the same in POSIX shells and fish (where `\\` inside single
+    // quotes is an escape), so the quoted value works with any `shell:`.
+    format!(
+        "'{}'",
+        value.replace('\'', "'\"'\"'").replace('\\', "'\"\\\\\"'")
+    )
 }
 
 fn non_empty(value: &str) -> Option<&str> {
@@ -2216,6 +2343,7 @@ mod tests {
     fn select_runner_uses_fallback_when_check_fails() {
         let dir = std::env::current_dir().expect("cwd");
         let selected = select_runner_mode(
+            &Shell::default(),
             &dir,
             &BTreeMap::new(),
             Some("false"),
@@ -2229,6 +2357,7 @@ mod tests {
     fn select_runner_uses_primary_when_check_passes() {
         let dir = std::env::current_dir().expect("cwd");
         let selected = select_runner_mode(
+            &Shell::default(),
             &dir,
             &BTreeMap::new(),
             Some("true"),
@@ -2241,7 +2370,8 @@ mod tests {
     #[test]
     fn select_runner_returns_direct_when_no_runner() {
         let dir = std::env::current_dir().expect("cwd");
-        let selected = select_runner_mode(&dir, &BTreeMap::new(), None, None, None);
+        let selected =
+            select_runner_mode(&Shell::default(), &dir, &BTreeMap::new(), None, None, None);
         assert_eq!(selected, RunnerMode::Direct);
     }
 
@@ -2261,6 +2391,7 @@ mod tests {
         fs::create_dir_all(dir.join("schemas")).expect("create schemas");
 
         let status = run_in_single_shell(
+            &Shell::default(),
             &dir,
             &[
                 "cd schemas".to_string(),
@@ -2892,5 +3023,108 @@ mod tests {
 
         let context = build_execution_context(&resolved);
         assert_eq!(context.dir, std::env::current_dir().expect("cwd"));
+    }
+
+    #[test]
+    fn shell_defaults_to_sh() {
+        assert_eq!(Shell::default().program, "sh");
+        let parsed = Shell::parse("  ", &BTreeMap::new()).expect("parse");
+        assert_eq!(parsed, Shell::default());
+    }
+
+    #[test]
+    fn shell_parses_program_and_args() {
+        let parsed = Shell::parse("/bin/bash -l", &BTreeMap::new()).expect("parse");
+        assert_eq!(parsed.program, "/bin/bash");
+        assert_eq!(parsed.args, vec!["-l".to_string()]);
+        assert_eq!(parsed.name(), "bash");
+    }
+
+    #[test]
+    fn shell_variables_prefer_command_environment() {
+        let environment = BTreeMap::from([("FIRE_TEST_SHELL".to_string(), "zsh".to_string())]);
+        let parsed = Shell::parse("$FIRE_TEST_SHELL", &environment).expect("parse");
+        assert_eq!(parsed.program, "zsh");
+        let parsed = Shell::parse("${FIRE_TEST_SHELL}", &environment).expect("parse");
+        assert_eq!(parsed.program, "zsh");
+    }
+
+    #[test]
+    fn unset_shell_variable_is_an_error() {
+        let err = Shell::parse("$FIRE_TEST_UNSET_SHELL_VAR", &BTreeMap::new()).unwrap_err();
+        assert!(err.contains("FIRE_TEST_UNSET_SHELL_VAR"), "{err}");
+    }
+
+    #[test]
+    fn fish_scripts_chain_with_and() {
+        let fish = Shell::parse("fish", &BTreeMap::new()).expect("parse");
+        let commands = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(fish.script(&commands), "a\nand b");
+        assert_eq!(Shell::default().script(&commands), "set -e\na\nb\n");
+    }
+
+    #[test]
+    fn escaped_backslashes_survive_posix_shells() {
+        let value = r"a\b'c";
+        let output = Shell::default()
+            .command(&format!("printf %s {}", shell_escape(value)))
+            .output()
+            .expect("run sh");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), value);
+    }
+
+    #[test]
+    fn shell_is_inherited_by_nested_commands() {
+        let child = CommandEntry::Spec(CommandSpec {
+            exec: Some(CommandAction::Single("echo child".to_string())),
+            ..CommandSpec::default()
+        });
+        let parent = CommandEntry::Spec(CommandSpec {
+            shell: "bash".to_string(),
+            commands: BTreeMap::from([("child".to_string(), child.clone())]),
+            ..CommandSpec::default()
+        });
+
+        let runtimes = BTreeMap::new();
+        let args = Vec::<String>::new();
+        let resolved = ResolvedCommand {
+            project_dir: Path::new("/tmp"),
+            runtime_paths_base_dir: Path::new("/tmp"),
+            runtimes: &runtimes,
+            command: &child,
+            command_chain: vec![&parent, &child],
+            consumed: 2,
+            remaining_args: &args,
+        };
+
+        let context = build_execution_context(&resolved);
+        assert_eq!(context.shell.program, "bash");
+    }
+
+    #[test]
+    fn compute_before_check_and_exec_use_the_configured_shell() {
+        let shell = Shell::parse("bash", &BTreeMap::new()).expect("parse");
+        let dir = std::env::current_dir().expect("cwd");
+        let environment = BTreeMap::new();
+
+        let computed =
+            run_shell_command_capture(&shell, "echo \"$BASH_VERSION\"", &dir, &environment)
+                .expect("compute");
+        assert!(!computed.trim().is_empty(), "compute did not run in bash");
+
+        let check =
+            run_shell_command_silent(&shell, "test -n \"$BASH_VERSION\"", &dir, &environment);
+        assert!(check.success(), "check did not run in bash");
+
+        let before = run_shell_command(&shell, "test -n \"$BASH_VERSION\"", &dir, &environment);
+        assert!(before.success(), "before did not run in bash");
+
+        let code = run_in_single_shell(
+            &shell,
+            &dir,
+            &["test -n \"$BASH_VERSION\"".to_string()],
+            &environment,
+        );
+        assert_eq!(code, 0, "exec did not run in bash");
     }
 }

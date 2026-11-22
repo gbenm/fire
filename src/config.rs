@@ -82,6 +82,10 @@ pub(crate) struct CommandSpec {
     pub(crate) runner: String,
     #[serde(default)]
     pub(crate) fallback_runner: String,
+    /// Interpreter for every shell snippet (`exec`, shell `compute`, `before`, `check`) and for
+    /// launching the runner. Empty means `sh`.
+    #[serde(default)]
+    pub(crate) shell: String,
     #[serde(default)]
     pub(crate) env_file: EnvFileSetting,
     #[serde(default)]
@@ -153,6 +157,8 @@ struct FireFileRaw {
     runner: String,
     #[serde(default)]
     fallback_runner: String,
+    #[serde(default)]
+    shell: String,
     #[serde(default)]
     env_file: EnvFileSetting,
     #[serde(default)]
@@ -378,6 +384,7 @@ impl FireFileRaw {
             check: self.check.clone(),
             runner: self.runner.clone(),
             fallback_runner: self.fallback_runner.clone(),
+            shell: self.shell.clone(),
             env_file: self.env_file.clone(),
             environment: self.environment.clone(),
             session: self.session,
@@ -725,6 +732,9 @@ fn apply_file_defaults_to_entry(entry: CommandEntry, defaults: &CommandSpec) -> 
             if spec.fallback_runner.trim().is_empty() {
                 spec.fallback_runner = defaults.fallback_runner.clone();
             }
+            if spec.shell.trim().is_empty() {
+                spec.shell = defaults.shell.clone();
+            }
             if matches!(spec.env_file, EnvFileSetting::Unset) {
                 spec.env_file = defaults.env_file.clone();
             }
@@ -773,6 +783,7 @@ fn command_defaults_empty(defaults: &CommandSpec) -> bool {
         && defaults.check.trim().is_empty()
         && defaults.runner.trim().is_empty()
         && defaults.fallback_runner.trim().is_empty()
+        && defaults.shell.trim().is_empty()
         && matches!(defaults.env_file, EnvFileSetting::Unset)
         && defaults.environment.is_none()
         && defaults.session.is_none()
