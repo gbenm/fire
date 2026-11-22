@@ -39,6 +39,11 @@ reconstructed from the git history.
   any order, set their environment variable so nested `fire` calls inherit them, show up in root
   help and complete with `fire -<TAB>`. See
   [global flags](https://github.com/gbenm/fire/blob/main/docs/commands-and-args.md#global-flags). (#50)
+- Completion for `fire cli fg|send|kill|logs`: session ids described with status, command, note
+  and age (running sessions first, only running ones for `fg`/`send`), `--raw` for `send` and
+  signal names for `kill <id>`. The zsh script now keeps fire's order instead of sorting; re-run
+  `fire cli completion install zsh` to get it. See
+  [completion](https://github.com/gbenm/fire/blob/main/docs/completion.md#how-completion-works). (#45)
 - `namespace: tools` as shorthand for `namespace: { prefix: tools }`. (#32)
 - Container object for `runner` / `fallback_runner` (commands and runtimes), with Compose key
   names (`image`, `engine`, `tty`, `command`, `volumes`, `working_dir`, `environment`, `user`,

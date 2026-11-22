@@ -557,6 +557,96 @@ pub(crate) fn list_sessions() -> Vec<Session> {
     sessions
 }
 
+// ---------------------------------------------------------------- completion
+
+/// Signal names `parse_signal` accepts, described for `fire cli kill <id> <TAB>`.
+pub(crate) const SIGNALS: [(&str, &str); 11] = [
+    ("INT", "Interrupt, like Ctrl+C"),
+    ("TERM", "Ask to stop"),
+    ("HUP", "Hang up (many servers reload their config)"),
+    ("QUIT", "Quit, like Ctrl+\\"),
+    ("KILL", "Force stop, can't be caught"),
+    ("USR1", "User-defined signal 1"),
+    ("USR2", "User-defined signal 2"),
+    ("TSTP", "Pause, like Ctrl+Z"),
+    ("STOP", "Pause, can't be caught"),
+    ("CONT", "Resume a paused program"),
+    ("WINCH", "Terminal resized"),
+];
+
+/// Session ids for completion, each with a description (status, command, note, age). Running
+/// sessions come first, then (unless `running_only`) ended ones, most recent first; within each,
+/// sessions started in the current directory lead. Read-only and infallible: a missing sessions
+/// dir or an unreadable record just means fewer suggestions.
+pub(crate) fn completion_candidates(running_only: bool) -> Vec<(String, String)> {
+    let sessions = fs::read_dir(sessions_root())
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| load(&entry.file_name().to_string_lossy()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|path| path.display().to_string());
+    order_for_completion(sessions, running_only, cwd.as_deref(), now())
+}
+
+/// Whether `id` names a running session (`fire cli kill <id> <SIGNAL>` needs one).
+pub(crate) fn is_running_id(id: &str) -> bool {
+    load(id).is_some_and(|session| session.is_running())
+}
+
+fn order_for_completion(
+    sessions: Vec<Session>,
+    running_only: bool,
+    cwd: Option<&str>,
+    now: u64,
+) -> Vec<(String, String)> {
+    let (mut running, mut ended): (Vec<Session>, Vec<Session>) = sessions
+        .into_iter()
+        .filter(|session| {
+            session.is_running()
+                || now.saturating_sub(session.ended_at.unwrap_or(session.started_at))
+                    <= EXITED_RETENTION_SECS
+        })
+        .partition(|session| session.is_running());
+    let elsewhere = |session: &Session| cwd != Some(session.cwd.as_str());
+    running.sort_by_key(|session| (elsewhere(session), std::cmp::Reverse(session.started_at)));
+    ended.sort_by_key(|session| {
+        (
+            elsewhere(session),
+            std::cmp::Reverse(session.ended_at.unwrap_or(session.started_at)),
+        )
+    });
+    if running_only {
+        ended.clear();
+    }
+    running
+        .into_iter()
+        .chain(ended)
+        .map(|session| {
+            let description = completion_description(&session, now);
+            (session.id, description)
+        })
+        .collect()
+}
+
+/// `running · fire api dev · "why" · 12m`
+fn completion_description(session: &Session, now: u64) -> String {
+    let status = match (session.status(), session.exit_code) {
+        ("exited", Some(code)) => format!("exited {code}"),
+        (status, _) => status.to_string(),
+    };
+    let mut parts = vec![status, format!("fire {}", session.command.join(" "))];
+    if let Some(note) = session.note.as_deref().filter(|note| !note.is_empty()) {
+        parts.push(format!("\"{note}\""));
+    }
+    parts.push(format_age(now.saturating_sub(session.started_at)));
+    parts.join(" · ")
+}
+
 /// Which sessions `fire cli ps` shows. With no flags, only running ones.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PsFilter {
@@ -1070,6 +1160,46 @@ mod tests {
         assert_eq!(parse_signal("9"), Some(9));
         assert_eq!(parse_signal("NOPE"), None);
         assert_eq!(parse_signal("0"), None);
+    }
+
+    #[test]
+    fn completion_signals_all_parse() {
+        for (name, _) in SIGNALS {
+            assert!(parse_signal(name).is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn completion_lists_running_first_then_recent_ended() {
+        let session = |id: &str, cwd: &str, started_at: u64, ended_at: Option<u64>| Session {
+            id: id.into(),
+            cwd: cwd.into(),
+            started_at,
+            ended_at,
+            exit_code: ended_at.map(|_| 1),
+            note: (id == "api").then(|| "auth tests".into()),
+            command: vec![id.into(), "dev".into()],
+            ..running_session()
+        };
+        let now = 200_000;
+        let sessions = vec![
+            session("old", "/p", 100_000, Some(120_000)),
+            session("api", "/other", now - 720, None),
+            session("web", "/other", now - 60, None),
+            session("here", "/p", now - 7200, None),
+            session("recent", "/other", 150_000, Some(190_000)),
+            session("stale", "/p", 0, Some(1)),
+        ];
+
+        let all = order_for_completion(sessions.clone(), false, Some("/p"), now);
+        let ids: Vec<&str> = all.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, ["here", "web", "api", "old", "recent"]);
+        assert_eq!(all[2].1, "running · fire api dev · \"auth tests\" · 12m");
+        assert_eq!(all[4].1, "exited 1 · fire recent dev · 13h");
+
+        let running = order_for_completion(sessions, true, None, now);
+        let ids: Vec<&str> = running.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, ["web", "api", "here"]);
     }
 
     #[test]

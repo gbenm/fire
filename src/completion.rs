@@ -211,6 +211,25 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         return Some(core_cli_global_children(&path[2..], prefix));
     }
 
+    if path.len() >= 2 && ["fg", "send", "kill", "logs"].contains(&path[1].as_str()) {
+        let suggestions = core_cli_session_args(
+            &path[1],
+            &path[2..],
+            crate::session::completion_candidates,
+            crate::session::is_running_id,
+        );
+        return Some(
+            suggestions
+                .into_iter()
+                .filter(|suggestion| {
+                    let upper = suggestion.value.to_ascii_uppercase();
+                    suggestion.value.starts_with(prefix)
+                        || (path[1] == "kill" && upper.starts_with(&prefix.to_ascii_uppercase()))
+                })
+                .collect(),
+        );
+    }
+
     match path.len() {
         1 => Some(core_cli_children(prefix)),
         2 => {
@@ -322,6 +341,50 @@ fn core_cli_ps_flags(typed: &[String], prefix: &str) -> Vec<CompletionSuggestion
             description: Some(description.to_string()),
         })
         .collect()
+}
+
+/// Arguments of `fire cli fg/send/kill/logs`: session ids (running ones only where an ended
+/// session would fail), `--raw` for `send`, signal names after `kill <id>`. `sessions` and
+/// `running` read the session records; they are parameters so tests don't touch the disk.
+fn core_cli_session_args(
+    command: &str,
+    typed: &[String],
+    sessions: impl Fn(bool) -> Vec<(String, String)>,
+    running: impl Fn(&str) -> bool,
+) -> Vec<CompletionSuggestion> {
+    let described = |pairs: Vec<(String, String)>| -> Vec<CompletionSuggestion> {
+        pairs
+            .into_iter()
+            .map(|(value, description)| CompletionSuggestion {
+                value,
+                description: Some(description),
+            })
+            .collect()
+    };
+    match (command, typed) {
+        ("fg", []) => described(sessions(true)),
+        ("send", []) => {
+            let mut suggestions = vec![CompletionSuggestion {
+                value: "--raw".to_string(),
+                description: Some(
+                    "Send the text as-is: escapes like \\x03 and \\e, no trailing Enter"
+                        .to_string(),
+                ),
+            }];
+            suggestions.extend(described(sessions(true)));
+            suggestions
+        }
+        ("send", [flag]) if flag == "--raw" => described(sessions(true)),
+        ("kill" | "logs", []) => described(sessions(false)),
+        ("kill", [id]) if running(id) => crate::session::SIGNALS
+            .iter()
+            .map(|(name, description)| CompletionSuggestion {
+                value: name.to_string(),
+                description: Some(description.to_string()),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn core_cli_completion_children(prefix: &str) -> Vec<CompletionSuggestion> {
@@ -1282,6 +1345,38 @@ commands:
         );
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
         assert_eq!(names, vec!["--all", "--exited", "--stopped"]);
+    }
+
+    #[test]
+    fn core_cli_session_args_follow_each_command() {
+        let sessions = |running_only: bool| {
+            let mut pairs = vec![("api-1".to_string(), "running".to_string())];
+            if !running_only {
+                pairs.push(("old-2".to_string(), "exited 1".to_string()));
+            }
+            pairs
+        };
+        let running = |id: &str| id == "api-1";
+        let values = |command: &str, typed: &[&str]| -> Vec<String> {
+            let typed: Vec<String> = typed.iter().map(|word| word.to_string()).collect();
+            core_cli_session_args(command, &typed, sessions, running)
+                .into_iter()
+                .map(|suggestion| {
+                    assert!(suggestion.description.is_some(), "{}", suggestion.value);
+                    suggestion.value
+                })
+                .collect()
+        };
+        assert_eq!(values("fg", &[]), ["api-1"]);
+        assert_eq!(values("send", &[]), ["--raw", "api-1"]);
+        assert_eq!(values("send", &["--raw"]), ["api-1"]);
+        assert!(values("send", &["api-1"]).is_empty());
+        assert_eq!(values("logs", &[]), ["api-1", "old-2"]);
+        assert_eq!(values("kill", &[]), ["api-1", "old-2"]);
+        assert!(values("kill", &["api-1"]).contains(&"TERM".to_string()));
+        assert!(values("kill", &["old-2"]).is_empty());
+        assert!(values("logs", &["api-1"]).is_empty());
+        assert!(values("fg", &["api-1"]).is_empty());
     }
 
     #[test]

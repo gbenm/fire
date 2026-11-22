@@ -499,7 +499,8 @@ _fire_cli() {
     fi
   done
 
-  _describe 'fire commands' entries
+  # -V keeps fire's order (running sessions first, priority groups) instead of sorting.
+  _describe -V 'fire commands' entries
 }
 
 compdef _fire_cli fire
