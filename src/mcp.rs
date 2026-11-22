@@ -1,6 +1,7 @@
 use std::{
     io::{ErrorKind, Read},
     os::{fd::AsRawFd, unix::process::CommandExt},
+    path::PathBuf,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -310,6 +311,131 @@ struct SignalSessionRequest {
     id: String,
     /// Signal name or number (INT, TERM, HUP, USR1, USR2, QUIT, KILL, STOP, CONT, 9...).
     signal: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GlobalPathRequest {
+    /// Absolute path of the directory (a leading `~` means the home directory).
+    path: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct RemoveGlobalRequest {
+    /// Namespace of the registered directory to remove (as shown by `list_global`).
+    namespace: Option<String>,
+    /// Absolute path of the registered directory to remove. Pass exactly one of `namespace`/`path`.
+    path: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct NamespaceRequest {
+    /// Namespace of a registered directory (as shown by `list_global`).
+    namespace: String,
+}
+
+#[derive(Debug, Default, Serialize, schemars::JsonSchema)]
+struct GlobalResult {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    /// Affected directory (absolute).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registered: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    already_registered: Option<bool>,
+    /// `false` when the registered directory has no fire config files yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    has_config: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    removed: Option<bool>,
+    /// Directories `prune_global` unregistered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pruned: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    merged: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    already_merged: Option<bool>,
+}
+
+impl GlobalResult {
+    fn err(error: String) -> Self {
+        Self {
+            error: Some(error),
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct GlobalListing {
+    directories: Vec<GlobalDirectory>,
+    /// Namespaces whose commands can be called without the namespace word.
+    merged: Vec<String>,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct GlobalDirectory {
+    path: String,
+    exists: bool,
+    namespaces: Vec<GlobalNamespace>,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct GlobalNamespace {
+    /// `null` for commands without a namespace (callable at the root).
+    namespace: Option<String>,
+    merged: bool,
+    /// Absolute paths of the config files that define it; edit these to change its commands.
+    files: Vec<String>,
+}
+
+/// MCP takes explicit absolute paths: relative ones would resolve against the server's own
+/// directory, which the agent doesn't control.
+fn absolute_path(path: &str) -> Result<PathBuf, String> {
+    let expanded = match (path.strip_prefix('~'), dirs::home_dir()) {
+        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
+            home.join(rest.trim_start_matches('/'))
+        }
+        _ => PathBuf::from(path),
+    };
+    if expanded.is_absolute() {
+        Ok(expanded)
+    } else {
+        Err(format!("`{path}` is not an absolute path"))
+    }
+}
+
+fn global_listing() -> GlobalListing {
+    let merged = crate::registry::load_merged_namespaces();
+    let directories = crate::global::entries()
+        .into_iter()
+        .map(|entry| GlobalDirectory {
+            path: entry.dir.display().to_string(),
+            exists: entry.exists,
+            namespaces: entry
+                .scopes
+                .iter()
+                .map(|scope| GlobalNamespace {
+                    merged: scope
+                        .namespace
+                        .as_ref()
+                        .is_some_and(|name| merged.contains(name)),
+                    namespace: scope.namespace.clone(),
+                    files: scope
+                        .files
+                        .iter()
+                        .map(|file| entry.dir.join(file).display().to_string())
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    GlobalListing {
+        directories,
+        merged,
+    }
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -812,6 +938,112 @@ impl FireMcpServer {
         Json(session_action_result(crate::session::signal_session(
             &id, &signal,
         )))
+    }
+
+    #[tool(
+        description = "List the directories registered globally (their commands load from anywhere), grouped by namespace, with the absolute paths of the config files that define each namespace (open those to edit a command) and which namespaces are merged. Read-only."
+    )]
+    fn list_global(&self) -> Json<GlobalListing> {
+        Json(global_listing())
+    }
+
+    #[tool(
+        description = "Register a directory globally so its commands load from anywhere (same as `fire cli global add`). Changes the user's global setup: use only when the user asks for it, never on your own initiative."
+    )]
+    fn add_global(
+        &self,
+        Parameters(GlobalPathRequest { path }): Parameters<GlobalPathRequest>,
+    ) -> Json<GlobalResult> {
+        Json(
+            match absolute_path(&path).and_then(|path| crate::global::add_directory(&path)) {
+                Ok(added) => GlobalResult {
+                    ok: true,
+                    path: Some(added.dir.display().to_string()),
+                    registered: Some(added.newly),
+                    already_registered: Some(!added.newly),
+                    has_config: Some(added.has_config),
+                    ..GlobalResult::default()
+                },
+                Err(err) => GlobalResult::err(err),
+            },
+        )
+    }
+
+    #[tool(
+        description = "Unregister a global directory by `namespace` or absolute `path` (same as `fire cli global remove`); its files are never touched. Changes the user's global setup: use only when the user asks for it, never on your own initiative."
+    )]
+    fn remove_global(
+        &self,
+        Parameters(RemoveGlobalRequest { namespace, path }): Parameters<RemoveGlobalRequest>,
+    ) -> Json<GlobalResult> {
+        let target = match (namespace, path) {
+            (Some(namespace), None) => Ok(crate::global::Target::Namespace(namespace)),
+            (None, Some(path)) => absolute_path(&path).map(crate::global::Target::Path),
+            _ => Err("pass exactly one of `namespace` or `path`".to_string()),
+        };
+        Json(match target.and_then(crate::global::remove_directory) {
+            Ok(dir) => GlobalResult {
+                ok: true,
+                path: Some(dir.display().to_string()),
+                removed: Some(true),
+                ..GlobalResult::default()
+            },
+            Err(err) => GlobalResult::err(err),
+        })
+    }
+
+    #[tool(
+        description = "Unregister global directories that no longer exist (same as `fire cli global prune`). Changes the user's global setup: use only when the user asks for it, never on your own initiative."
+    )]
+    fn prune_global(&self) -> Json<GlobalResult> {
+        Json(match crate::global::prune_directories() {
+            Ok(pruned) => GlobalResult {
+                ok: true,
+                pruned: Some(
+                    pruned
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect(),
+                ),
+                ..GlobalResult::default()
+            },
+            Err(err) => GlobalResult::err(err),
+        })
+    }
+
+    #[tool(
+        description = "Merge a registered namespace so its commands can be called without the namespace word (same as `fire cli global merge`); explicit paths of other commands still win. Changes the user's global setup: use only when the user asks for it, never on your own initiative."
+    )]
+    fn merge_global(
+        &self,
+        Parameters(NamespaceRequest { namespace }): Parameters<NamespaceRequest>,
+    ) -> Json<GlobalResult> {
+        Json(match crate::global::merge_namespace(&namespace) {
+            Ok(newly) => GlobalResult {
+                ok: true,
+                merged: Some(true),
+                already_merged: Some(!newly),
+                ..GlobalResult::default()
+            },
+            Err(err) => GlobalResult::err(err),
+        })
+    }
+
+    #[tool(
+        description = "Unmerge a namespace so its commands need the namespace word again (same as `fire cli global unmerge`). Changes the user's global setup: use only when the user asks for it, never on your own initiative."
+    )]
+    fn unmerge_global(
+        &self,
+        Parameters(NamespaceRequest { namespace }): Parameters<NamespaceRequest>,
+    ) -> Json<GlobalResult> {
+        Json(match crate::global::unmerge_namespace(&namespace) {
+            Ok(()) => GlobalResult {
+                ok: true,
+                merged: Some(false),
+                ..GlobalResult::default()
+            },
+            Err(err) => GlobalResult::err(err),
+        })
     }
 
     #[tool(description = "Remove the saved record of an exited, stopped, or lost session.")]

@@ -208,6 +208,26 @@ remove a running session; stop it first with `stop_session` if that is the inten
 Management tools return `{ ok, stdout, stderr }` as MCP structured content. `start_session` also
 returns `session_id` on success.
 
+### Global directories
+The MCP counterpart of [`fire cli global`](./overview.md#global-directories), with the same semantics.
+
+- `list_global` (read-only): every registered directory with its absolute `path`, whether it
+  still `exists`, and its `namespaces`. Each namespace (`null` for commands without one) lists the
+  absolute paths of the config `files` that define it, so an agent can open the right file to edit
+  a command, and whether it is `merged`. The top-level `merged` lists merged namespaces.
+- `add_global` (`path`): register a directory.
+- `remove_global` (`namespace` or `path`, exactly one): unregister it. Files are never touched.
+- `prune_global`: unregister directories that no longer exist.
+- `merge_global` / `unmerge_global` (`namespace`): call a namespace's commands without (or again
+  with) the namespace word.
+
+Paths must be absolute (a leading `~` means the home directory): a relative path would resolve
+against the server's directory, so it is rejected instead of guessed. These tools change the
+user's global setup; their descriptions tell agents to use them only when the user asks. They
+return structured results: `ok`, `error`, the affected `path`, and per tool `registered` /
+`already_registered` / `has_config`, `removed`, `pruned`, `merged` / `already_merged`. The CLI's
+first-use registration prompt never appears through MCP.
+
 ## Testing manually
 Use the [MCP inspector](https://github.com/modelcontextprotocol/inspector) to poke at the server
 without wiring up a full agent host:

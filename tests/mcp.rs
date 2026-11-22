@@ -565,3 +565,110 @@ commands:
     assert_eq!(result["structuredContent"]["exit_code"], 0, "{result}");
     assert_eq!(result["structuredContent"]["stdout"], "resolved");
 }
+
+#[test]
+fn global_tools_manage_the_registry_like_the_cli() {
+    let project = Project::new("mcp-global", "commands: {}\n");
+    let api = project.dir.join("api");
+    fs::create_dir_all(&api).unwrap();
+    fs::write(
+        api.join("fire.yaml"),
+        "namespace: api\ncommands:\n  build: echo built\n",
+    )
+    .unwrap();
+    let api = api.canonicalize().unwrap();
+    let old = project.dir.join("old");
+    fs::create_dir_all(&old).unwrap();
+    let old = old.canonicalize().unwrap();
+    let api_str = api.to_str().unwrap();
+    let old_str = old.to_str().unwrap();
+
+    let mut mcp = McpClient::start(&project);
+    let tools = mcp.request("tools/list", json!({}));
+    let tools = tools["tools"].as_array().expect("tools array");
+    for name in [
+        "add_global",
+        "remove_global",
+        "prune_global",
+        "merge_global",
+        "unmerge_global",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("{name} tool"));
+        assert!(
+            tool["description"]
+                .as_str()
+                .unwrap()
+                .contains("only when the user asks"),
+            "{name}"
+        );
+    }
+
+    let relative = mcp.call("add_global", json!({ "path": "api" }));
+    assert_eq!(relative["structuredContent"]["ok"], false);
+    assert!(relative["structuredContent"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("not an absolute path"));
+
+    let added = mcp.call("add_global", json!({ "path": api_str }));
+    let added = &added["structuredContent"];
+    assert_eq!(added["ok"], true, "{added}");
+    assert_eq!(added["registered"], true);
+    assert_eq!(added["already_registered"], false);
+    assert_eq!(added["has_config"], true);
+    assert_eq!(added["path"], api_str);
+    let again = mcp.call("add_global", json!({ "path": api_str }));
+    assert_eq!(again["structuredContent"]["already_registered"], true);
+    let empty = mcp.call("add_global", json!({ "path": old_str }));
+    assert_eq!(empty["structuredContent"]["has_config"], false);
+
+    let merged = mcp.call("merge_global", json!({ "namespace": "api" }));
+    assert_eq!(merged["structuredContent"]["merged"], true);
+    assert_eq!(merged["structuredContent"]["already_merged"], false);
+    let merged_again = mcp.call("merge_global", json!({ "namespace": "api" }));
+    assert_eq!(merged_again["structuredContent"]["already_merged"], true);
+    let unknown = mcp.call("merge_global", json!({ "namespace": "nope" }));
+    assert_eq!(unknown["structuredContent"]["ok"], false);
+
+    let listing = mcp.call("list_global", json!({}));
+    let listing = &listing["structuredContent"];
+    assert_eq!(listing["merged"], json!(["api"]));
+    let dirs = listing["directories"].as_array().unwrap();
+    let api_entry = dirs.iter().find(|dir| dir["path"] == api_str).unwrap();
+    assert_eq!(api_entry["exists"], true);
+    assert_eq!(api_entry["namespaces"][0]["namespace"], "api");
+    assert_eq!(api_entry["namespaces"][0]["merged"], true);
+    assert_eq!(
+        api_entry["namespaces"][0]["files"],
+        json!([api.join("fire.yaml").to_str().unwrap()])
+    );
+
+    // The CLI sees the same registry.
+    let (code, cli_list, stderr) = project.cli(&["global", "list"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(cli_list.contains("api (merged)"), "{cli_list}");
+
+    let unmerged = mcp.call("unmerge_global", json!({ "namespace": "api" }));
+    assert_eq!(unmerged["structuredContent"]["merged"], false);
+    let not_merged = mcp.call("unmerge_global", json!({ "namespace": "api" }));
+    assert_eq!(not_merged["structuredContent"]["ok"], false);
+
+    let both = mcp.call(
+        "remove_global",
+        json!({ "namespace": "api", "path": api_str }),
+    );
+    assert_eq!(both["structuredContent"]["ok"], false);
+    let removed = mcp.call("remove_global", json!({ "namespace": "api" }));
+    assert_eq!(removed["structuredContent"]["removed"], true);
+    assert_eq!(removed["structuredContent"]["path"], api_str);
+    assert!(api.join("fire.yaml").exists(), "files are never deleted");
+
+    fs::remove_dir_all(&old).unwrap();
+    let pruned = mcp.call("prune_global", json!({}));
+    assert_eq!(pruned["structuredContent"]["pruned"], json!([old_str]));
+    let listing = mcp.call("list_global", json!({}));
+    assert_eq!(listing["structuredContent"]["directories"], json!([]));
+}

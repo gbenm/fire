@@ -185,22 +185,48 @@ pub(crate) fn print_help() {
     );
 }
 
-fn add(path: &str) -> Result<(), String> {
-    let directory = canonical_dir(&expand_path(path))?;
-    match install_directory(&directory)
+/// Outcome of registering a directory (shared by the CLI and MCP).
+pub(crate) struct Added {
+    pub(crate) dir: PathBuf,
+    pub(crate) newly: bool,
+    pub(crate) has_config: bool,
+}
+
+/// Registers `path` (absolute, or relative to the current directory).
+pub(crate) fn add_directory(path: &Path) -> Result<Added, String> {
+    let directory = canonical_dir(path)?;
+    let newly = match install_directory(&directory)
         .map_err(|err| format!("Failed to register directory: {err}"))?
     {
-        InstallResult::Added => {
+        InstallResult::Added => true,
+        InstallResult::AlreadyInstalled => false,
+    };
+    let has_config = !directory_config_files(&directory).is_empty();
+    Ok(Added {
+        dir: directory,
+        newly,
+        has_config,
+    })
+}
+
+fn add(path: &str) -> Result<(), String> {
+    let Added {
+        dir: directory,
+        newly,
+        has_config,
+    } = add_directory(&expand_path(path))?;
+    match newly {
+        true => {
             println!(
                 "Registered {}: its commands are available from any directory.",
                 display_path(&directory)
             );
         }
-        InstallResult::AlreadyInstalled => {
+        false => {
             println!("Already registered: {}", display_path(&directory));
         }
     }
-    if directory_config_files(&directory).is_empty() {
+    if !has_config {
         eprintln!(
             "[fire] warning: {} has no fire config files yet (create one with `fire cli init`).",
             display_path(&directory)
@@ -209,13 +235,30 @@ fn add(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn merge(namespace: &str) -> Result<(), String> {
+/// Merges `namespace`; `Ok(false)` when it already was.
+pub(crate) fn merge_namespace(namespace: &str) -> Result<bool, String> {
     if !entries().iter().any(|entry| entry.has_namespace(namespace)) {
         return Err(format!(
             "No registered directory has namespace `{namespace}` (see `fire cli global list`)."
         ));
     }
-    if set_namespace_merged(namespace, true)? {
+    set_namespace_merged(namespace, true)
+}
+
+/// Unmerges `namespace`; an error when it isn't merged.
+pub(crate) fn unmerge_namespace(namespace: &str) -> Result<(), String> {
+    if set_namespace_merged(namespace, false)? {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{namespace}` is not merged (merged: {}).",
+            list_or_none(&load_merged_namespaces())
+        ))
+    }
+}
+
+fn merge(namespace: &str) -> Result<(), String> {
+    if merge_namespace(namespace)? {
         println!(
             "Merged `{namespace}`: call its commands without `{namespace}` (`fire {namespace} <command>` still works)."
         );
@@ -229,18 +272,13 @@ fn merge(namespace: &str) -> Result<(), String> {
 }
 
 fn unmerge(namespace: &str) -> Result<(), String> {
-    if set_namespace_merged(namespace, false)? {
-        println!("Unmerged `{namespace}`: call its commands as `fire {namespace} <command>`.");
-        Ok(())
-    } else {
-        Err(format!(
-            "`{namespace}` is not merged (merged: {}).",
-            list_or_none(&load_merged_namespaces())
-        ))
-    }
+    unmerge_namespace(namespace)?;
+    println!("Unmerged `{namespace}`: call its commands as `fire {namespace} <command>`.");
+    Ok(())
 }
 
-fn remove(target: &str) -> Result<(), String> {
+/// Unregisters the directory `target` names (files are kept) and returns it.
+pub(crate) fn remove_directory(target: Target) -> Result<PathBuf, String> {
     let installed = load_installed_directories();
     let directory = resolve_registered(target, &installed)?;
     let remaining: Vec<PathBuf> = installed
@@ -251,6 +289,11 @@ fn remove(target: &str) -> Result<(), String> {
         .map_err(|err| format!("Failed to unregister directory: {err}"))?;
     // An explicit removal is an answer too: don't offer to register it again.
     let _ = decline_directory(&directory);
+    Ok(directory)
+}
+
+fn remove(target: &str) -> Result<(), String> {
+    let directory = remove_directory(parse_target(target))?;
     println!(
         "Unregistered {} (its files were not touched).",
         display_path(&directory)
@@ -297,15 +340,23 @@ fn list() {
     }
 }
 
-fn prune() -> Result<(), String> {
+/// Unregisters directories that no longer exist and returns them.
+pub(crate) fn prune_directories() -> Result<Vec<PathBuf>, String> {
     let installed = load_installed_directories();
     let (keep, missing): (Vec<PathBuf>, Vec<PathBuf>) =
         installed.into_iter().partition(|path| path.is_dir());
+    if !missing.is_empty() {
+        save_installed_directories(&keep).map_err(|err| format!("Failed to prune: {err}"))?;
+    }
+    Ok(missing)
+}
+
+fn prune() -> Result<(), String> {
+    let missing = prune_directories()?;
     if missing.is_empty() {
         println!("Nothing to prune: every registered directory exists.");
         return Ok(());
     }
-    save_installed_directories(&keep).map_err(|err| format!("Failed to prune: {err}"))?;
     for path in missing {
         println!("Unregistered missing directory: {}", display_path(&path));
     }
@@ -315,7 +366,9 @@ fn prune() -> Result<(), String> {
 fn edit(target: &str, file: Option<&str>) -> Result<(), String> {
     let directory = match parse_target(target) {
         Target::Path(path) => canonical_dir(&path)?,
-        Target::Namespace(_) => resolve_registered(target, &load_installed_directories())?,
+        namespace @ Target::Namespace(_) => {
+            resolve_registered(namespace, &load_installed_directories())?
+        }
     };
     let files = directory_config_files(&directory);
     let names: Vec<String> = files
@@ -444,7 +497,7 @@ pub(crate) fn offer_registration(config: &LoadedConfig) {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum Target {
+pub(crate) enum Target {
     Path(PathBuf),
     Namespace(String),
 }
@@ -459,8 +512,8 @@ fn parse_target(value: &str) -> Target {
 }
 
 /// The registered directory `target` names, as stored in the registry.
-fn resolve_registered(target: &str, installed: &[PathBuf]) -> Result<PathBuf, String> {
-    match parse_target(target) {
+fn resolve_registered(target: Target, installed: &[PathBuf]) -> Result<PathBuf, String> {
+    match target {
         Target::Path(path) => {
             let path = path.canonicalize().unwrap_or(path);
             if installed.contains(&path) {

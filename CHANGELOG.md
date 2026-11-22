@@ -16,6 +16,9 @@ reconstructed from the git history.
 ### Added
 - Version-matched embedded docs through `fire cli docs [topic]`, topic completion, and the MCP
   `get_docs` tool, including the Fire config schema. (#33)
+- MCP `list_global`, `add_global`, `remove_global`, `prune_global`, `merge_global` and
+  `unmerge_global`: the `fire cli global` registry with absolute config file paths and structured
+  results, for use only when the user asks. (#49)
 - MCP `run_command` runs finite configured commands with structured exit code and output, a
   timeout, and refusals for `long_running` or `agents: false` commands. (#38)
 - `{fire.exec}` in a command `runner`: replaced by the commands as one quoted argument, leaving
