@@ -3105,6 +3105,33 @@ mod tests {
     }
 
     #[test]
+    fn shell_compute_value_is_only_stdout() {
+        let shell = Shell::parse("sh", &BTreeMap::new()).expect("parse");
+        let dir = std::env::current_dir().expect("cwd");
+        let value = run_shell_command_capture(
+            &shell,
+            "echo prompt >&2; echo value",
+            &dir,
+            &BTreeMap::new(),
+        )
+        .expect("compute");
+        assert_eq!(value, "value\n");
+    }
+
+    #[test]
+    fn failed_shell_compute_reports_command_and_exit_code_only() {
+        let shell = Shell::parse("sh", &BTreeMap::new()).expect("parse");
+        let dir = std::env::current_dir().expect("cwd");
+        let err =
+            run_shell_command_capture(&shell, "echo boom >&2; exit 3", &dir, &BTreeMap::new())
+                .expect_err("compute should fail");
+        assert_eq!(
+            err,
+            "Compute command `echo boom >&2; exit 3` failed with exit code 3"
+        );
+    }
+
+    #[test]
     fn compute_before_check_and_exec_use_the_configured_shell() {
         let shell = Shell::parse("bash", &BTreeMap::new()).expect("parse");
         let dir = std::env::current_dir().expect("cwd");
