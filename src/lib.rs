@@ -116,16 +116,15 @@ fn normalize_completion_words(mut words: Vec<String>, bin_name: &str) -> Vec<Str
         words.remove(0);
     }
 
-    if words.first().map(String::as_str) == Some(bin_name) {
-        words.remove(0);
-    } else if words.first().map(String::as_str) == Some("fire") {
+    if matches!(words.first().map(String::as_str), Some(word) if word == bin_name || word == "fire")
+    {
         words.remove(0);
     }
 
     words
 }
 
-fn extract_help_target<'a>(command_args: &'a [String]) -> Option<&'a [String]> {
+fn extract_help_target(command_args: &[String]) -> Option<&[String]> {
     let last = command_args.last()?;
     if last == ":h" {
         return Some(&command_args[..command_args.len().saturating_sub(1)]);

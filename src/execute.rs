@@ -1385,7 +1385,7 @@ fn apply_macros(value: &str, macros_map: &BTreeMap<String, String>) -> String {
         .iter()
         .filter(|(key, _)| !key.is_empty())
         .collect::<Vec<_>>();
-    ordered_macros.sort_by(|(left, _), (right, _)| right.len().cmp(&left.len()));
+    ordered_macros.sort_by_key(|(key, _)| std::cmp::Reverse(key.len()));
 
     let mut output = value.to_string();
     for _ in 0..8 {
@@ -2372,8 +2372,10 @@ mod tests {
 
     #[test]
     fn placeholders_replace_indexed_args_with_shell_escape() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("{{n}}".to_string());
+        let context = ExecutionContext {
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "echo {1} {2} {3}",
@@ -2394,8 +2396,10 @@ mod tests {
 
     #[test]
     fn custom_placeholder_template_is_supported() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("[[n]]".to_string());
+        let context = ExecutionContext {
+            placeholder: Some("[[n]]".to_string()),
+            ..ExecutionContext::default()
+        };
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "echo [[1]]",
@@ -2410,8 +2414,10 @@ mod tests {
 
     #[test]
     fn macros_expand_before_placeholder_replacement() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("{{n}}".to_string());
+        let mut context = ExecutionContext {
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         context
             .macros
             .insert("{{dynamic}}".to_string(), "docker exec {1}".to_string());
@@ -2429,8 +2435,10 @@ mod tests {
 
     #[test]
     fn spread_placeholder_expands_to_remaining_args() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("{{n}}".to_string());
+        let context = ExecutionContext {
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "echo {1} ...{{n}}",
@@ -2450,8 +2458,10 @@ mod tests {
 
     #[test]
     fn bracket_placeholder_expands_to_remaining_args() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("{{n}}".to_string());
+        let context = ExecutionContext {
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "echo [{{n}}]",
@@ -2467,8 +2477,10 @@ mod tests {
 
     #[test]
     fn spread_placeholder_uses_only_unused_args() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("{{n}}".to_string());
+        let context = ExecutionContext {
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "echo {2} ...{{n}}",
@@ -2488,8 +2500,10 @@ mod tests {
 
     #[test]
     fn eval_array_placeholder_uses_only_unused_args() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("{{n}}".to_string());
+        let context = ExecutionContext {
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "fn({2}, [{{n}}])",
@@ -2505,8 +2519,10 @@ mod tests {
 
     #[test]
     fn eval_placeholder_replaces_without_shell_escaping() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("{{n}}".to_string());
+        let context = ExecutionContext {
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "sayHello(\"{1}\", {2})",
@@ -2521,8 +2537,10 @@ mod tests {
 
     #[test]
     fn eval_spread_placeholder_expands_as_string_arguments() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("{{n}}".to_string());
+        let context = ExecutionContext {
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "fn(...{{n}})",
@@ -2537,8 +2555,10 @@ mod tests {
 
     #[test]
     fn eval_array_placeholder_expands_as_string_array() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("{{n}}".to_string());
+        let context = ExecutionContext {
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         let mut stats = RenderStats::default();
         let rendered = render_runtime_string(
             "fn([{{n}}])",
@@ -2599,8 +2619,10 @@ mod tests {
 
     #[test]
     fn unresolved_args_respects_consumed_indexes_without_policy_effect() {
-        let mut stats = RenderStats::default();
-        stats.had_placeholders = true;
+        let mut stats = RenderStats {
+            had_placeholders: true,
+            ..RenderStats::default()
+        };
         stats.used_arg_indexes.insert(0);
         let context = ExecutionContext {
             on_unused_args: Some(UnusedArgsMode::Error),
@@ -2627,8 +2649,10 @@ mod tests {
             on_unused_args: Some(UnusedArgsMode::Warn),
             ..ExecutionContext::default()
         };
-        let mut stats = RenderStats::default();
-        stats.had_placeholders = true;
+        let mut stats = RenderStats {
+            had_placeholders: true,
+            ..RenderStats::default()
+        };
         stats.used_arg_indexes.insert(0);
         let args = vec!["one".to_string(), "two".to_string()];
         enforce_unused_args_policy(&context, &args, &stats);
@@ -2636,8 +2660,10 @@ mod tests {
 
     #[test]
     fn unused_args_detection_counts_dynamic_spread_in_eval() {
-        let mut context = ExecutionContext::default();
-        context.placeholder = Some("{{n}}".to_string());
+        let context = ExecutionContext {
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         let mut stats = RenderStats::default();
         let args = vec![
             "first".to_string(),
@@ -2672,9 +2698,11 @@ mod tests {
 
     #[test]
     fn compute_resolves_literal_variable_values() {
-        let mut context = ExecutionContext::default();
-        context.dir = std::env::current_dir().expect("cwd");
-        context.placeholder = Some("{{n}}".to_string());
+        let mut context = ExecutionContext {
+            dir: std::env::current_dir().expect("cwd"),
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         context
             .compute
             .insert("{left}".to_string(), "printf %s {2}".to_string());
@@ -2705,9 +2733,11 @@ mod tests {
 
     #[test]
     fn compute_values_are_reusable_as_exact_tokens() {
-        let mut context = ExecutionContext::default();
-        context.dir = std::env::current_dir().expect("cwd");
-        context.placeholder = Some("{{n}}".to_string());
+        let mut context = ExecutionContext {
+            dir: std::env::current_dir().expect("cwd"),
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         context
             .compute
             .insert("{sum}".to_string(), "printf %s 42".to_string());
@@ -2741,9 +2771,11 @@ mod tests {
 
     #[test]
     fn compute_trims_trailing_newlines() {
-        let mut context = ExecutionContext::default();
-        context.dir = std::env::current_dir().expect("cwd");
-        context.placeholder = Some("{{n}}".to_string());
+        let mut context = ExecutionContext {
+            dir: std::env::current_dir().expect("cwd"),
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         context
             .compute
             .insert("{value}".to_string(), "echo value".to_string());
@@ -2767,9 +2799,11 @@ mod tests {
 
     #[test]
     fn compute_placeholder_consumes_argument_for_exec_tail() {
-        let mut context = ExecutionContext::default();
-        context.dir = std::env::current_dir().expect("cwd");
-        context.placeholder = Some("{{n}}".to_string());
+        let mut context = ExecutionContext {
+            dir: std::env::current_dir().expect("cwd"),
+            placeholder: Some("{{n}}".to_string()),
+            ..ExecutionContext::default()
+        };
         context
             .compute
             .insert("$name".to_string(), "echo {1}".to_string());

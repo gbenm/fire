@@ -49,13 +49,9 @@ fn print_scope_help_inner(config: &LoadedConfig, path: &[String]) -> bool {
             print_namespace_help(config, namespace);
             true
         }
-        [namespace, group] => {
-            if has_namespace_prefix(config, namespace, group) {
-                print_namespace_prefix_help(config, namespace, group);
-                true
-            } else {
-                false
-            }
+        [namespace, group] if has_namespace_prefix(config, namespace, group) => {
+            print_namespace_prefix_help(config, namespace, group);
+            true
         }
         _ => false,
     }
@@ -227,10 +223,8 @@ fn groups(config: &LoadedConfig) -> Vec<(String, Option<String>)> {
                 group,
                 group_description,
                 ..
-            } => {
-                if implicit_namespace.as_deref() == Some(namespace.as_str()) {
-                    map.insert(group.clone(), non_empty(group_description));
-                }
+            } if implicit_namespace.as_deref() == Some(namespace.as_str()) => {
+                map.insert(group.clone(), non_empty(group_description));
             }
             _ => {}
         }

@@ -457,12 +457,10 @@ fn local_groups(config: &LoadedConfig, prefix: &str) -> Vec<CompletionSuggestion
                 group,
                 group_description,
                 ..
-            } => {
-                if implicit_namespace.as_deref() == Some(namespace.as_str())
-                    && group.starts_with(prefix)
-                {
-                    map.insert(group.clone(), non_empty(group_description));
-                }
+            } if implicit_namespace.as_deref() == Some(namespace.as_str())
+                && group.starts_with(prefix) =>
+            {
+                map.insert(group.clone(), non_empty(group_description));
             }
             _ => {}
         }
@@ -557,13 +555,12 @@ fn group_children(config: &LoadedConfig, group: &str, prefix: &str) -> Vec<Compl
                 namespace,
                 group: file_alias,
                 ..
-            } => {
-                if implicit_namespace.as_deref() == Some(namespace.as_str()) && file_alias == group
-                {
-                    for (name, entry) in &file.commands {
-                        if name.starts_with(prefix) {
-                            map.insert(name.clone(), command_suggestion(name, entry));
-                        }
+            } if implicit_namespace.as_deref() == Some(namespace.as_str())
+                && file_alias == group =>
+            {
+                for (name, entry) in &file.commands {
+                    if name.starts_with(prefix) {
+                        map.insert(name.clone(), command_suggestion(name, entry));
                     }
                 }
             }

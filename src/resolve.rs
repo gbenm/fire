@@ -25,7 +25,7 @@ pub(crate) fn resolve_command<'a>(
     for file in &config.files {
         for (command_name, command_entry) in &file.commands {
             let Some(base_consumed) =
-                scope_match_consumed(&file, command_name, args, implicit_namespace.as_deref())
+                scope_match_consumed(file, command_name, args, implicit_namespace.as_deref())
             else {
                 continue;
             };

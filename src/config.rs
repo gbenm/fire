@@ -54,6 +54,7 @@ pub(crate) enum FileScope {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum CommandEntry {
     Shorthand(String),
     Spec(CommandSpec),
