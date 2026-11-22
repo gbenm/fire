@@ -62,6 +62,9 @@ reconstructed from the git history.
 - Docs: comparison with other task runners, MCP setup per host, schema `$id`.
 
 ### Changed
+- MCP server instructions are now a short decision guide (find the command, reuse a running
+  session, `start_session` for long-running, `run_command` for finite), with a single rule for
+  the shell; hints for the human user moved to `docs/mcp.md`. (#37)
 - MCP `search_commands` and `run_command` accept `cwd` to discover and run another project's
   local commands when the server was started elsewhere. (#46)
 - MCP `list_sessions` defaults to the current Fire project, including sessions started from

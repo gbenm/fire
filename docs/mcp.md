@@ -18,9 +18,21 @@ It gives agents three things:
    tool description and lets an agent read any embedded guide or the config schema, so it can
    author configuration without relying on documentation for a different release.
 
-The server's instructions tell agents to do both: search configured commands first, run finite
-ones through `run_command`, and always launch long-running processes through `start_session`
-(checking `list_sessions` first to avoid duplicates). Commands resolve against the same merged
+The server's instructions are a short decision guide, on one line with the critical rule first
+(some clients only show the first line, or a truncated prefix):
+
+1. Long-running commands always go through `start_session`, never the agent's own shell.
+2. Find the command with `search_commands` before writing one.
+3. Check `list_sessions` and reuse what is already running.
+4. Long-running (`long_running: true`, or it doesn't exit on its own): `start_session` with a
+   note, then `session_output`. Finite (build, test, lint): `run_command`.
+5. Manage sessions with `session_output`, `send_input`, `signal_session`, `stop_session` and
+   `forget_session`; never run `agents: false` commands; use `get_docs` to write configs; change
+   global directories only when the user asks.
+
+Tool descriptions say what each tool does and when to use it. Hints meant for you stay here:
+attach to any agent's session with `fire cli fg <id>` (list them with `fire cli ps`), and start
+your own detached sessions with `fire --bg <command>`. Commands resolve against the same merged
 config Fire uses (local `fire.yaml` / `*.fire.yaml` plus registered global directories; see
 [Overview](./overview.md#file-discovery-and-merge-order)).
 

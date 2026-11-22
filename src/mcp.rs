@@ -890,7 +890,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, attach, or stop it. `command` must be a configured fire command (find it with `search_commands`). One command in one cwd is one session: if it is already running, this returns its id and replaces its note instead of starting a duplicate; if it ended (crashed or stopped), it starts again under the same id with the new note. So to restart a server, stop it with `stop_session` and call this again. Returns the session id as `session_id`; then confirm it came up with `session_output`. Fails for commands the user reserved for humans (`agents: false`)."
+        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, or stop it. `command` must be a configured fire command (find it with `search_commands`). One command in one cwd is one session: if it is already running, this returns its id and replaces its note instead of starting a duplicate; if it ended (crashed or stopped), it starts again under the same id with the new note. So to restart a server, stop it with `stop_session` and call this again. Returns the session id as `session_id`; then confirm it came up with `session_output`. Fails for commands the user reserved for humans (`agents: false`)."
     )]
     fn start_session(
         &self,
@@ -1077,22 +1077,20 @@ fn to_json<T: Serialize>(value: &T) -> String {
 
 /// Single line on purpose: some MCP clients only show the first line, or a truncated prefix,
 /// of a server's instructions. The critical rule therefore comes first.
-const INSTRUCTIONS: &str = "Run long-running fire commands (servers, `start`/`dev`/`watch` commands, \
-workers, tunnels) with the `start_session` tool, never in your own shell, and call `list_sessions` \
-first to reuse what is already running; find the user's configured commands with \
-`search_commands` (an app or service name you don't recognize is probably one) before writing your own. Details: these MCP tools beat running fire ad hoc. \
-To write or edit fire configs, use `get_docs`. \
-Pass your working directory as `cwd` to discover and run that project's local commands when the server was started elsewhere. \
-Commands the user marked `agents: false` are not listed and are off-limits: never run them, not \
-even through your own shell. \
-Sessions are shared with the user and other agents across projects; `list_sessions` shows the current project by default and accepts `all: true`, so give `start_session` a \
-short `note` saying why; read output with `session_output`, write stdin with `send_input`, \
-send a specific signal with `signal_session`, stop with `stop_session`, and remove an exited \
-record with `forget_session`; the user can attach with `fire cli fg <id>`. \
-`search_commands` returns each command's exact `path` (e.g. `fire backend test`); \
-run finite commands with `run_command`, passing arguments as separate tokens. Omit its query to list all commands. Underlying \
-`exec`/`eval` templates are hidden unless explicitly requested and are context only. \
-https://github.com/gbenm/fire";
+const INSTRUCTIONS: &str = "Long-running fire commands (dev servers, `start`/`dev`/`watch`, workers, \
+tunnels) go through `start_session`, never your own shell. Decide in this order: \
+1) find the command with `search_commands`, passing your working directory as `cwd` (an app or \
+service name you don't recognize is probably one), before writing your own; \
+2) check `list_sessions` (this project; `all: true` for every project) and reuse what is already running; \
+3) long-running (`long_running: true`, or it doesn't exit on its own): `start_session` with a short \
+`note` saying why, then confirm it came up with `session_output`; finite (build, test, lint, one-off \
+scripts): `run_command`, with arguments as separate tokens. \
+Sessions are shared with the user and other agents: read output with `session_output`, type with \
+`send_input`, signal with `signal_session`, stop (or stop then start to restart) with `stop_session`, \
+remove an exited record with `forget_session`. \
+Never run commands the user marked `agents: false`, not even through your own shell. \
+To write or edit fire configs, use `get_docs`. Change global directories (`*_global` tools) only \
+when the user asks. https://github.com/gbenm/fire";
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FireMcpServer {
@@ -1131,6 +1129,24 @@ mod tests {
         assert!(!INSTRUCTIONS.contains('\n'));
         assert!(INSTRUCTIONS[..120].contains("start_session"));
         assert!(INSTRUCTIONS.contains("fire configs, use `get_docs`"));
+    }
+
+    #[test]
+    fn instructions_are_a_decision_guide_without_user_hints() {
+        let position = |needle: &str| {
+            INSTRUCTIONS
+                .find(needle)
+                .unwrap_or_else(|| panic!("instructions mention {needle}"))
+        };
+        // find → already running? → long-running or finite.
+        assert!(position("1) find") < position("2) check `list_sessions`"));
+        assert!(position("2) check") < position("3) long-running"));
+        assert!(position("3) long-running") < position("`run_command`"));
+        position("`stop_session`");
+        // One rule for the shell, and no hints meant for the human user.
+        assert!(!INSTRUCTIONS.contains("ad hoc"));
+        assert!(!INSTRUCTIONS.contains("in your shell as"));
+        assert!(!INSTRUCTIONS.contains("fire cli"));
     }
 
     #[test]
