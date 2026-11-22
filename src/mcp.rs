@@ -1,23 +1,20 @@
 use serde::Serialize;
 
 use rmcp::{
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::{
+        router::tool::ToolRouter,
+        wrapper::{Json, Parameters},
+    },
     model::{ServerCapabilities, ServerInfo},
     schemars, serve_server, tool, tool_handler, tool_router,
     transport::io::stdio,
     ServerHandler,
 };
 
-use crate::config::{local_implicit_namespace, CommandEntry, FileScope, LoadedConfig, SourceKind};
+use crate::config::{CommandEntry, FileScope, LoadedConfig, SourceKind};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct CommandContext {
-    pub(crate) fire_version: String,
-    pub(crate) implicit_local_namespace: Option<String>,
-    /// Namespaces merged by the user (`fire cli global merge`).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) merged_namespaces: Vec<String>,
-    pub(crate) notes: Vec<String>,
     pub(crate) commands: Vec<CommandNode>,
 }
 
@@ -45,6 +42,10 @@ pub(crate) struct CommandMatch {
     pub(crate) path: String,
     pub(crate) description: Option<String>,
     pub(crate) runnable: bool,
+    /// Whether the command came from the current project or a registered global directory.
+    pub(crate) source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) placeholder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) exec: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,7 +55,6 @@ pub(crate) struct CommandMatch {
 }
 
 pub(crate) fn build_command_context(config: &LoadedConfig) -> CommandContext {
-    let implicit_local_namespace = local_implicit_namespace(config);
     let mut commands = Vec::new();
 
     for file in &config.files {
@@ -83,20 +83,7 @@ pub(crate) fn build_command_context(config: &LoadedConfig) -> CommandContext {
         }
     }
 
-    CommandContext {
-        fire_version: crate::FIRE_VERSION.to_string(),
-        implicit_local_namespace,
-        merged_namespaces: config.merged_namespaces.iter().cloned().collect(),
-        notes: vec![
-            "`path` is the canonical invocation, e.g. `fire backend logs`. Run it directly in a shell.".to_string(),
-            "When a single local namespace is active (see `implicit_local_namespace`), its prefix token can be omitted.".to_string(),
-            "Commands of `merged_namespaces` can also omit the prefix, unless another command, group or namespace uses that first word; the full `path` always works.".to_string(),
-            "Nodes with `runnable: false` are command groups; invoke one of their `subcommands` instead.".to_string(),
-            "`exec`/`eval` show the underlying template(s) a command runs, for context only — invoke via `fire <path>`, not by copying these templates.".to_string(),
-            "`long_running: true` marks servers, watchers and workers: start them with `start_session`. Run from a shell without a terminal, they detach on their own and print a session id.".to_string(),
-        ],
-        commands,
-    }
+    CommandContext { commands }
 }
 
 fn scope_labels(scope: &FileScope) -> (Option<String>, Option<String>) {
@@ -190,6 +177,8 @@ fn collect_matches(
             path: node.path.clone(),
             description: node.description.clone(),
             runnable: node.runnable,
+            source: node.source,
+            placeholder: node.placeholder.clone(),
             exec: include_exec.then(|| node.exec.clone()).flatten(),
             eval: include_exec.then(|| node.eval.clone()).flatten(),
             long_running: node.long_running,
@@ -279,14 +268,14 @@ struct SignalSessionRequest {
     signal: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct CliResult {
     ok: bool,
     stdout: String,
     stderr: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct StartSessionResult {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -310,16 +299,11 @@ impl From<CliResult> for StartSessionResult {
     }
 }
 
-/// Session management reuses the CLI (`fire --bg` and `fire cli` session actions) so both paths
-/// behave the same.
-fn run_fire_cli(args: &[&str], cwd: Option<&str>) -> String {
+/// Input reuses the CLI so its terminal escape handling stays identical.
+fn run_fire_cli(args: &[&str], cwd: Option<&str>) -> CliResult {
     let mut full = vec!["cli"];
     full.extend_from_slice(args);
-    run_fire(&full, cwd)
-}
-
-fn run_fire(args: &[&str], cwd: Option<&str>) -> String {
-    to_json(&run_fire_result(args, cwd))
+    run_fire_result(&full, cwd)
 }
 
 fn run_fire_result(args: &[&str], cwd: Option<&str>) -> CliResult {
@@ -418,10 +402,10 @@ impl FireMcpServer {
     fn start_session(
         &self,
         Parameters(StartSessionRequest { command, note, cwd }): Parameters<StartSessionRequest>,
-    ) -> String {
+    ) -> Json<StartSessionResult> {
         let mut args = vec!["--bg", "--agent", "-m", note.as_str()];
         args.extend(command.iter().map(String::as_str));
-        to_json(&StartSessionResult::from(run_fire_result(
+        Json(StartSessionResult::from(run_fire_result(
             &args,
             cwd.as_deref(),
         )))
@@ -433,12 +417,12 @@ impl FireMcpServer {
     fn send_input(
         &self,
         Parameters(SendInputRequest { id, text, raw }): Parameters<SendInputRequest>,
-    ) -> String {
-        if raw == Some(true) {
+    ) -> Json<CliResult> {
+        Json(if raw == Some(true) {
             run_fire_cli(&["send", "--raw", &id, &text], None)
         } else {
             run_fire_cli(&["send", &id, &text], None)
-        }
+        })
     }
 
     #[tool(
@@ -447,15 +431,8 @@ impl FireMcpServer {
     fn stop_session(
         &self,
         Parameters(SessionIdRequest { id }): Parameters<SessionIdRequest>,
-    ) -> String {
-        if !crate::session::is_running_id(&id) {
-            return to_json(&CliResult {
-                ok: false,
-                stdout: String::new(),
-                stderr: format!("session `{id}` is not running"),
-            });
-        }
-        run_fire_cli(&["__stop", &id], None)
+    ) -> Json<CliResult> {
+        Json(session_action_result(crate::session::stop_session(&id)))
     }
 
     #[tool(
@@ -464,23 +441,33 @@ impl FireMcpServer {
     fn signal_session(
         &self,
         Parameters(SignalSessionRequest { id, signal }): Parameters<SignalSessionRequest>,
-    ) -> String {
-        run_fire_cli(&["kill", &id, &signal], None)
+    ) -> Json<CliResult> {
+        Json(session_action_result(crate::session::signal_session(
+            &id, &signal,
+        )))
     }
 
-    #[tool(description = "Remove the saved record of an exited session.")]
+    #[tool(description = "Remove the saved record of an exited, stopped, or lost session.")]
     fn forget_session(
         &self,
         Parameters(SessionIdRequest { id }): Parameters<SessionIdRequest>,
-    ) -> String {
-        if crate::session::is_running_id(&id) {
-            return to_json(&CliResult {
-                ok: false,
-                stdout: String::new(),
-                stderr: format!("session `{id}` is still running; stop it before forgetting it"),
-            });
-        }
-        run_fire_cli(&["__forget", &id], None)
+    ) -> Json<CliResult> {
+        Json(session_action_result(crate::session::forget_session(&id)))
+    }
+}
+
+fn session_action_result(result: Result<String, String>) -> CliResult {
+    match result {
+        Ok(stdout) => CliResult {
+            ok: true,
+            stdout,
+            stderr: String::new(),
+        },
+        Err(stderr) => CliResult {
+            ok: false,
+            stdout: String::new(),
+            stderr,
+        },
     }
 }
 
@@ -558,6 +545,14 @@ mod tests {
             serde_json::to_value(&result).expect("serializable result")["session_id"],
             "api-dev-a1b2c3"
         );
+
+        let router = FireMcpServer::tool_router();
+        let tool = router.get("start_session").expect("start tool");
+        let output = tool
+            .output_schema
+            .as_ref()
+            .expect("structured output schema");
+        assert!(output["properties"].get("session_id").is_some());
     }
 
     #[test]
@@ -604,7 +599,8 @@ mod tests {
             .get("forget_session")
             .and_then(|tool| tool.description.as_deref())
             .expect("forget description");
-        assert!(forget_description.contains("exited session"));
+        assert!(forget_description.contains("exited"));
+        assert!(forget_description.contains("stopped"));
         assert!(!forget_description.contains("running session"));
         assert!(!forget_description.contains("signal"));
     }
@@ -614,12 +610,12 @@ mod tests {
         let result = FireMcpServer::new().stop_session(Parameters(SessionIdRequest {
             id: "definitely-not-a-session".to_string(),
         }));
-        let result: serde_json::Value = serde_json::from_str(&result).expect("JSON result");
+        let result = serde_json::to_value(result.0).expect("JSON result");
 
         assert_eq!(result["ok"], false);
         assert_eq!(
             result["stderr"],
-            "session `definitely-not-a-session` is not running"
+            "No session `definitely-not-a-session`. See: fire cli ps"
         );
     }
 
@@ -886,6 +882,7 @@ commands:
 commands:
   build:
     description: Build everything
+    placeholder: "@{n}"
     exec: cargo build
   generated:
     eval: py:commands()
@@ -898,6 +895,8 @@ commands:
         let matches = search_context(&context, "", false);
         assert_eq!(matches.len(), 2);
         let json = serde_json::to_value(&matches).expect("serializable matches");
+        assert_eq!(json[0]["source"], "local");
+        assert_eq!(json[0]["placeholder"], "@{n}");
         for command in json.as_array().expect("command array") {
             assert!(command.get("exec").is_none());
             assert!(command.get("eval").is_none());

@@ -139,14 +139,6 @@ pub(crate) fn handle(args: &[String]) {
             [id, signal] => send_signal(id, signal),
             _ => fail("Usage: fire cli kill <id> [SIGNAL]"),
         },
-        Some("__stop") => match &rest[1..] {
-            [id] => stop(id),
-            _ => process::exit(2),
-        },
-        Some("__forget") => match &rest[1..] {
-            [id] => forget(id),
-            _ => process::exit(2),
-        },
         Some("send") => match &rest[1..] {
             [flag, id, text @ ..] if flag == "--raw" && !text.is_empty() => {
                 send_input(id, unescape(&text.join(" ")))
@@ -217,8 +209,7 @@ fn start(args: &[String]) {
         note = Some(
             args.get(index + 1)
                 .unwrap_or_else(|| fail("-m requires a short note"))
-                .trim()
-                .to_string(),
+                .clone(),
         );
         index += 2;
     }
@@ -864,58 +855,74 @@ fn kill(id: &str) {
     let Some(session) = load(id) else {
         fail(&format!("No session `{id}`. See: fire cli ps"))
     };
-    if !session.is_running() {
-        forget(id);
-        return;
-    }
-
-    stop(id);
+    finish_session_action(if session.is_running() {
+        stop_session(id)
+    } else {
+        forget_session(id)
+    });
 }
 
-fn stop(id: &str) {
+pub(crate) fn stop_session(id: &str) -> Result<String, String> {
     let Some(session) = load(id) else {
-        fail(&format!("No session `{id}`. See: fire cli ps"))
+        return Err(format!("No session `{id}`. See: fire cli ps"));
     };
     if !session.is_running() {
-        fail(&format!("Session `{id}` is not running"));
+        return Err(format!("Session `{id}` is not running"));
     }
 
     mark_stopped(id);
     signal_group(&session, libc::SIGTERM);
     for _ in 0..50 {
         if load(id).is_none_or(|current| !current.is_running()) {
-            println!("[fire] {id} stopped");
-            return;
+            return Ok(format!("[fire] {id} stopped"));
         }
         thread::sleep(Duration::from_millis(100));
     }
     signal_group(&session, libc::SIGKILL);
-    println!("[fire] {id} killed");
+    Ok(format!("[fire] {id} killed"))
 }
 
-fn forget(id: &str) {
+pub(crate) fn forget_session(id: &str) -> Result<String, String> {
     let Some(session) = load(id) else {
-        fail(&format!("No session `{id}`. See: fire cli ps"))
+        return Err(format!("No session `{id}`. See: fire cli ps"));
     };
     if session.is_running() {
-        fail(&format!("Session `{id}` is still running"));
+        return Err(format!(
+            "Session `{id}` is still running; stop it before forgetting it"
+        ));
     }
     remove_session(id);
-    println!("[fire] {id} was not running; removed");
+    Ok(format!("[fire] {id} was not running; removed"))
 }
 
 fn send_signal(id: &str, name: &str) {
+    finish_session_action(signal_session(id, name));
+}
+
+pub(crate) fn signal_session(id: &str, name: &str) -> Result<String, String> {
     let Some(signal) = parse_signal(name) else {
-        fail(&format!(
+        return Err(format!(
             "Unknown signal `{name}`. Use a name (INT, TERM, HUP, USR1...) or number"
-        ))
+        ));
     };
-    let session = running(id);
+    let Some(session) = load(id) else {
+        return Err(format!("No session `{id}`. See: fire cli ps"));
+    };
+    if !session.is_running() {
+        return Err(format!("Session `{id}` is not running"));
+    }
     if [libc::SIGINT, libc::SIGTERM, libc::SIGQUIT, libc::SIGKILL].contains(&signal) {
         mark_stopped(id);
     }
     signal_group(&session, signal);
-    println!("[fire] sent {name} to {id}");
+    Ok(format!("[fire] sent {name} to {id}"))
+}
+
+fn finish_session_action(result: Result<String, String>) {
+    match result {
+        Ok(message) => println!("{message}"),
+        Err(message) => fail(&message),
+    }
 }
 
 /// Records that the session is being stopped on purpose, so its exit isn't reported as a failure.
@@ -1189,6 +1196,22 @@ mod tests {
         assert_eq!(parse_signal("9"), Some(9));
         assert_eq!(parse_signal("NOPE"), None);
         assert_eq!(parse_signal("0"), None);
+    }
+
+    #[test]
+    fn lifecycle_operations_report_missing_sessions_without_exiting() {
+        let id = "definitely-not-a-session";
+        let missing = format!("No session `{id}`. See: fire cli ps");
+        assert_eq!(stop_session(id), Err(missing.clone()));
+        assert_eq!(forget_session(id), Err(missing.clone()));
+        assert_eq!(signal_session(id, "CONT"), Err(missing));
+        assert_eq!(
+            signal_session(id, "NOT_A_SIGNAL"),
+            Err(
+                "Unknown signal `NOT_A_SIGNAL`. Use a name (INT, TERM, HUP, USR1...) or number"
+                    .to_string()
+            )
+        );
     }
 
     #[test]

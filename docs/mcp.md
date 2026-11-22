@@ -113,7 +113,9 @@ own permissions (for example, in Claude Code: `"deny": ["Bash(fire deploy:*)"]`)
 The single command-discovery tool. Omit `query` (or pass an empty string) to return every command,
 or provide a case-insensitive substring to match against `path`, `description`, `exec`, or `eval`.
 Each flat result puts `path` first: it is the exact canonical invocation to run, such as
-`"fire ex backend logs"`. Results also include `description`, `runnable`, and `long_running`.
+`"fire ex backend logs"`. Results also include `description`, `runnable`, `source` (`local` or
+`global`), a custom `placeholder` when configured, and `long_running: true` for commands that
+must use `start_session`.
 
 Underlying `exec` and `eval` templates are omitted by default. Pass `include_exec: true` only when
 their implementation is useful as context; run the returned `path`, never a copied template.
@@ -139,8 +141,9 @@ replaces its note; if it ended, it starts again under the same id. So a restart 
 `stop_session` followed by `start_session`, and the session list doesn't fill up with copies of
 the same server.
 
-The result has the same CLI envelope as the other management tools, with `session_id` added on
-success:
+The result is MCP structured content (with an output schema), using the same CLI envelope as the
+other management tools and adding `session_id` on success. MCP also includes its JSON text form
+for clients that do not read structured content:
 
 ```json
 {
@@ -165,11 +168,11 @@ Takes `id` and a required `signal` (name like `INT`, `HUP`, `USR1`, or a number)
 the running session's foreground process group, as a keyboard signal would be.
 
 ### `forget_session`
-Takes `id` and removes the saved record of an exited session. It refuses to remove a running
-session; stop it first with `stop_session` if that is the intent.
+Takes `id` and removes the saved record of an exited, stopped, or lost session. It refuses to
+remove a running session; stop it first with `stop_session` if that is the intent.
 
-Management tools return `{ ok, stdout, stderr }` from the equivalent CLI command. `start_session`
-also returns `session_id` on success.
+Management tools return `{ ok, stdout, stderr }` as MCP structured content. `start_session` also
+returns `session_id` on success.
 
 ## Testing manually
 Use the [MCP inspector](https://github.com/modelcontextprotocol/inspector) to poke at the server

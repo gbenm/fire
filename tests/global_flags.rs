@@ -3,7 +3,11 @@
 
 mod common;
 
-use std::process::{Command, Stdio};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Stdio},
+};
 
 use common::{eventually, Project};
 
@@ -41,6 +45,23 @@ fn run(command: Command) -> (i32, String, String) {
 
 fn fire(project: &Project, args: &[&str]) -> (i32, String, String) {
     run(project.fire(args))
+}
+
+fn session_record(root: &Path, id: &str) -> Option<String> {
+    for entry in fs::read_dir(root).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().and_then(|name| name.to_str()) == Some(id) {
+                if let Ok(record) = fs::read_to_string(path.join("session.json")) {
+                    return Some(record);
+                }
+            }
+            if let Some(record) = session_record(&path, id) {
+                return Some(record);
+            }
+        }
+    }
+    None
 }
 
 fn session_row(project: &Project, id: &str) -> String {
@@ -182,9 +203,14 @@ fn agent_flag_refuses_commands_reserved_for_humans() {
 #[test]
 fn deprecated_cli_bg_still_works_with_a_hint() {
     let mut project = Project::new("flags-cli-bg", &config());
-    let (code, id, stderr) = project.cli(&["bg", "-m", "old", "hello"]);
+    let note = "  old note  ";
+    let (code, id, stderr) = project.cli(&["bg", "-m", note, "hello"]);
     assert_eq!(code, 0, "{stderr}");
-    project.session = Some(id.trim().to_string());
+    let id = id.trim().to_string();
+    let record = session_record(&project.dir.join("home"), &id).expect("session record");
+    let record: serde_json::Value = serde_json::from_str(&record).expect("session JSON");
+    assert_eq!(record["note"], note);
+    project.session = Some(id);
     assert!(stderr.contains("`fire cli bg` is deprecated"), "{stderr}");
     assert!(stderr.contains("fire --bg"), "{stderr}");
 }

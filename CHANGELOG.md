@@ -56,11 +56,12 @@ reconstructed from the git history.
 
 ### Changed
 - MCP command discovery is consolidated in `search_commands`: omit its query to list every
-  command, use each result's prominent `path` to run it, and opt in to `exec`/`eval` templates
-  with `include_exec`. (#39)
+  command, use each result's prominent `path` to run it, retain its source and custom placeholder,
+  and opt in to `exec`/`eval` templates with `include_exec`. (#39)
 - The MCP session lifecycle is split into single-purpose `stop_session`, `signal_session`, and
   `forget_session` tools. (#41)
-- The MCP `start_session` result exposes the session id as a `session_id` field. (#40)
+- MCP session-management results use structured content, and `start_session` exposes the session
+  id as a `session_id` field. (#40)
 - The runtime `runner` and its `check` are launched through the command's `shell`. (#21)
 - Boolean environment variables (`FIRE_SESSIONS`, `FIRE_DRY_RUN`, `FIRE_LOG_COMMANDS`) all accept
   `1/true/yes/on` and `0/false/no/off`, any case; before, `FIRE_DRY_RUN` only took `true` and
@@ -77,6 +78,7 @@ reconstructed from the git history.
   prints a hint. (#43)
 
 ### Fixed
+- Session notes preserve the user's exact text instead of trimming leading or trailing whitespace.
 - node and deno runtimes print why they exit (`Missing FIRE_RUNTIME_RPC_ADDR`,
   `Cannot connect to fire at …`), like python; python also reports refused connections. (#21)
 - A `*.fire.yml` file with no commands no longer creates an empty inferred group. (#31)

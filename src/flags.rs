@@ -106,10 +106,10 @@ pub(crate) fn parse(args: &[String]) -> Result<(GlobalFlags, usize), String> {
             let value = args
                 .get(index + 1)
                 .ok_or_else(|| format!("{word} needs a note: {word} \"why it runs\""))?;
-            flags.note = Some(value.trim().to_string());
+            flags.note = Some(value.clone());
             index += 2;
         } else if let Some(value) = word.strip_prefix("--note=") {
-            flags.note = Some(value.trim().to_string());
+            flags.note = Some(value.to_string());
             index += 1;
         } else {
             return Err(format!("Unknown flag `{word}`. {}", valid_flags_line()));
@@ -274,6 +274,15 @@ mod tests {
         let (flags, _) = parse(&words(&["-m", "one", "--note=two", "--bg", "--bg", "x"])).unwrap();
         assert_eq!(flags.note.as_deref(), Some("two"));
         assert!(flags.bg);
+    }
+
+    #[test]
+    fn note_is_preserved_verbatim() {
+        let (flags, _) = parse(&words(&["-m", "  exact note  ", "x"])).unwrap();
+        assert_eq!(flags.note.as_deref(), Some("  exact note  "));
+
+        let (flags, _) = parse(&words(&["--note=  exact note  ", "x"])).unwrap();
+        assert_eq!(flags.note.as_deref(), Some("  exact note  "));
     }
 
     #[test]
