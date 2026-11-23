@@ -28,7 +28,10 @@ fn markdown_docs(directory: &Path) -> Vec<SourceDoc> {
     let mut paths: Vec<PathBuf> = fs::read_dir(directory)
         .expect("read docs directory")
         .map(|entry| entry.expect("read docs entry").path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .filter(|path| {
+            path.extension().is_some_and(|extension| extension == "md")
+                && path.file_name().is_some_and(|name| name != "SUMMARY.md")
+        })
         .collect();
     paths.sort();
 

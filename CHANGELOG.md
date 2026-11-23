@@ -7,6 +7,7 @@ reconstructed from the git history.
 ## [Unreleased]
 
 ### Added
+- A link-checked mdBook documentation site, deployed to GitHub Pages with a task-runner comparison. (#57)
 - `fire cli check` (alias `validate`) validates fire files for CI and pre-commit hooks, with
   file/line diagnostics, `--format json`, `--strict`, and optional registered-directory checks. (#56)
 - Command dependencies with scoped `needs`, deduplication, cycle and long-running checks,

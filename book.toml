@@ -1,0 +1,18 @@
+[book]
+title = "Fire CLI"
+description = "A config-first task runner for projects and AI agents"
+authors = ["Benjamin Garcia"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+
+[output.html]
+site-url = "/fire/"
+git-repository-url = "https://github.com/gbenm/fire"
+edit-url-template = "https://github.com/gbenm/fire/edit/main/docs/{path}"
+
+[output.linkcheck2]
+follow-web-links = false
+warning-policy = "error"

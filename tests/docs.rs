@@ -16,7 +16,10 @@ fn source_topic_ids() -> Vec<String> {
     let mut ids: Vec<String> = fs::read_dir(docs)
         .unwrap()
         .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .filter(|path| {
+            path.extension().is_some_and(|extension| extension == "md")
+                && path.file_name().is_some_and(|name| name != "SUMMARY.md")
+        })
         .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
         .collect();
     ids.push("schema".to_string());
@@ -45,6 +48,7 @@ fn index_is_generated_from_every_source_document() {
         source_topic_ids()
     );
     assert!(rows.iter().all(|(_, summary)| !summary.trim().is_empty()));
+    assert!(rows.iter().all(|(id, _)| *id != "SUMMARY"));
 }
 
 #[test]

@@ -1,39 +1,57 @@
 # Fire compared to other task runners
 
 Fire overlaps with tools you may already use as a command menu: `make`, [just](https://just.systems),
-[Task](https://taskfile.dev), [mise](https://mise.jdx.dev) tasks, and `npm run`. This page explains
-what Fire adds, and when another tool is the better fit.
+[Task](https://taskfile.dev), [mise tasks](https://mise.jdx.dev/tasks/), and
+[`npm run`](https://docs.npmjs.com/cli/commands/npm-run-script). The differences below are more
+important than the syntax: Fire focuses on discoverable project commands, shared process sessions,
+and a safe interface for agents.
 
-## What Fire adds
+## At a glance
 
-| | Fire |
-|---|---|
-| **Config** | YAML (`fire.yaml`, `*.fire.yaml`, `.yml` also works), with a JSON Schema for editor validation |
-| **Completion** | Generated from your config, nested groups included, with descriptions (zsh) |
-| **Commands everywhere** | Register a directory once (`fire cli global add`) and call its namespace from any directory |
-| **Long-running processes** | Every command runs on a pty you can detach (Ctrl+Z) and reattach from any terminal (`fire cli fg <id>`) |
-| **AI agents** | Built-in [MCP server](./mcp.md): agents discover your commands, start servers as shared sessions, and skip commands marked `agents: false` |
-| **Missing tools** | `check` + `fallback_runner`: run the command in a container when the tool isn't installed locally |
-| **Scripting** | `eval` / `compute` with JS/TS (node, deno) or Python snippets, next to plain shell |
-| **Arguments** | Extra args are appended to the command by default; placeholders and macros when you need them |
+| Capability | Fire | make | just | Task | mise tasks | npm scripts |
+|---|---|---|---|---|---|---|
+| **Config format** | YAML | Makefile syntax | justfile syntax | YAML | TOML or standalone task files | JSON |
+| **Completion with descriptions** | Generated; descriptions in zsh, values in bash | Not built in | Generated completion; recipes can have doc comments | Generated completion; tasks have descriptions | Generated completion; tasks have descriptions | Script-name completion, without descriptions |
+| **Namespaces / global commands** | Nested groups plus registered global namespaces | Separate makefiles and recursive make | Modules and imported justfiles | Included Taskfiles with namespaces | Included task files and global config | Workspace scripts |
+| **Detach / reattach sessions** | Built in for every command | No | No | No | No | No |
+| **Container fallback when a tool is missing** | Built-in `check` + `fallback_runner` | Write a recipe | Write a recipe | Write a task | Use mise tools or write a task | Write a script |
+| **Task runtimes** | Shell plus JS, TS, Python `eval` / `compute` | Shell and make functions | Shell or shebang scripts | Shell | Shell and file tasks; also manages tool versions | Shell commands and JavaScript packages |
+| **Agent / MCP interface** | Built in; individual commands can set `agents: false` | No | No | No | No | No |
+| **Dependencies** | `needs`, sequential or parallel, deduplicated with cycle detection | Target prerequisites | Recipe dependencies | Task dependencies | Task dependencies | Lifecycle hooks or explicit script chaining |
+| **Platforms** | macOS, Linux, and Windows through WSL | Wherever a compatible make is installed | macOS, Linux, Windows | macOS, Linux, Windows | macOS, Linux, Windows | Wherever Node.js runs |
+
+The table describes built-in behavior. Any of these tools can call scripts or third-party utilities
+to add capabilities outside its core.
+
+## Where Fire is different
+
+- **Commands stay discoverable.** Descriptions from `fire.yaml` appear in help and completion, and
+  registering a directory makes its namespace callable from any directory.
+- **Long-running commands are shared processes.** Every command runs on a pty. Detach with Ctrl+Z,
+  reattach with `fire cli fg <id>`, or let a person and an agent inspect the same server and logs.
+- **Agents use the same command contract as people.** The built-in [MCP server](./mcp.md) discovers
+  configured commands without inventing shell commands, while `agents: false` keeps sensitive
+  commands human-only.
+- **Missing local tools can be expected.** A `check` can select a `fallback_runner`, commonly a
+  container, instead of making every caller reproduce fallback logic.
 
 ## When another tool fits better
 
-- **You build files, not run commands.** `make` rebuilds only what changed, based on file
-  timestamps. Fire doesn't track inputs and outputs.
-- **You need task dependencies or caching today.** just, Task, mise and make run dependencies
-  before a task, and Task and mise can also skip work when sources haven't changed. Fire only has
-  `before` for now ([dependencies are planned](https://github.com/gbenm/fire/issues/55)).
-- **You need native Windows.** Fire runs on macOS and Linux (and Windows through WSL), because
-  sessions rely on Unix ptys.
-- **You want tool versions and tasks in one place.** mise also installs and pins the language and
-  tool versions your tasks use.
-- **It's a small JavaScript project.** `npm run` is already there, and every JS developer knows it.
+- **You build files, not just run commands.** `make` rebuilds only what changed based on targets,
+  prerequisites, and file timestamps. Fire does not track inputs or outputs.
+- **You need source-aware caching.** Task can use sources and generated files, and mise tasks can
+  declare sources and outputs. Fire dependencies order work but do not cache it.
+- **You need native Windows.** Fire sessions use Unix ptys, so Windows users need WSL. just, Task,
+  mise, and npm all run natively on Windows.
+- **You want tool versions and tasks in one place.** mise installs and pins tool versions as well as
+  running tasks. Fire can use a container fallback, but it is not a general tool-version manager.
+- **It is a small JavaScript project.** `npm run` is already available, needs no additional install,
+  and is familiar to JavaScript developers.
 
 ## Using them together
 
-Fire doesn't need to replace any of them. A common setup keeps the existing tool and lets Fire be
-the entry point for people and agents:
+Fire does not need to replace an existing runner. It can be the entry point for people and agents
+while the current build logic stays where it is:
 
 ```yaml
 commands:
@@ -49,5 +67,5 @@ commands:
     exec: npm run dev
 ```
 
-You get completion with descriptions, detachable sessions, and agent access, without moving any
-logic out of your `Makefile`, `justfile` or `package.json`.
+This adds completion with descriptions, detachable sessions, and agent access without moving logic
+out of your `Makefile`, `justfile`, `Taskfile.yml`, mise config, or `package.json`.

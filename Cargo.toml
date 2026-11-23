@@ -4,7 +4,7 @@ version = "3.0.1"
 edition = "2021"
 description = "Config-first task runner: YAML commands, dynamic completion, detachable pty sessions, and an MCP server for AI agents"
 license = "MIT"
-documentation = "https://github.com/gbenm/fire/tree/main/docs"
+documentation = "https://gbenm.github.io/fire/"
 readme = "README.md"
 keywords = ["task-runner", "cli", "yaml", "mcp", "make"]
 categories = ["command-line-utilities", "development-tools"]
@@ -18,7 +18,7 @@ include = [
   "LICENSE",
   "README.md",
 ]
-homepage = "https://github.com/gbenm/fire"
+homepage = "https://gbenm.github.io/fire/"
 repository = "https://github.com/gbenm/fire"
 
 [[bin]]

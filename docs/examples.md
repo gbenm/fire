@@ -70,7 +70,7 @@ computed:
   <<: *arg-config
   eval: py:sayHello("{1}", "{2}", ...{{n}})
 ```
-- `{1}`, `{2}` pick specific args; `...{{n}}` expands the rest as individual string arguments for the runtime, you can use [{{n}}] to get a string[].
+- `{1}`, `{2}` pick specific args; `...{{n}}` expands the rest as individual string arguments for the runtime, while `[{{n}}]` produces a `string[]`.
 
 ## 8) Eval returning command list
 ```yaml
