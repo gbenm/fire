@@ -1,7 +1,10 @@
 {
   "scripts": {
     "build": "vite build --mode production",
+    "cli": "printf 'nested cli'",
     "dev": "vite --host 0.0.0.0",
+    "say hi": "printf 'space preserved'",
+    ":h": "printf 'unreachable help suffix'",
     "say'hi": "printf \"user's exact text: $HOME\""
   }
 }

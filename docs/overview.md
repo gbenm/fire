@@ -55,9 +55,10 @@ names from different tools do not collide:
   `dev`, `develop`, or `development` segment separated by `-`, `_`, or `.`.
 - `Cargo.toml` creates `cargo build`, `test`, `run`, and `check`.
 
-Generated shell commands quote source names without changing them. A source command name that is
-empty, contains whitespace, or is the reserved name `cli` cannot be represented as one Fire path
-word, so Fire warns and skips it instead of inventing a replacement.
+Generated shell commands quote source names without changing them. Names containing whitespace and
+the nested name `cli` remain exact, so invoke the former as one quoted shell argument (for example,
+`fire package "integration test"`). An empty name or the exact name `:h` cannot be invoked because
+`:h` is Fire's help suffix, so Fire warns and skips it instead of inventing a replacement.
 
 Run `fire cli import` to scan all sources again, or name only the desired sources:
 

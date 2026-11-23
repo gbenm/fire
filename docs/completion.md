@@ -19,7 +19,8 @@ The installer writes scripts to standard user locations. It appends managed bloc
 and `~/.bashrc`, writes fish's autoloaded `fish/completions/fire.fish`, and adds a managed external
 completer to Nushell's `config.nu`. `XDG_CONFIG_HOME` is respected; fish otherwise uses
 `~/.config/fish`, while Nushell uses its platform config directory. Re-running any installer
-replaces its generated script or managed block without duplicating it.
+replaces its generated script or managed block without duplicating it. Fire refuses to replace a
+shell configuration file that it cannot read as UTF-8.
 
 ## How completion works
 - On tab, the shell invokes `fire` in completion mode.

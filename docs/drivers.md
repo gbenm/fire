@@ -43,9 +43,11 @@ handlers:
     exec: bin/complete
 ```
 
-The name uses ASCII letters, numbers, `-`, `_`, or `.`; `fire` is reserved. A completion
-executable must be a relative path inside its repository. Build steps run in the cloned repository,
-while handlers run in the Fire command's project working directory.
+The name is one safe path component using ASCII letters, numbers, `-`, `_`, or `.`; `fire`, `.` and
+`..` are reserved. Unknown manifest fields are rejected so a misspelled build step or handler does
+not silently install an incomplete driver. A completion executable must be a relative path inside
+its repository. Build steps run in the cloned repository, while handlers run in the Fire command's
+project working directory.
 
 ## Completion protocol
 

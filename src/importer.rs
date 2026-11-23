@@ -571,9 +571,9 @@ fn command_value(exec: String, description: Option<&str>, long_running: bool) ->
 }
 
 fn valid_command_name(name: &str, source: &str) -> bool {
-    if name.is_empty() || name == "cli" || name.chars().any(char::is_whitespace) {
+    if name.is_empty() || name == ":h" {
         warn(&format!(
-            "skipping unsupported command name `{name}` from {source}; names must be one non-reserved word"
+            "skipping unsupported command name `{name}` from {source}; empty names and Fire's `:h` help suffix cannot be invoked as commands"
         ));
         false
     } else {

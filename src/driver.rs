@@ -12,6 +12,7 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DriverManifest {
     name: String,
     #[serde(default)]
@@ -21,11 +22,13 @@ struct DriverManifest {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DriverHandlers {
     completion: Option<DriverHandler>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DriverHandler {
     exec: String,
 }
@@ -188,9 +191,17 @@ pub(crate) fn completion(
         Ok(output) if output.status.success() => output,
         _ => return Vec::new(),
     };
-    let Ok(mut candidates) = serde_json::from_slice::<Vec<DriverCandidate>>(&output.stdout) else {
+    let Ok(candidates) = serde_json::from_slice::<Vec<DriverCandidate>>(&output.stdout) else {
         return Vec::new();
     };
+    completion_candidates(candidates, typed_args, prefix)
+}
+
+fn completion_candidates(
+    mut candidates: Vec<DriverCandidate>,
+    typed_args: &[String],
+    prefix: &str,
+) -> Vec<CompletionSuggestion> {
     let mut traversed = false;
     for argument in typed_args {
         let Some(position) = candidates.iter().position(|item| item.value == *argument) else {
@@ -201,6 +212,11 @@ pub(crate) fn completion(
             }
             break;
         };
+        // A context-sensitive handler returns candidates for the received arguments directly.
+        // Do not mistake an equal-valued leaf in that response for a static tree node.
+        if candidates[position].children.is_empty() && !traversed {
+            break;
+        }
         candidates = candidates.swap_remove(position).children;
         traversed = true;
     }
@@ -225,6 +241,7 @@ fn load_manifest(repository: &Path) -> Result<DriverManifest, String> {
 fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty()
         || name == "fire"
+        || matches!(name, "." | "..")
         || !name
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
@@ -271,4 +288,47 @@ fn cleanup(path: &Path) {
 fn fail(message: &str) -> ! {
     eprintln!("[fire] {message}");
     process::exit(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{completion_candidates, validate_name, DriverCandidate};
+
+    fn candidate(value: &str, children: Vec<DriverCandidate>) -> DriverCandidate {
+        DriverCandidate {
+            value: value.to_string(),
+            description: None,
+            children,
+        }
+    }
+
+    #[test]
+    fn context_candidates_are_not_mistaken_for_a_static_tree() {
+        let candidates = vec![candidate("serve", vec![]), candidate("api", vec![])];
+        let suggestions = completion_candidates(candidates, &["serve".to_string()], "");
+
+        assert_eq!(
+            suggestions
+                .into_iter()
+                .map(|suggestion| suggestion.value)
+                .collect::<Vec<_>>(),
+            ["serve", "api"]
+        );
+    }
+
+    #[test]
+    fn static_candidate_trees_are_traversed() {
+        let candidates = vec![candidate("serve", vec![candidate("api", vec![])])];
+        let suggestions = completion_candidates(candidates, &["serve".to_string()], "");
+
+        assert_eq!(suggestions[0].value, "api");
+    }
+
+    #[test]
+    fn driver_names_are_single_safe_path_components() {
+        assert!(validate_name("docker-compose").is_ok());
+        assert!(validate_name(".").is_err());
+        assert!(validate_name("..").is_err());
+        assert!(validate_name("fire").is_err());
+    }
 }

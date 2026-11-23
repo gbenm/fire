@@ -63,8 +63,13 @@ fn init_imports_package_scripts_with_lockfile_package_manager_and_exact_descript
         value["commands"]["say'hi"]["exec"],
         "pnpm run 'say'\"'\"'hi'"
     );
-    assert!(stdout.contains("package.json: 3 commands"), "{stdout}");
+    assert_eq!(value["commands"]["cli"]["exec"], "pnpm run cli");
+    assert_eq!(value["commands"]["say hi"]["exec"], "pnpm run 'say hi'");
+    assert!(value["commands"].get(":h").is_none());
+    assert!(stdout.contains("package.json: 5 commands"), "{stdout}");
     assert_dry_run(&project, &["package", "build"], "pnpm run build");
+    assert_dry_run(&project, &["package", "cli"], "pnpm run cli");
+    assert_dry_run(&project, &["package", "say hi"], "pnpm run 'say hi'");
 }
 
 #[test]

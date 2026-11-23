@@ -46,8 +46,8 @@ fn fish_install_is_rich_and_idempotent() {
     let path = project.dir.join("home/.config/fish/completions/fire.fish");
     assert!(stdout.contains(&path.display().to_string()), "{stdout}");
     let first = fs::read_to_string(&path).expect("fish completion script");
-    assert!(first.contains("commandline -opc"), "{first}");
-    assert!(first.contains("fire __complete --"), "{first}");
+    assert!(first.contains("commandline -xpc"), "{first}");
+    assert!(first.contains("command fire __complete --"), "{first}");
     assert!(first.contains("complete -c fire"), "{first}");
 
     let (code, _, stderr) = run(&project, "fish");
@@ -113,6 +113,44 @@ fn all_installs_fish_and_nushell_when_the_shells_are_available() {
         .join("home/.config/fish/completions/fire.fish")
         .is_file());
     assert!(project.dir.join("home/.config/nushell/config.nu").is_file());
+}
+
+#[test]
+fn all_ignores_non_executable_shell_names() {
+    let project = Project::new("completion-all-non-executable", "commands: {}\n");
+    let bin = project.dir.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(bin.join("fish"), "not executable\n").unwrap();
+    fs::write(bin.join("nu"), "not executable\n").unwrap();
+
+    let output = project
+        .fire(&["cli", "completion", "install", "all"])
+        .env("PATH", &bin)
+        .stdin(Stdio::null())
+        .output()
+        .expect("install detected completion scripts");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(!project
+        .dir
+        .join("home/.config/fish/completions/fire.fish")
+        .exists());
+    assert!(!project.dir.join("home/.config/nushell/config.nu").exists());
+}
+
+#[test]
+fn nushell_install_never_replaces_an_unreadable_config() {
+    let project = Project::new("completion-nushell-invalid-utf8", "commands: {}\n");
+    let config = project.dir.join("home/.config/nushell/config.nu");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let original = b"show banner\xff\n";
+    fs::write(&config, original).unwrap();
+
+    let (code, _, stderr) = run(&project, "nushell");
+
+    assert_eq!(code, 1);
+    assert!(stderr.contains("without replacing it"), "{stderr}");
+    assert_eq!(fs::read(config).unwrap(), original);
 }
 
 #[test]

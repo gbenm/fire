@@ -35,18 +35,27 @@ handlers:
         r#"#!/bin/sh
 printf '%s\n' "$PWD" > completion-cwd.txt
 printf '%s\n' "$@" > completion-args.txt
-printf '%s\n' '[{"value":"serve","description":"Start server","children":[{"value":"api","description":"API service"}]},{"value":"status","description":"Show status"}]'
+if [ "$1" = serve ]; then
+  printf '%s\n' '[{"value":"serve","description":"Restart server"},{"value":"api","description":"API service"}]'
+else
+  printf '%s\n' '[{"value":"serve","description":"Start server","children":[{"value":"api","description":"API service"}]},{"value":"status","description":"Show status"}]'
+fi
 "#,
     );
+    commit_repository(&repository);
+    repository
+}
+
+fn commit_repository(repository: &Path) {
     let status = Command::new("git")
         .args(["init", "--quiet"])
-        .current_dir(&repository)
+        .current_dir(repository)
         .status()
         .unwrap();
     assert!(status.success());
     Command::new("git")
         .args(["add", "."])
-        .current_dir(&repository)
+        .current_dir(repository)
         .status()
         .unwrap();
     let status = Command::new("git")
@@ -62,11 +71,10 @@ printf '%s\n' '[{"value":"serve","description":"Start server","children":[{"valu
             "-m",
             "test driver",
         ])
-        .current_dir(&repository)
+        .current_dir(repository)
         .status()
         .unwrap();
     assert!(status.success());
-    repository
 }
 
 #[test]
@@ -167,7 +175,7 @@ printf '<%s>\n' "$@"
     assert!(output.status.success(), "{:?}", output);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "api\tAPI service\n"
+        "serve\tRestart server\napi\tAPI service\n"
     );
     assert_eq!(
         fs::read_to_string(project.dir.join("workspace/completion-args.txt")).unwrap(),
@@ -181,4 +189,33 @@ printf '<%s>\n' "$@"
     ]);
     assert_ne!(code, 0);
     assert!(stderr.contains("already installed"), "{stderr}");
+}
+
+#[test]
+fn install_rejects_manifest_field_typos() {
+    let project = Project::new("driver-manifest-typo", "commands: {}\n");
+    let repository = project.dir.join("driver-with-typo");
+    fs::create_dir_all(&repository).unwrap();
+    fs::write(
+        repository.join("driver.yaml"),
+        r#"name: typo-driver
+builds:
+  - touch should-not-run
+handlers:
+  completion:
+    exec: complete
+"#,
+    )
+    .unwrap();
+    write_executable(&repository.join("complete"), "#!/bin/sh\nprintf '[]\\n'\n");
+    commit_repository(&repository);
+
+    let (code, _, stderr) = project.cli(&[
+        "driver",
+        "install",
+        repository.to_str().expect("utf-8 repository path"),
+    ]);
+
+    assert_eq!(code, 1);
+    assert!(stderr.contains("unknown field `builds`"), "{stderr}");
 }

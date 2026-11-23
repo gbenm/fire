@@ -628,8 +628,16 @@ fn xdg_config_dir() -> Option<PathBuf> {
 
 fn program_in_path(program: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|directory| directory.join(program).is_file())
+        std::env::split_paths(&path).any(|directory| is_executable(&directory.join(program)))
     })
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 fn install_zsh_completion(home_dir: &Path) -> Result<PathBuf, String> {
@@ -682,7 +690,16 @@ fn upsert_managed_block_file(
     end_marker: &str,
     block: &str,
 ) -> Result<(), String> {
-    let current = fs::read_to_string(file_path).unwrap_or_default();
+    let current = match fs::read_to_string(file_path) {
+        Ok(current) => current,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(format!(
+                "Failed to read {} without replacing it: {err}",
+                file_path.display()
+            ))
+        }
+    };
     let updated = upsert_managed_block(&current, start_marker, end_marker, block);
     fs::write(file_path, updated)
         .map_err(|err| format!("Failed to update {}: {err}", file_path.display()))
@@ -755,9 +772,9 @@ fi
 
 fn fish_completion_script() -> &'static str {
     r#"function __fire_complete
-  set -l words (commandline -opc)
+  set -l words (commandline -xpc)
   set -l current (commandline -ct)
-  fire __complete -- $words "$current"
+  command fire __complete -- $words "$current"
 end
 
 complete -c fire -f -k -a '(__fire_complete)'
@@ -767,7 +784,7 @@ complete -c fire -f -k -a '(__fire_complete)'
 fn nushell_completion_block() -> &'static str {
     r#"# >>> fire completion (nushell) >>>
 let fire_previous_completer = $env.config.completions.external.completer
-let fire_completer = {|place|
+let fire_completer = {|place: record|
   if (($place.command | get -o 0) == "fire") {
     ^fire __complete -- ...$place.command
     | lines
