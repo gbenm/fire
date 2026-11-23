@@ -8,12 +8,12 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/gbenm/fire/blob/main/docs/mcp.md",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "packages": [
     {
       "registryType": "cargo",
       "identifier": "fire-cli",
-      "version": "3.0.0",
+      "version": "3.0.1",
       "transport": {
         "type": "stdio"
       },

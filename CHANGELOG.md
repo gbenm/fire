@@ -6,6 +6,8 @@ reconstructed from the git history.
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-11-22
+
 ### Fixed
 - The MCP server reports itself as `fire` with Fire's version instead of the rmcp library's.
 
@@ -256,7 +258,8 @@ Version bump only.
 - First release: commands from YAML, namespaces and groups, global install, `include`, `init`,
   `runner` / `fallback_runner` / `check`, `before`, placeholders and macros, completion.
 
-[Unreleased]: https://github.com/gbenm/fire/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/gbenm/fire/compare/v3.0.1...HEAD
+[3.0.1]: https://github.com/gbenm/fire/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/gbenm/fire/compare/v2.10.1...v3.0.0
 [2.10.1]: https://github.com/gbenm/fire/compare/v2.10.0...v2.10.1
 [2.10.0]: https://github.com/gbenm/fire/compare/v2.9.0...v2.10.0
