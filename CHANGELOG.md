@@ -6,6 +6,9 @@ reconstructed from the git history.
 
 ## [Unreleased]
 
+### Fixed
+- The MCP server reports itself as `fire` with Fire's version instead of the rmcp library's.
+
 ## [3.0.0] - 2026-11-22
 
 ### Breaking

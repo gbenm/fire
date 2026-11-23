@@ -169,7 +169,7 @@ impl McpClient {
             output,
             next_id: 1,
         };
-        client.request(
+        let init = client.request(
             "initialize",
             json!({
                 "protocolVersion": "2025-03-26",
@@ -177,6 +177,8 @@ impl McpClient {
                 "clientInfo": { "name": "fire-test", "version": "1" }
             }),
         );
+        assert_eq!(init["serverInfo"]["name"], "fire");
+        assert_eq!(init["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
         client.send(json!({
             "jsonrpc": "2.0",
             "method": "notifications/initialized",

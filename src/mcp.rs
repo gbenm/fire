@@ -14,7 +14,7 @@ use rmcp::{
         router::tool::ToolRouter,
         wrapper::{Json, Parameters},
     },
-    model::{ServerCapabilities, ServerInfo},
+    model::{Implementation, ServerCapabilities, ServerInfo},
     schemars, serve_server, tool, tool_handler, tool_router,
     transport::io::stdio,
     ServerHandler,
@@ -1095,7 +1095,9 @@ when the user asks. https://github.com/gbenm/fire";
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FireMcpServer {
     fn get_info(&self) -> ServerInfo {
+        // rmcp's default reports its own crate name and version.
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("fire", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
     }
 }
