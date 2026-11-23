@@ -121,6 +121,28 @@ fn prompts_by_default_on_a_tty() {
 }
 
 #[test]
+fn interactive_values_are_preserved_without_trimming() {
+    let project = empty_project("init-tty-exact-values");
+    let command = project.fire(&["cli", "init"]);
+    let (mut child, mut terminal, output) = spawn_in_pty(command);
+    wait_for_output(&output, "Base file name");
+    terminal.write_all(b"\n").unwrap();
+    wait_for_output(&output, "Namespace prefix");
+    terminal.write_all(b"  team  \n").unwrap();
+    wait_for_output(&output, "Namespace description");
+    terminal.write_all(b"  Team tools  \n").unwrap();
+    wait_for_output(&output, "Command group");
+    terminal.write_all(b"  api  \n").unwrap();
+
+    assert_eq!(wait_for_exit(&mut child), 0, "{}", output.lock().unwrap());
+    let yaml = fs::read_to_string(project.dir.join("fire.yaml")).unwrap();
+    let parsed: serde_json::Value = yaml_serde::from_str(&yaml).unwrap();
+    assert_eq!(parsed["namespace"]["prefix"], "  team  ");
+    assert_eq!(parsed["namespace"]["description"], "  Team tools  ");
+    assert_eq!(parsed["group"], "  api  ");
+}
+
+#[test]
 fn yes_uses_defaults_without_reading_stdin() {
     let project = empty_project("init-yes");
     let output = project
@@ -133,6 +155,17 @@ fn yes_uses_defaults_without_reading_stdin() {
     assert!(project.dir.join("fire.yaml").exists());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("Base file name"), "{stdout}");
+}
+
+#[test]
+fn scripted_namespace_without_description_omits_the_description_key() {
+    let project = empty_project("init-namespace-only");
+    init(&project, &["--namespace", "exact namespace", "--yes"]);
+
+    let yaml = fs::read_to_string(project.dir.join("fire.yaml")).unwrap();
+    let parsed: serde_json::Value = yaml_serde::from_str(&yaml).unwrap();
+    assert_eq!(parsed["namespace"]["prefix"], "exact namespace");
+    assert!(parsed["namespace"].get("description").is_none(), "{yaml}");
 }
 
 #[test]

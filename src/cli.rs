@@ -60,7 +60,8 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("  fire cli docs [topic]");
             eprintln!("  fire cli upgrade");
             eprintln!("  fire cli completion install [bash|zsh|all]");
-            eprintln!("  fire cli mcp [install|uninstall <host> [--print]]");
+            eprintln!("  fire cli mcp install [<host>] [--print]");
+            eprintln!("  fire cli mcp uninstall <host> [--print]");
             eprintln!("  fire cli ps [-a|--all] [--exited] [--failed] [--stopped] | logs <id> [lines] | fg <id> | send <id> <text> | kill <id> [SIGNAL]");
             process::exit(1);
         }
@@ -355,7 +356,7 @@ fn prompt_line(label: &str) -> String {
     if io::stdin().read_line(&mut value).is_err() {
         return String::new();
     }
-    value.trim().to_string()
+    value.trim_end_matches(['\r', '\n']).to_string()
 }
 
 fn strip_known_yaml_suffixes(value: &str) -> &str {
@@ -379,16 +380,15 @@ fn is_valid_file_base(value: &str) -> bool {
 
 /// `.yaml` unless the user typed an explicit `.yml` suffix.
 fn file_name_from_base(base: &str) -> String {
-    let trimmed = base.trim();
-    if trimmed.is_empty() {
+    if base.is_empty() {
         return "fire.yaml".to_string();
     }
-    let extension = if trimmed.ends_with(".yml") {
+    let extension = if base.ends_with(".yml") {
         "yml"
     } else {
         "yaml"
     };
-    let normalized = strip_known_yaml_suffixes(trimmed);
+    let normalized = strip_known_yaml_suffixes(base);
     format!("{normalized}.fire.{extension}")
 }
 
@@ -417,10 +417,9 @@ fn build_init_yaml(
     if let Some(prefix) = namespace_prefix {
         lines.push("namespace:".to_string());
         lines.push(format!("  prefix: {}", yaml_quote(prefix)));
-        lines.push(format!(
-            "  description: {}",
-            yaml_quote(namespace_description.unwrap_or_default())
-        ));
+        if let Some(description) = namespace_description {
+            lines.push(format!("  description: {}", yaml_quote(description)));
+        }
     }
 
     if let Some(group) = group {

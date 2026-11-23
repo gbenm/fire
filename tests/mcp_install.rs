@@ -133,6 +133,88 @@ fn codex_toml_preserves_comments_and_unrelated_servers() {
 }
 
 #[test]
+fn codex_toml_recognizes_quoted_keys_and_semantic_noops() {
+    let project = project("mcp-install-codex-quoted");
+    let path = host_path(&project, "codex");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let fire = env!("CARGO_BIN_EXE_fire");
+    let fixture = format!(
+        "# keep every byte on a semantic no-op\n[mcp_servers.\"fire\"]\ncommand = '{fire}' # literal string\nargs = ['cli', 'mcp'] # literal strings\nenabled = true\n"
+    );
+    fs::write(&path, &fixture).unwrap();
+
+    let output = run_without_host_clis(&project, &["install", "codex"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), fixture);
+    assert!(!PathBuf::from(format!("{}.bak", path.display())).exists());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("already installed"));
+}
+
+#[test]
+fn codex_toml_edits_inline_tables_and_rejects_invalid_toml() {
+    let project = project("mcp-install-codex-inline");
+    let path = host_path(&project, "codex");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        "mcp_servers = { other = { command = \"keep-me\" }, fire = { command = \"old\", args = [\"serve\"], enabled = true } }\n",
+    )
+    .unwrap();
+
+    let output = run_without_host_clis(&project, &["install", "codex"]);
+    assert!(output.status.success(), "{output:?}");
+    let installed = fs::read_to_string(&path).unwrap();
+    assert!(installed.contains("command = \"keep-me\""), "{installed}");
+    assert!(installed.contains("enabled = true"), "{installed}");
+    assert!(
+        installed.contains("args = [\"cli\", \"mcp\"]"),
+        "{installed}"
+    );
+
+    let output = run_without_host_clis(&project, &["uninstall", "codex"]);
+    assert!(output.status.success(), "{output:?}");
+    let removed = fs::read_to_string(&path).unwrap();
+    assert!(removed.contains("command = \"keep-me\""), "{removed}");
+    assert!(!removed.contains("enabled = true"), "{removed}");
+
+    fs::write(&path, "model = [\n").unwrap();
+    let output = run_without_host_clis(&project, &["install", "codex"]);
+    assert!(!output.status.success(), "{output:?}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "model = [\n");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Failed to parse Codex config"));
+}
+
+#[test]
+fn json_install_preserves_extra_fire_settings_and_semantic_noops() {
+    let project = project("mcp-install-json-fire-settings");
+    let path = host_path(&project, "cursor");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let fire = env!("CARGO_BIN_EXE_fire");
+    let fixture = format!(
+        "{{\n  \"mcpServers\": {{\n    \"fire\": {{\n      \"command\": {fire:?},\n      \"args\": [\"cli\", \"mcp\"],\n      \"env\": {{\"KEEP\": \"yes\"}}\n    }}\n  }}\n}}\n"
+    );
+    fs::write(&path, &fixture).unwrap();
+
+    let output = run_without_host_clis(&project, &["install", "cursor"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), fixture);
+    assert!(!PathBuf::from(format!("{}.bak", path.display())).exists());
+
+    let mut changed: Value = serde_json::from_str(&fixture).unwrap();
+    changed["mcpServers"]["fire"]["command"] = Value::String("old".to_string());
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&changed).unwrap() + "\n",
+    )
+    .unwrap();
+    let output = run_without_host_clis(&project, &["install", "cursor"]);
+    assert!(output.status.success(), "{output:?}");
+    let installed = json(&path);
+    assert_eq!(installed["mcpServers"]["fire"]["env"]["KEEP"], "yes");
+    assert_eq!(installed["mcpServers"]["fire"]["command"], fire);
+}
+
+#[test]
 fn print_shows_file_change_without_writing_it() {
     let project = project("mcp-install-print");
     let path = host_path(&project, "cursor");
@@ -274,4 +356,23 @@ fn no_host_with_a_tty_installs_exact_selected_names() {
     assert_eq!(wait_for_exit(&mut child), 0, "{}", output.lock().unwrap());
     assert!(host_path(&project, "cursor").exists());
     assert!(host_path(&project, "gemini").exists());
+}
+
+#[test]
+fn detected_host_selection_does_not_trim_or_guess_names() {
+    let project = project("mcp-install-detect-exact-input");
+    fs::create_dir_all(host_path(&project, "cursor").parent().unwrap()).unwrap();
+    let mut command = project.fire(&["cli", "mcp", "install"]);
+    command.env("PATH", "/path/with/no/host/clis");
+    let (mut child, mut terminal, output) = spawn_in_pty(command);
+    wait_for_output(&output, "Hosts to install");
+    terminal.write_all(b" cursor\n").unwrap();
+
+    assert_eq!(wait_for_exit(&mut child), 1, "{}", output.lock().unwrap());
+    let terminal_output = output.lock().unwrap();
+    assert!(
+        terminal_output.contains("Unknown MCP host ` cursor`"),
+        "{terminal_output}"
+    );
+    assert!(!host_path(&project, "cursor").exists());
 }

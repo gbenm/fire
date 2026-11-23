@@ -471,22 +471,13 @@ fn core_cli_mcp_children(prefix: &str) -> Vec<CompletionSuggestion> {
 }
 
 fn core_cli_mcp_hosts(prefix: &str) -> Vec<CompletionSuggestion> {
-    [
-        ("claude", "Claude Code"),
-        ("claude-desktop", "Claude Desktop"),
-        ("cursor", "Cursor"),
-        ("vscode", "VS Code (Copilot)"),
-        ("codex", "Codex"),
-        ("gemini", "Gemini CLI"),
-        ("windsurf", "Windsurf"),
-    ]
-    .into_iter()
-    .filter(|(value, _)| value.starts_with(prefix))
-    .map(|(value, description)| CompletionSuggestion {
-        value: value.to_string(),
-        description: Some(description.to_string()),
-    })
-    .collect()
+    crate::mcp_install::supported_hosts()
+        .filter(|(value, _)| value.starts_with(prefix))
+        .map(|(value, description)| CompletionSuggestion {
+            value: value.to_string(),
+            description: Some(description.to_string()),
+        })
+        .collect()
 }
 
 fn core_cli_completion_install_children(prefix: &str) -> Vec<CompletionSuggestion> {

@@ -7,8 +7,8 @@ reconstructed from the git history.
 ## [Unreleased]
 
 ### Added
-- `fire cli mcp install|uninstall <host>` registers the MCP server with Claude Code, Claude
-  Desktop, Cursor, VS Code, Codex, Gemini CLI, and Windsurf. (#53)
+- `fire cli mcp install [<host>]` and `fire cli mcp uninstall <host>` register and remove the MCP
+  server for Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI, and Windsurf. (#53)
 - Scriptable `fire cli init` flags and MCP `init_project`, with explicit `--force` required for
   CLI overwrites and no overwrites through MCP. (#47)
 

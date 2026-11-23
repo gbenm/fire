@@ -152,13 +152,13 @@ own permissions (for example, in Claude Code: `"deny": ["Bash(fire deploy:*)"]`)
 ## Tools
 
 ### `init_project`
-Creates a minimal config in the required `cwd`. Optional `file`, `namespace`, and `group` values
-use the same template and naming convention as `fire cli init` and are preserved exactly. The
-structured result includes `ok`, the absolute `path`, and an `error` on failure. It never
-overwrites: if the target exists, the result names that path. After creation, call `get_docs` for
-the format and schema, edit the file, then pass the same `cwd` to `search_commands`; changes are
-discovered immediately. Global registration is separate and should only happen when the user
-asks.
+Creates a minimal config in the required `cwd`. Optional `file` is a base name that follows the
+same naming convention as `fire cli init`; optional `namespace` and `group` values are preserved
+exactly. The structured result includes `ok`, the absolute `path`, and an `error` on failure. It
+never overwrites: if the target exists, the result names that path. After creation, call
+`get_docs` for the format and schema, edit the file, then pass the same `cwd` to
+`search_commands`; changes are discovered immediately. Global registration is separate and
+should only happen when the user asks.
 
 ### `get_docs`
 Omit `topic` to return the complete index of embedded documentation. Pass one of the topic ids

@@ -8,6 +8,7 @@ use std::{
 
 use serde::Serialize;
 use serde_json::{json, Map, Value};
+use toml_edit::{value as toml_value, Array as TomlArray, DocumentMut, InlineTable, Item, Table};
 
 const HOSTS: &[Host] = &[
     Host::Claude,
@@ -18,6 +19,10 @@ const HOSTS: &[Host] = &[
     Host::Gemini,
     Host::Windsurf,
 ];
+
+pub(crate) fn supported_hosts() -> impl Iterator<Item = (&'static str, &'static str)> {
+    HOSTS.iter().map(|host| (host.name(), host.description()))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Host {
@@ -198,7 +203,6 @@ fn select_detected_hosts() -> Vec<Host> {
     answer
         .split(',')
         .map(|name| {
-            let name = name.trim();
             let host: Host = name.parse().unwrap_or_else(|()| {
                 fail(&format!(
                     "Unknown MCP host `{name}`. Use an exact detected name."
@@ -230,22 +234,22 @@ fn apply(action: Action, host: Host, fire: &Path, print_only: bool) -> Result<()
         Host::Codex => edit_toml(&path, action, fire, print_only)?,
         _ => edit_json(&path, config_key(host), action, fire, print_only)?,
     };
-    if !print_only {
-        if changed {
+    if changed {
+        if !print_only {
             println!(
                 "{} MCP server for {} in {}",
                 past_tense(action),
                 host.description(),
                 path.display()
             );
-        } else {
-            println!(
-                "{} is already {} for {}",
-                host.description(),
-                desired_state(action),
-                host.name()
-            );
         }
+    } else {
+        println!(
+            "{} is already {} for {}",
+            host.description(),
+            desired_state(action),
+            host.name()
+        );
     }
     Ok(())
 }
@@ -335,15 +339,36 @@ fn edit_json(
             .ok_or_else(|| format!("`{key}` in {} must be a JSON object", path.display()))?,
     };
     let changed = match action {
-        Action::Install => {
-            let wanted = json!({"command": fire.to_string_lossy(), "args": ["cli", "mcp"]});
-            if servers.get("fire") == Some(&wanted) {
-                false
-            } else {
-                servers.insert("fire".to_string(), wanted);
+        Action::Install => match servers.entry("fire") {
+            serde_json::map::Entry::Vacant(entry) => {
+                entry.insert(json!({
+                    "command": fire.to_string_lossy(),
+                    "args": ["cli", "mcp"]
+                }));
                 true
             }
-        }
+            serde_json::map::Entry::Occupied(mut entry) => {
+                let wanted_command = Value::String(fire.to_string_lossy().into_owned());
+                let wanted_args = json!(["cli", "mcp"]);
+                if let Some(config) = entry.get_mut().as_object_mut() {
+                    if config.get("command") == Some(&wanted_command)
+                        && config.get("args") == Some(&wanted_args)
+                    {
+                        false
+                    } else {
+                        config.insert("command".to_string(), wanted_command);
+                        config.insert("args".to_string(), wanted_args);
+                        true
+                    }
+                } else {
+                    entry.insert(json!({
+                        "command": fire.to_string_lossy(),
+                        "args": ["cli", "mcp"]
+                    }));
+                    true
+                }
+            }
+        },
         Action::Uninstall => servers.remove("fire").is_some(),
     };
     if !changed {
@@ -390,116 +415,75 @@ fn edit_toml(path: &Path, action: Action, fire: &Path, print_only: bool) -> Resu
 }
 
 fn edit_toml_text(content: &str, action: Action, fire: &Path) -> Result<(String, bool), String> {
-    let mut lines: Vec<String> = content.split_inclusive('\n').map(str::to_string).collect();
-    if !content.is_empty() && !content.ends_with('\n') && lines.is_empty() {
-        lines.push(content.to_string());
-    }
-    let start = lines
-        .iter()
-        .position(|line| toml_header(line) == Some("mcp_servers.fire"));
-    let command = format!(
-        "command = {}\n",
-        serde_json::to_string(fire.to_string_lossy().as_ref()).unwrap()
-    );
-    let args = "args = [\"cli\", \"mcp\"]\n".to_string();
+    let mut document = content
+        .parse::<DocumentMut>()
+        .map_err(|err| format!("Failed to parse Codex config: {err}"))?;
 
-    let Some(start) = start else {
-        if action == Action::Uninstall {
+    if action == Action::Uninstall {
+        let Some(servers) = document.get_mut("mcp_servers") else {
+            return Ok((content.to_string(), false));
+        };
+        let servers = servers
+            .as_table_like_mut()
+            .ok_or_else(|| "`mcp_servers` in Codex config must be a table".to_string())?;
+        if servers.remove("fire").is_none() {
             return Ok((content.to_string(), false));
         }
-        if lines.iter().any(|line| {
-            let trimmed = line.trim_start();
-            trimmed.starts_with("mcp_servers.fire") && trimmed.contains('=')
-        }) {
-            return Err("Unsupported inline `mcp_servers.fire` entry in Codex config".to_string());
-        }
-        let mut rendered = content.to_string();
-        if !rendered.is_empty() && !rendered.ends_with('\n') {
-            rendered.push('\n');
-        }
-        if !rendered.is_empty() && !rendered.ends_with("\n\n") {
-            rendered.push('\n');
-        }
-        rendered.push_str("[mcp_servers.fire]\n");
-        rendered.push_str(&command);
-        rendered.push_str(&args);
-        return Ok((rendered, true));
-    };
-
-    let end = lines[start + 1..]
-        .iter()
-        .position(|line| toml_header(line).is_some())
-        .map_or(lines.len(), |offset| start + 1 + offset);
-    if action == Action::Uninstall {
-        let mut removal_end = end;
-        while removal_end < lines.len() {
-            match toml_header(&lines[removal_end]) {
-                Some(header) if header.starts_with("mcp_servers.fire.") => {
-                    removal_end += 1;
-                    while removal_end < lines.len() && toml_header(&lines[removal_end]).is_none() {
-                        removal_end += 1;
-                    }
-                }
-                _ => break,
-            }
-        }
-        let mut remove_start = start;
-        if start > 0 && lines[start - 1].trim().is_empty() {
-            remove_start -= 1;
-        }
-        lines.drain(remove_start..removal_end);
-        return Ok((lines.concat(), true));
+        return Ok((document.to_string(), true));
     }
 
-    let command_index = find_toml_key(&lines, start + 1, end, "command")?;
-    let args_index = find_toml_key(&lines, start + 1, end, "args")?;
-    let already_matches = command_index
-        .is_some_and(|index| lines[index].trim_end() == command.trim_end())
-        && args_index.is_some_and(|index| lines[index].trim_end() == args.trim_end());
-    if already_matches {
-        return Ok((content.to_string(), false));
+    if document.get("mcp_servers").is_none() {
+        document.insert("mcp_servers", Item::Table(Table::new()));
     }
-    match command_index {
-        Some(index) => lines[index] = command,
-        None => lines.insert(start + 1, command),
-    }
-    let adjusted_end = end + usize::from(command_index.is_none());
-    let args_index = find_toml_key(&lines, start + 1, adjusted_end, "args")?;
-    match args_index {
-        Some(index) => lines[index] = args,
-        None => lines.insert(adjusted_end, args),
-    }
-    Ok((lines.concat(), true))
-}
+    let servers = document
+        .get_mut("mcp_servers")
+        .expect("mcp_servers was inserted");
+    let servers_is_inline = servers.is_inline_table();
+    let servers = servers
+        .as_table_like_mut()
+        .ok_or_else(|| "`mcp_servers` in Codex config must be a table".to_string())?;
+    let fire_command = fire.to_string_lossy();
 
-fn toml_header(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
-    if trimmed.starts_with('[') && !trimmed.starts_with("[[") && trimmed.ends_with(']') {
-        Some(trimmed[1..trimmed.len() - 1].trim())
+    if let Some(config) = servers.get_mut("fire") {
+        let config = config
+            .as_table_like_mut()
+            .ok_or_else(|| "`mcp_servers.fire` in Codex config must be a table".to_string())?;
+        if toml_fire_config_matches(config, &fire_command) {
+            return Ok((content.to_string(), false));
+        }
+        set_toml_fire_values(config, &fire_command);
+    } else if servers_is_inline {
+        let mut config = InlineTable::new();
+        set_toml_fire_values(&mut config, &fire_command);
+        servers.insert("fire", Item::Value(config.into()));
     } else {
-        None
+        let mut config = Table::new();
+        set_toml_fire_values(&mut config, &fire_command);
+        servers.insert("fire", Item::Table(config));
     }
+
+    Ok((document.to_string(), true))
 }
 
-fn find_toml_key(
-    lines: &[String],
-    start: usize,
-    end: usize,
-    key: &str,
-) -> Result<Option<usize>, String> {
-    let mut found = None;
-    for (index, line) in lines.iter().enumerate().take(end).skip(start) {
-        let Some((candidate, _)) = line.split_once('=') else {
-            continue;
-        };
-        if candidate.trim() == key {
-            if found.is_some() {
-                return Err(format!("Duplicate `{key}` in `[mcp_servers.fire]`"));
-            }
-            found = Some(index);
-        }
-    }
-    Ok(found)
+fn toml_fire_config_matches(config: &dyn toml_edit::TableLike, fire: &str) -> bool {
+    let args = config
+        .get("args")
+        .and_then(Item::as_array)
+        .map(|args| {
+            args.len() == 2
+                && args.get(0).and_then(toml_edit::Value::as_str) == Some("cli")
+                && args.get(1).and_then(toml_edit::Value::as_str) == Some("mcp")
+        })
+        .unwrap_or(false);
+    config.get("command").and_then(Item::as_str) == Some(fire) && args
+}
+
+fn set_toml_fire_values(config: &mut dyn toml_edit::TableLike, fire: &str) {
+    let mut args = TomlArray::new();
+    args.push("cli");
+    args.push("mcp");
+    config.insert("command", toml_value(fire));
+    config.insert("args", toml_value(args));
 }
 
 fn write_change(

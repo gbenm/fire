@@ -282,7 +282,7 @@ struct ListSessionsRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct SessionOutputRequest {
-    /// Session id, as returned by `list_sessions` or `fire --bg`.
+    /// Session id, as returned by `list_sessions`.
     id: String,
     /// How many trailing lines of output to return (default 100).
     lines: Option<usize>,
@@ -793,7 +793,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Create a minimal Fire config in a project, then use `get_docs` to edit it. `cwd` is required; `file`, `namespace`, and `group` are optional and their values are preserved exactly. The file uses the same template and naming convention as `fire cli init`. Never overwrites an existing file; a refusal returns that file's path. The created config is available to `search_commands` immediately when called with the same `cwd`."
+        description = "Create a minimal Fire config in a project, then use `get_docs` to edit it. `cwd` is required. Optional `file` is a config base name using the `fire cli init` naming convention; optional `namespace` and `group` are preserved exactly. Never overwrites an existing file; a refusal returns that file's path. The created config is available to `search_commands` immediately when called with the same `cwd`."
     )]
     fn init_project(
         &self,
@@ -904,7 +904,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "List detached `fire` sessions for the current project by default, including other directories that resolve to it (started with `fire --bg` or `start_session`, by any agent or the user): id, command, note (why it was started), cwd, status (`running`, `exited`, `stopped` = stopped on purpose, `lost`), pid and exit code. Pass `cwd` to select another project directory, or `all: true` to list every project (`cwd` is then ignored). Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `session_output` first: it usually shows why it failed (e.g. port in use)."
+        description = "List detached `fire` sessions for the current project by default, including other directories that resolve to it and sessions started by the user or another agent: id, command, note (why it was started), cwd, status (`running`, `exited`, `stopped` = stopped on purpose, `lost`), pid and exit code. Pass `cwd` to select another project directory, or `all: true` to list every project (`cwd` is then ignored). Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `session_output` first: it usually shows why it failed (e.g. port in use)."
     )]
     fn list_sessions(
         &self,
@@ -1134,20 +1134,7 @@ fn to_json<T: Serialize>(value: &T) -> String {
 
 /// Single line on purpose: some MCP clients only show the first line, or a truncated prefix,
 /// of a server's instructions. The critical rule therefore comes first.
-const INSTRUCTIONS: &str = "Long-running fire commands (dev servers, `start`/`dev`/`watch`, workers, \
-tunnels) go through `start_session`, never your own shell. Decide in this order: \
-1) find the command with `search_commands`, passing your working directory as `cwd` (an app or \
-service name you don't recognize is probably one), before writing your own; \
-2) check `list_sessions` (this project; `all: true` for every project) and reuse what is already running; \
-3) long-running (`long_running: true`, or it doesn't exit on its own): `start_session` with a short \
-`note` saying why, then confirm it came up with `session_output`; finite (build, test, lint, one-off \
-scripts): `run_command`, with arguments as separate tokens. \
-Sessions are shared with the user and other agents: read output with `session_output`, type with \
-`send_input`, signal with `signal_session`, stop (or stop then start to restart) with `stop_session`, \
-remove an exited record with `forget_session`. \
-Never run commands the user marked `agents: false`, not even through your own shell. \
-If this project has no fire config, create one with `init_project`; to write or edit fire configs, use `get_docs`. Change global directories (`*_global` tools) only \
-when the user asks. https://github.com/gbenm/fire";
+const INSTRUCTIONS: &str = "Long-running fire commands always use `start_session`, never your own shell. Decide in order: 1) find the command with `search_commands` and pass your working directory as `cwd`; 2) check `list_sessions` and reuse a matching session; 3) if it is `long_running: true` or will not exit on its own, call `start_session` with a short `note`, then `session_output`; otherwise call `run_command`. Use `session_output`, `send_input`, `signal_session`, `stop_session`, and `forget_session` to manage sessions. Never run `agents: false` commands. If there is no fire config, use `init_project`; use `get_docs` to edit configs. Change global setup only when the user asks.";
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FireMcpServer {
@@ -1187,7 +1174,7 @@ mod tests {
     fn instructions_are_one_line_with_critical_rule_first() {
         assert!(!INSTRUCTIONS.contains('\n'));
         assert!(INSTRUCTIONS[..120].contains("start_session"));
-        assert!(INSTRUCTIONS.contains("fire configs, use `get_docs`"));
+        assert!(INSTRUCTIONS.contains("use `get_docs` to edit configs"));
     }
 
     #[test]
@@ -1199,8 +1186,8 @@ mod tests {
         };
         // find → already running? → long-running or finite.
         assert!(position("1) find") < position("2) check `list_sessions`"));
-        assert!(position("2) check") < position("3) long-running"));
-        assert!(position("3) long-running") < position("`run_command`"));
+        assert!(position("2) check") < position("3) if it is"));
+        assert!(position("3) if it is") < position("`run_command`"));
         position("`stop_session`");
         // One rule for the shell, and no hints meant for the human user.
         assert!(!INSTRUCTIONS.contains("ad hoc"));
