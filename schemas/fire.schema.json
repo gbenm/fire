@@ -311,6 +311,11 @@
           "type": "string",
           "description": "Short user-facing description shown in listings and completion."
         },
+        "driver": {
+          "type": "string",
+          "minLength": 1,
+          "description": "External CLI executable name. Fire forwards every remaining argument exactly as a separate OS argument. Install a repository with `fire cli driver install <github-repo-url>` to delegate completion through its `driver.yaml`."
+        },
         "placeholder": {
           "type": "string",
           "description": "Placeholder template for this command."
@@ -391,6 +396,11 @@
         {
           "required": [
             "commands"
+          ]
+        },
+        {
+          "required": [
+            "driver"
           ]
         }
       ]

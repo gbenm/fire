@@ -19,6 +19,8 @@ The installer writes scripts to standard user locations and appends managed bloc
 - Fire reads the merged config, resolves scopes (namespace/group), and emits candidates.
 - When a command has a `description`, zsh displays it alongside the value.
 - Bash uses the `complete -C` protocol, which only consumes the values.
+- A command with `driver` delegates its argument candidates to the installed driver's completion
+  handler; see [External CLI Drivers](./drivers.md#completion-protocol).
 - `fire -<TAB>` lists the [global flags](commands-and-args.md#global-flags) not typed yet. After
   them, completion is the same as for `fire <TAB>` (without `cli`); the note after `-m` is free text,
   so nothing is offered there.

@@ -20,6 +20,8 @@ Put your project's commands in a `fire.yaml`, and get:
   and reattach from any terminal; you and your agents see the same dev servers and logs.
 - **Smart runners.** Fall back to a container when a tool isn't installed, ensure services are up
   before running, and compute arguments with JS/TS/Python snippets.
+- **External CLI drivers.** Forward exact arguments to tools such as Compose or package managers
+  and install repository-provided, project-aware completion adapters.
 
 If you've used `make`, `just`, Task, or `npm run` as a command menu, Fire fills the same role and
 adds completion, sessions, and an agent interface on top ([how they compare](./docs/comparison.md)).
@@ -175,6 +177,7 @@ The complete documentation is also available at [gbenm.github.io/fire](https://g
 - [Commands & arguments](./docs/commands-and-args.md)
 - [Runtimes & eval](./docs/runtimes-and-eval.md)
 - [Shell completion](./docs/completion.md)
+- [External CLI drivers](./docs/drivers.md)
 - [MCP server](./docs/mcp.md)
 - [Sessions](./docs/sessions.md)
 - [Progressive examples](./docs/examples.md)

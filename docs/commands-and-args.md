@@ -34,6 +34,9 @@ A command spec supports:
 - `eval`: runtime expression(s) (see `runtimes` guide).
   - Return handling: `void` = no output, `string` = printed, `string[]` = each string executed as a shell command.
 - `commands`: nested subcommands. Resolution is greedy—the deepest valid path wins.
+- `driver`: exact external CLI executable name. Fire forwards remaining arguments without shell
+  parsing or rewriting; an installed driver repository may provide delegated completion. See
+  [External CLI Drivers](./drivers.md).
 - `before`: shell command that runs before execution unless `fallback_runner` is selected.
 - `needs`: list of other Fire command paths from the same file scope that must finish first (see [Dependencies](#dependencies)).
 - `parallel`: run this command's `needs` concurrently (default: `false`).

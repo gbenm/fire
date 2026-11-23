@@ -14,6 +14,9 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
         [cli, global, rest @ ..] if cli == "cli" && global == "global" => {
             crate::global::handle(rest)
         }
+        [cli, driver, rest @ ..] if cli == "cli" && driver == "driver" => {
+            crate::driver::handle(rest)
+        }
         [cli, init, rest @ ..] if cli == "cli" && init == "init" => run_init(rest),
         [cli, check, rest @ ..]
             if cli == "cli" && matches!(check.as_str(), "check" | "validate") =>
@@ -61,6 +64,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("[fire] Unknown cli command");
             eprintln!("Usage:");
             eprintln!("  fire cli global add|remove|list|prune|edit");
+            eprintln!("  fire cli driver install <github-repo-url>");
             eprintln!("  fire cli init");
             eprintln!("  fire cli check [--global] [--format json] [--strict]");
             eprintln!("  fire cli docs [topic]");
@@ -271,6 +275,7 @@ fn print_cli_help() {
     println!("Fire CLI Management v{}", crate::FIRE_VERSION);
     println!("Commands:");
     println!("  global   Register directories so their commands load from anywhere (add, remove, list, prune, edit)");
+    println!("  driver   Install external CLI completion drivers from GitHub repositories");
     println!("  init     Create a minimal fire config file (flags: --yes, --force; see docs)");
     println!("  check    Validate fire files (--global, --format json, --strict; alias: validate)");
     println!("  docs     List or read the documentation embedded in this fire version");

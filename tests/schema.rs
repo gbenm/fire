@@ -40,6 +40,15 @@ fn command_dependencies_and_parallel_validate() {
 }
 
 #[test]
+fn external_driver_command_validates() {
+    let errs = errors(
+        "commands:\n  compose:\n    description: Docker Compose\n    driver: docker-compose\n",
+    );
+    assert!(errs.is_empty(), "{errs:?}");
+    assert!(!errors("commands:\n  compose:\n    driver: ''\n").is_empty());
+}
+
+#[test]
 fn namespace_prefix_is_required() {
     let errs = errors("namespace:\n  description: Tools\ncommands:\n  hi: echo hi\n");
     assert!(!errs.is_empty());

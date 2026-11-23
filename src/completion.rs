@@ -66,6 +66,12 @@ fn command_suggestions(config: &LoadedConfig, words: &[String]) -> Vec<Completio
     let prefix = words.last().map(String::as_str).unwrap_or("");
     let path = &words[..words.len() - 1];
 
+    if let Some(resolved) = crate::resolve::resolve_command(config, path) {
+        if let Some(driver) = resolved.command.driver() {
+            return crate::driver::completion(&resolved, driver, resolved.remaining_args, prefix);
+        }
+    }
+
     if path.is_empty() {
         let suggestions = root_suggestions(config, prefix);
         if let Some(exact) = suggestions
@@ -219,6 +225,20 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         return Some(core_cli_global_children(&path[2..], prefix));
     }
 
+    if path.len() >= 2 && path[1] == "driver" {
+        return Some(if path.len() == 2 {
+            [CompletionSuggestion {
+                value: "install".to_string(),
+                description: Some("Install a driver repository".to_string()),
+            }]
+            .into_iter()
+            .filter(|suggestion| suggestion.value.starts_with(prefix))
+            .collect()
+        } else {
+            Vec::new()
+        });
+    }
+
     if path.len() >= 2 && path[1] == "docs" {
         return Some(if path.len() == 2 {
             crate::docs::all()
@@ -282,6 +302,10 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
         CompletionSuggestion {
             value: "global".to_string(),
             description: Some("Register directories so their commands load anywhere".to_string()),
+        },
+        CompletionSuggestion {
+            value: "driver".to_string(),
+            description: Some("Install external CLI completion drivers".to_string()),
         },
         CompletionSuggestion {
             value: "init".to_string(),
@@ -1458,6 +1482,7 @@ commands:
             names,
             vec![
                 "global",
+                "driver",
                 "init",
                 "check",
                 "validate",

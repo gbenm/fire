@@ -7,6 +7,8 @@ reconstructed from the git history.
 ## [Unreleased]
 
 ### Added
+- External CLI drivers with repository installation, cached builds, exact argument forwarding,
+  and delegated rich completion through `driver.yaml`. (#24)
 - A link-checked mdBook documentation site, deployed to GitHub Pages with a task-runner comparison. (#57)
 - `fire cli check` (alias `validate`) validates fire files for CI and pre-commit hooks, with
   file/line diagnostics, `--format json`, `--strict`, and optional registered-directory checks. (#56)

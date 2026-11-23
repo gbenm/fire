@@ -25,6 +25,9 @@ pub(crate) fn execute_resolved_command(
     if let Err(code) = crate::dependencies::execute(&dependency_plan) {
         process::exit(code);
     }
+    if let Some(driver) = resolved.command.driver() {
+        crate::driver::execute(&resolved, driver);
+    }
     let context = build_execution_context(&resolved);
     ensure_working_directory(&context.dir);
 
@@ -1458,6 +1461,16 @@ fn build_execution_context(resolved: &ResolvedCommand<'_>) -> ExecutionContext {
     context
 }
 
+pub(crate) fn resolved_working_directory(resolved: &ResolvedCommand<'_>) -> PathBuf {
+    let mut directory = resolved.project_dir.to_path_buf();
+    for entry in &resolved.command_chain {
+        if let Some(spec) = entry.spec() {
+            directory = resolve_next_dir(&directory, &spec.dir);
+        }
+    }
+    directory
+}
+
 fn parse_on_unused_args_mode(value: &str) -> UnusedArgsMode {
     match value {
         "ignore" => UnusedArgsMode::Ignore,
@@ -2197,6 +2210,13 @@ fn join_shell_args(args: &[String]) -> String {
 
 fn log_command(command: impl AsRef<str>) {
     log_step("cmd", command.as_ref());
+}
+
+pub(crate) fn log_driver(program: &str, args: &[String]) {
+    let mut invocation = Vec::with_capacity(args.len() + 1);
+    invocation.push(program.to_string());
+    invocation.extend_from_slice(args);
+    log_step("driver", &join_shell_args(&invocation));
 }
 
 fn log_runner_start(runner: &str) {

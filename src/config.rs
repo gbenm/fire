@@ -66,6 +66,9 @@ pub(crate) enum CommandEntry {
 pub(crate) struct CommandSpec {
     #[serde(default)]
     pub(crate) description: String,
+    /// External CLI executable. Its arguments are forwarded without shell parsing or rewriting.
+    #[serde(default)]
+    pub(crate) driver: String,
     #[serde(default)]
     pub(crate) before: String,
     /// Fire command paths that must complete before this command.
@@ -565,7 +568,10 @@ impl CommandEntry {
         match self {
             CommandEntry::Shorthand(_) => true,
             CommandEntry::Spec(spec) => {
-                spec.exec.is_some() || spec.run.is_some() || spec.eval.is_some()
+                spec.exec.is_some()
+                    || spec.run.is_some()
+                    || spec.eval.is_some()
+                    || !spec.driver.is_empty()
             }
         }
     }
@@ -595,6 +601,12 @@ impl CommandEntry {
             CommandEntry::Shorthand(_) => None,
             CommandEntry::Spec(spec) => Some(spec),
         }
+    }
+
+    pub(crate) fn driver(&self) -> Option<&str> {
+        self.spec()
+            .map(|spec| spec.driver.as_str())
+            .filter(|driver| !driver.is_empty())
     }
 }
 

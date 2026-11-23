@@ -7,6 +7,7 @@ mod config;
 mod container;
 mod dependencies;
 mod docs;
+mod driver;
 mod env;
 mod execute;
 mod flags;
