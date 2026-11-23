@@ -7,6 +7,8 @@ reconstructed from the git history.
 ## [Unreleased]
 
 ### Added
+- Automatic command imports from package.json, Makefile, justfile, Compose, and Cargo during
+  `fire cli init`, plus merge-only `fire cli import` and the `--empty` opt-out. (#51)
 - External CLI drivers with repository installation, cached builds, exact argument forwarding,
   and delegated rich completion through `driver.yaml`. (#24)
 - A link-checked mdBook documentation site, deployed to GitHub Pages with a task-runner comparison. (#57)

@@ -76,7 +76,8 @@ Or download a binary from the [latest release](https://github.com/gbenm/fire/rel
 run it from the WSL terminal. Native Windows isn't supported, since sessions rely on Unix ptys.
 
 ## Quick start (5 minutes)
-1) Run `fire cli init` in your project to create a `fire.yaml`:
+1) Run `fire cli init` in your project. Fire creates `fire.yaml` and automatically imports
+commands from package.json, Makefile, justfile, Compose, and Cargo when present:
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/gbenm/fire/main/schemas/fire.schema.json
 ---
@@ -84,15 +85,13 @@ commands:
   hello: echo "Hello Fire"
 ```
 
-For scripts, `fire cli init --yes` accepts defaults without prompting. Use `--file`,
+For scripts, `fire cli init --yes` accepts defaults without prompting and still imports detected
+commands. Use `--empty` for only the starter command. Use `--file`,
 `--namespace`, `--namespace-description`, and `--group` to set values; an existing file is only
 replaced when `--force` is explicit. When stdin is not a terminal, defaults are automatic.
 
-> **Tip:** already have `package.json` scripts, a `Makefile`, a `justfile` or a `compose.yml`?
-> Ask your coding agent to write the initial config for you, for example:
-> *"Create a fire.yaml for this project from its existing scripts. Use the schema in the
-> `# yaml-language-server` comment, add a `description` to every command, and mark dev servers
-> and watchers with `long_running: true`."*
+Run `fire cli import` later to add newly discovered commands without replacing any command already
+in the generated group files. See [automatic imports](./docs/overview.md#automatic-imports).
 
 2) Run it:
 ```bash

@@ -27,14 +27,48 @@ Fire loads YAML files from the current working directory using these patterns:
 `.yaml` and `.yml` are equivalent; `fire cli init` writes `.yaml` unless you type a `.yml` name.
 
 `fire cli init` prompts when run in a terminal. For scripts, pass `--yes` (or redirect stdin) to
-use defaults without prompting:
+use defaults without prompting. Detected project commands are imported in both modes:
 
 ```text
-fire cli init [--file <base>] [--namespace <prefix>] [--namespace-description <text>] [--group <name>] [--yes] [--force]
+fire cli init [--file <base>] [--namespace <prefix>] [--namespace-description <text>] [--group <name>] [--yes] [--empty] [--force]
 ```
 
 `--file backend` creates `backend.fire.yaml`; an explicit `.yml` suffix is kept. Existing files
-are refused unless `--force` is passed, including in interactive use.
+are refused unless `--force` is passed, including in interactive use. `--empty` creates only the
+starter config and skips imports; in a terminal, answering no to the import prompt does the same.
+
+### Automatic imports
+
+Initialization detects these files and writes one separate, grouped Fire file for each source so
+names from different tools do not collide:
+
+- `package.json` scripts become `package <script>` commands. Fire uses `bun`, `pnpm`, or `yarn`
+  when the corresponding lockfile exists (in that priority), and `npm` otherwise. The complete
+  script body is preserved as its description.
+- `Makefile` targets become `make <target>`. Pattern and special targets are skipped. A target's
+  inline `## comment`, or the immediately preceding comment, becomes its description.
+- `justfile` recipes become `just <recipe>`. Fire uses `just --dump --dump-format json` when
+  `just` is installed and otherwise reads recipe declarations and their preceding doc comments.
+- `compose.yaml`, `compose.yml`, `docker-compose.yaml`, or `docker-compose.yml` creates
+  `compose up`, `down`, `logs`, and `exec <service>`. `up` is long-running. An `exec` service is
+  also marked long-running when it has a Compose `develop` section or its name contains an exact
+  `dev`, `develop`, or `development` segment separated by `-`, `_`, or `.`.
+- `Cargo.toml` creates `cargo build`, `test`, `run`, and `check`.
+
+Generated shell commands quote source names without changing them. A source command name that is
+empty, contains whitespace, or is the reserved name `cli` cannot be represented as one Fire path
+word, so Fire warns and skips it instead of inventing a replacement.
+
+Run `fire cli import` to scan all sources again, or name only the desired sources:
+
+```text
+fire cli import [package.json|Makefile|justfile|compose.yml|Cargo.toml]...
+```
+
+Imports add missing commands to `package.fire.yaml`, `make.fire.yaml`, `just.fire.yaml`,
+`compose.fire.yaml`, and `cargo.fire.yaml`. Existing command names are listed as skipped and are
+never replaced. Unknown, unreadable, or invalid sources produce warnings and do not make the
+command fail.
 
 Merge rules:
 1) `fire.yaml` / `fire.yml` (base)  

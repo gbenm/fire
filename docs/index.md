@@ -49,5 +49,6 @@ fire hello world       # prints: Hello world
 fire cli completion install
 ```
 
-Run `fire cli init` instead if you want Fire to create the initial file interactively. Continue
-with the [overview](./overview.md), or jump to [commands and arguments](./commands-and-args.md).
+Run `fire cli init` instead if you want Fire to create the initial file interactively and import
+commands from package.json, Makefile, justfile, Compose, or Cargo. Continue with the
+[overview](./overview.md), or jump to [commands and arguments](./commands-and-args.md).

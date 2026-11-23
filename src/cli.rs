@@ -18,6 +18,9 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             crate::driver::handle(rest)
         }
         [cli, init, rest @ ..] if cli == "cli" && init == "init" => run_init(rest),
+        [cli, import, rest @ ..] if cli == "cli" && import == "import" => {
+            crate::importer::handle(rest)
+        }
         [cli, check, rest @ ..]
             if cli == "cli" && matches!(check.as_str(), "check" | "validate") =>
         {
@@ -66,6 +69,9 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("  fire cli global add|remove|list|prune|edit");
             eprintln!("  fire cli driver install <github-repo-url>");
             eprintln!("  fire cli init");
+            eprintln!(
+                "  fire cli import [package.json|Makefile|justfile|compose.yml|Cargo.toml]..."
+            );
             eprintln!("  fire cli check [--global] [--format json] [--strict]");
             eprintln!("  fire cli docs [topic]");
             eprintln!("  fire cli upgrade");
@@ -101,6 +107,7 @@ struct InitArgs {
     group: Option<String>,
     yes: bool,
     force: bool,
+    empty: bool,
 }
 
 fn run_init(args: &[String]) {
@@ -113,7 +120,7 @@ fn run_init(args: &[String]) {
 
     println!("Fire CLI Init");
     println!("----------------------------------------");
-    println!("Create a minimal fire config file for this directory.");
+    println!("Create a fire config file for this directory.");
     println!();
 
     if interactive && args.file.is_none() {
@@ -145,6 +152,13 @@ fn run_init(args: &[String]) {
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if interactive
+        && !args.empty
+        && crate::importer::has_known_sources(&cwd)
+        && !prompt_yes_no_default_yes("Import commands from detected project files? [Y/n]:")
+    {
+        args.empty = true;
+    }
     let output_path = match init_project(
         &cwd,
         args.file.as_deref(),
@@ -180,12 +194,14 @@ fn run_init(args: &[String]) {
 
     println!();
     println!("Created {file_name}");
-    println!("Try it with:");
-    println!("  fire example");
+    if !args.empty {
+        crate::importer::import(&cwd, &[]);
+    }
+    println!("Try `fire` to list the available commands.");
 }
 
 fn init_usage() -> &'static str {
-    "fire cli init [--file <base>] [--namespace <prefix>] [--namespace-description <text>] [--group <name>] [--yes] [--force]"
+    "fire cli init [--file <base>] [--namespace <prefix>] [--namespace-description <text>] [--group <name>] [--yes] [--empty] [--force]"
 }
 
 fn parse_init_args(values: &[String]) -> Result<InitArgs, String> {
@@ -195,6 +211,7 @@ fn parse_init_args(values: &[String]) -> Result<InitArgs, String> {
         let flag = values[index].as_str();
         match flag {
             "--yes" => args.yes = true,
+            "--empty" => args.empty = true,
             "--force" => args.force = true,
             "--file" | "--namespace" | "--namespace-description" | "--group" => {
                 index += 1;
@@ -276,7 +293,8 @@ fn print_cli_help() {
     println!("Commands:");
     println!("  global   Register directories so their commands load from anywhere (add, remove, list, prune, edit)");
     println!("  driver   Install external CLI completion drivers from GitHub repositories");
-    println!("  init     Create a minimal fire config file (flags: --yes, --force; see docs)");
+    println!("  init     Create a fire config and import detected project commands");
+    println!("  import   Add commands from package.json, Makefile, justfile, Compose, or Cargo");
     println!("  check    Validate fire files (--global, --format json, --strict; alias: validate)");
     println!("  docs     List or read the documentation embedded in this fire version");
     println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");
@@ -369,6 +387,17 @@ fn prompt_line(label: &str) -> String {
         return String::new();
     }
     value.trim_end_matches(['\r', '\n']).to_string()
+}
+
+fn prompt_yes_no_default_yes(label: &str) -> bool {
+    loop {
+        let value = prompt_line(label);
+        match value.as_str() {
+            "" | "y" | "Y" | "yes" | "YES" | "Yes" => return true,
+            "n" | "N" | "no" | "NO" | "No" => return false,
+            _ => println!("Please answer yes or no."),
+        }
+    }
 }
 
 fn strip_known_yaml_suffixes(value: &str) -> &str {

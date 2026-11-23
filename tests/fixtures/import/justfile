@@ -1,0 +1,7 @@
+# Build the release artifact
+build:
+    cargo build --release
+
+# Run all tests
+test filter="":
+    cargo test {{filter}}

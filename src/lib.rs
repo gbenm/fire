@@ -13,6 +13,7 @@ mod execute;
 mod flags;
 mod global;
 mod help;
+mod importer;
 mod mcp;
 mod mcp_install;
 mod registry;

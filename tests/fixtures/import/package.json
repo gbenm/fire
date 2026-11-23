@@ -1,0 +1,7 @@
+{
+  "scripts": {
+    "build": "vite build --mode production",
+    "dev": "vite --host 0.0.0.0",
+    "say'hi": "printf \"user's exact text: $HOME\""
+  }
+}

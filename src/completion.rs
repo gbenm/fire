@@ -217,6 +217,10 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         return Some(core_cli_init_flags(&path[2..], prefix));
     }
 
+    if path.len() >= 2 && path[1] == "import" {
+        return Some(core_cli_import_sources(&path[2..], prefix));
+    }
+
     if path.len() >= 2 && matches!(path[1].as_str(), "check" | "validate") {
         return Some(core_cli_check_flags(&path[2..], prefix));
     }
@@ -309,7 +313,11 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
         },
         CompletionSuggestion {
             value: "init".to_string(),
-            description: Some("Create a minimal fire config file".to_string()),
+            description: Some("Create a fire config and import project commands".to_string()),
+        },
+        CompletionSuggestion {
+            value: "import".to_string(),
+            description: Some("Import commands from existing project tools".to_string()),
         },
         CompletionSuggestion {
             value: "check".to_string(),
@@ -425,12 +433,30 @@ fn core_cli_init_flags(typed: &[String], prefix: &str) -> Vec<CompletionSuggesti
         ("--namespace-description", "Namespace description"),
         ("--group", "Command group"),
         ("--yes", "Use defaults without prompting"),
+        ("--empty", "Do not import detected project commands"),
         ("--force", "Overwrite the target file if it exists"),
     ]
     .into_iter()
     .filter(|(flag, _)| flag.starts_with(prefix) && !typed.iter().any(|arg| arg == flag))
     .map(|(flag, description)| CompletionSuggestion {
         value: flag.to_string(),
+        description: Some(description.to_string()),
+    })
+    .collect()
+}
+
+fn core_cli_import_sources(typed: &[String], prefix: &str) -> Vec<CompletionSuggestion> {
+    [
+        ("package.json", "Package manager scripts"),
+        ("Makefile", "Make targets"),
+        ("justfile", "Just recipes"),
+        ("compose.yml", "Compose services"),
+        ("Cargo.toml", "Cargo commands"),
+    ]
+    .into_iter()
+    .filter(|(value, _)| value.starts_with(prefix) && !typed.iter().any(|typed| typed == value))
+    .map(|(value, description)| CompletionSuggestion {
+        value: value.to_string(),
         description: Some(description.to_string()),
     })
     .collect()
@@ -1463,6 +1489,7 @@ commands:
                 "--namespace-description",
                 "--group",
                 "--yes",
+                "--empty",
                 "--force"
             ]
         );
@@ -1470,6 +1497,25 @@ commands:
         assert_eq!(
             names(&config, &["cli", "init", "--yes", "--f"]),
             vec!["--file", "--force"]
+        );
+    }
+
+    #[test]
+    fn core_cli_import_completes_each_source_once() {
+        let config = config_with_scopes();
+        assert_eq!(
+            names(&config, &["cli", "import", ""]),
+            vec![
+                "package.json",
+                "Makefile",
+                "justfile",
+                "compose.yml",
+                "Cargo.toml"
+            ]
+        );
+        assert_eq!(
+            names(&config, &["cli", "import", "package.json", ""]),
+            vec!["Makefile", "justfile", "compose.yml", "Cargo.toml"]
         );
     }
 
@@ -1484,6 +1530,7 @@ commands:
                 "global",
                 "driver",
                 "init",
+                "import",
                 "check",
                 "validate",
                 "docs",

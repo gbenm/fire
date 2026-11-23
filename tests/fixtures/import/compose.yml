@@ -1,0 +1,6 @@
+services:
+  web:
+    image: nginx:alpine
+  dev:
+    image: node:alpine
+    command: npm run dev
