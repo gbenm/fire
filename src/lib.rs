@@ -11,6 +11,7 @@ mod flags;
 mod global;
 mod help;
 mod mcp;
+mod mcp_install;
 mod registry;
 mod resolve;
 mod session;

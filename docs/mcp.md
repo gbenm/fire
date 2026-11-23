@@ -41,8 +41,27 @@ Pass your working directory as `cwd` to see and run that project's local command
 server was started elsewhere.
 
 ## Usage
-Register `fire cli mcp` as a stdio server in your agent. Use user (global) scope so it's available
-in every project; fire picks the project from the directory the host starts it in.
+Register Fire at user scope so it is available in every project; Fire picks the project from the
+directory the host starts it in:
+
+```bash
+fire cli mcp install <host>
+```
+
+Hosts are `claude`, `claude-desktop`, `cursor`, `vscode`, `codex`, `gemini`, and `windsurf`.
+Omit `<host>` in a terminal to select from detected hosts. In a script or other non-interactive
+input, specify the host explicitly. Use `--print` to inspect the command or file change without
+applying it, and remove a registration with `fire cli mcp uninstall <host>`.
+
+Fire uses the host's CLI for Claude Code, VS Code, and Codex when it is on `PATH`. File-based hosts,
+and VS Code or Codex without their CLI, use the host's user configuration. Fire preserves unrelated
+entries and writes the previous file to a neighboring `.bak` file; repeating a file-based
+installation makes no change. If the Claude Code CLI is missing, Fire prints the command to run
+after installing it. When `fire` isn't on `PATH`, generated configuration uses the absolute path of
+the running binary.
+
+The manual commands and file formats below are fallbacks for hosts that you do not want Fire to
+configure.
 
 **Claude Code**
 ```bash
@@ -86,7 +105,8 @@ shape:
 | Host | File |
 |---|---|
 | Cursor | `~/.cursor/mcp.json` (or `.cursor/mcp.json` in a project) |
-| Claude Desktop | macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Claude Desktop | macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Linux: `~/.config/Claude/claude_desktop_config.json` |
+| VS Code | macOS: `~/Library/Application Support/Code/User/mcp.json`; Linux: `~/.config/Code/User/mcp.json` |
 | Gemini CLI | `~/.gemini/settings.json` (or `.gemini/settings.json` in a project) |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 

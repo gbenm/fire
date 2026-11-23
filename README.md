@@ -104,7 +104,7 @@ fire cli completion install
 
 4) Optional: connect your AI agent (see [MCP server for agents](#mcp-server-for-agents)):
 ```bash
-claude mcp add fire -- fire cli mcp
+fire cli mcp install claude
 ```
 
 ## Configuration at a glance
@@ -136,13 +136,13 @@ Associate your YAML with https://raw.githubusercontent.com/gbenm/fire/main/schem
 Let AI agents use the commands you already configured, and launch long-running processes as
 managed sessions you can inspect, signal, and attach to:
 ```bash
-fire cli mcp
+fire cli mcp install <host>
 ```
 Mark commands agents shouldn't touch (deploys, destructive DB tasks) with `agents: false`.
 Details: see [docs/mcp.md](./docs/mcp.md).
 
-- Claude Code: `claude mcp add --scope user fire -- fire cli mcp`
-- Codex, VS Code, Cursor, Claude Desktop, Gemini CLI, Windsurf: see [setup per host](./docs/mcp.md#usage)
+- Supported hosts: Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI, and Windsurf.
+- Run `fire cli mcp` directly only when an MCP host launches it as the configured stdio server.
 - MCP Registry name: `mcp-name: io.github.gbenm/fire`
 
 ## Sessions

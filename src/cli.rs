@@ -21,6 +21,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
         }
         [cli, upgrade] if cli == "cli" && upgrade == "upgrade" => run_upgrade(),
         [cli, mcp] if cli == "cli" && mcp == "mcp" => run_mcp(),
+        [cli, mcp, rest @ ..] if cli == "cli" && mcp == "mcp" => crate::mcp_install::handle(rest),
         [cli, sub, ..]
             if cli == "cli"
                 && matches!(
@@ -59,7 +60,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("  fire cli docs [topic]");
             eprintln!("  fire cli upgrade");
             eprintln!("  fire cli completion install [bash|zsh|all]");
-            eprintln!("  fire cli mcp");
+            eprintln!("  fire cli mcp [install|uninstall <host> [--print]]");
             eprintln!("  fire cli ps [-a|--all] [--exited] [--failed] [--stopped] | logs <id> [lines] | fg <id> | send <id> <text> | kill <id> [SIGNAL]");
             process::exit(1);
         }
@@ -267,7 +268,7 @@ fn print_cli_help() {
     println!("  docs     List or read the documentation embedded in this fire version");
     println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");
     println!("  completion  Manage shell completion scripts");
-    println!("  mcp      Start an MCP server (stdio) exposing fire's command tree to agents");
+    println!("  mcp      Start or configure the MCP server for supported agent hosts");
     println!("  bg       Deprecated: use fire --bg [-m \"note\"] [--new] <command>");
     println!("  ps [-a|--all] [--exited] [--failed] [--stopped]  List running sessions (all projects); flags show ended ones");
     println!("  logs <id> [lines]  Show the last lines of a session's output");

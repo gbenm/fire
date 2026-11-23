@@ -254,6 +254,8 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         2 => {
             if path[1] == "completion" {
                 Some(core_cli_completion_children(prefix))
+            } else if path[1] == "mcp" {
+                Some(core_cli_mcp_children(prefix))
             } else {
                 Some(Vec::new())
             }
@@ -261,6 +263,8 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         3 => {
             if path[1] == "completion" && path[2] == "install" {
                 Some(core_cli_completion_install_children(prefix))
+            } else if path[1] == "mcp" && ["install", "uninstall"].contains(&path[2].as_str()) {
+                Some(core_cli_mcp_hosts(prefix))
             } else {
                 Some(Vec::new())
             }
@@ -450,6 +454,39 @@ fn core_cli_completion_children(prefix: &str) -> Vec<CompletionSuggestion> {
         .into_iter()
         .filter(|suggestion| suggestion.value.starts_with(prefix))
         .collect()
+}
+
+fn core_cli_mcp_children(prefix: &str) -> Vec<CompletionSuggestion> {
+    [
+        ("install", "Register fire with an MCP host"),
+        ("uninstall", "Remove fire from an MCP host"),
+    ]
+    .into_iter()
+    .filter(|(value, _)| value.starts_with(prefix))
+    .map(|(value, description)| CompletionSuggestion {
+        value: value.to_string(),
+        description: Some(description.to_string()),
+    })
+    .collect()
+}
+
+fn core_cli_mcp_hosts(prefix: &str) -> Vec<CompletionSuggestion> {
+    [
+        ("claude", "Claude Code"),
+        ("claude-desktop", "Claude Desktop"),
+        ("cursor", "Cursor"),
+        ("vscode", "VS Code (Copilot)"),
+        ("codex", "Codex"),
+        ("gemini", "Gemini CLI"),
+        ("windsurf", "Windsurf"),
+    ]
+    .into_iter()
+    .filter(|(value, _)| value.starts_with(prefix))
+    .map(|(value, description)| CompletionSuggestion {
+        value: value.to_string(),
+        description: Some(description.to_string()),
+    })
+    .collect()
 }
 
 fn core_cli_completion_install_children(prefix: &str) -> Vec<CompletionSuggestion> {
@@ -1479,6 +1516,35 @@ commands:
         );
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
         assert_eq!(names, vec!["bash", "zsh", "all"]);
+    }
+
+    #[test]
+    fn core_cli_mcp_completes_operations_and_described_hosts() {
+        let config = config_with_scopes();
+        assert_eq!(
+            names(&config, &["cli", "mcp", ""]),
+            vec!["install", "uninstall"]
+        );
+        let hosts = completion_suggestions(
+            &config,
+            &["cli".into(), "mcp".into(), "install".into(), "".into()],
+        );
+        assert_eq!(
+            hosts
+                .iter()
+                .map(|host| host.value.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "claude",
+                "claude-desktop",
+                "cursor",
+                "vscode",
+                "codex",
+                "gemini",
+                "windsurf"
+            ]
+        );
+        assert!(hosts.iter().all(|host| host.description.is_some()));
     }
 
     #[test]
