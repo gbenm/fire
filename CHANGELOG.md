@@ -7,6 +7,8 @@ reconstructed from the git history.
 ## [Unreleased]
 
 ### Added
+- `fire cli check` (alias `validate`) validates fire files for CI and pre-commit hooks, with
+  file/line diagnostics, `--format json`, `--strict`, and optional registered-directory checks. (#56)
 - Command dependencies with scoped `needs`, deduplication, cycle and long-running checks,
   fail-fast execution, parallel output prefixes, and `-j`/`FIRE_JOBS` concurrency limits. (#55)
 - `fire cli mcp install [<host>]` and `fire cli mcp uninstall <host>` register and remove the MCP

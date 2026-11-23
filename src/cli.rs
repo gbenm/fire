@@ -15,6 +15,11 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             crate::global::handle(rest)
         }
         [cli, init, rest @ ..] if cli == "cli" && init == "init" => run_init(rest),
+        [cli, check, rest @ ..]
+            if cli == "cli" && matches!(check.as_str(), "check" | "validate") =>
+        {
+            crate::check::handle(rest)
+        }
         [cli, docs] if cli == "cli" && docs == "docs" => crate::docs::handle_cli(None),
         [cli, docs, topic] if cli == "cli" && docs == "docs" => {
             crate::docs::handle_cli(Some(topic))
@@ -57,6 +62,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("Usage:");
             eprintln!("  fire cli global add|remove|list|prune|edit");
             eprintln!("  fire cli init");
+            eprintln!("  fire cli check [--global] [--format json] [--strict]");
             eprintln!("  fire cli docs [topic]");
             eprintln!("  fire cli upgrade");
             eprintln!("  fire cli completion install [bash|zsh|all]");
@@ -266,6 +272,7 @@ fn print_cli_help() {
     println!("Commands:");
     println!("  global   Register directories so their commands load from anywhere (add, remove, list, prune, edit)");
     println!("  init     Create a minimal fire config file (flags: --yes, --force; see docs)");
+    println!("  check    Validate fire files (--global, --format json, --strict; alias: validate)");
     println!("  docs     List or read the documentation embedded in this fire version");
     println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");
     println!("  completion  Manage shell completion scripts");

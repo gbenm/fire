@@ -211,6 +211,10 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         return Some(core_cli_init_flags(&path[2..], prefix));
     }
 
+    if path.len() >= 2 && matches!(path[1].as_str(), "check" | "validate") {
+        return Some(core_cli_check_flags(&path[2..], prefix));
+    }
+
     if path.len() >= 2 && path[1] == "global" {
         return Some(core_cli_global_children(&path[2..], prefix));
     }
@@ -282,6 +286,14 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
         CompletionSuggestion {
             value: "init".to_string(),
             description: Some("Create a minimal fire config file".to_string()),
+        },
+        CompletionSuggestion {
+            value: "check".to_string(),
+            description: Some("Validate fire configuration files".to_string()),
+        },
+        CompletionSuggestion {
+            value: "validate".to_string(),
+            description: Some("Alias for `fire cli check`".to_string()),
         },
         CompletionSuggestion {
             value: "docs".to_string(),
@@ -390,6 +402,30 @@ fn core_cli_init_flags(typed: &[String], prefix: &str) -> Vec<CompletionSuggesti
         ("--group", "Command group"),
         ("--yes", "Use defaults without prompting"),
         ("--force", "Overwrite the target file if it exists"),
+    ]
+    .into_iter()
+    .filter(|(flag, _)| flag.starts_with(prefix) && !typed.iter().any(|arg| arg == flag))
+    .map(|(flag, description)| CompletionSuggestion {
+        value: flag.to_string(),
+        description: Some(description.to_string()),
+    })
+    .collect()
+}
+
+fn core_cli_check_flags(typed: &[String], prefix: &str) -> Vec<CompletionSuggestion> {
+    if typed.last().is_some_and(|value| value == "--format") {
+        return [CompletionSuggestion {
+            value: "json".to_string(),
+            description: Some("Emit machine-readable JSON diagnostics".to_string()),
+        }]
+        .into_iter()
+        .filter(|suggestion| suggestion.value.starts_with(prefix))
+        .collect();
+    }
+    [
+        ("--global", "Also check registered directories"),
+        ("--format", "Output format (json)"),
+        ("--strict", "Treat warnings as errors"),
     ]
     .into_iter()
     .filter(|(flag, _)| flag.starts_with(prefix) && !typed.iter().any(|arg| arg == flag))
@@ -1423,6 +1459,8 @@ commands:
             vec![
                 "global",
                 "init",
+                "check",
+                "validate",
                 "docs",
                 "completion",
                 "upgrade",
@@ -1434,6 +1472,23 @@ commands:
                 "send",
                 "kill"
             ]
+        );
+    }
+
+    #[test]
+    fn core_cli_check_completes_flags_and_json_format() {
+        let config = config_with_scopes();
+        assert_eq!(
+            names(&config, &["cli", "check", "--"]),
+            vec!["--global", "--format", "--strict"]
+        );
+        assert_eq!(
+            names(&config, &["cli", "check", "--format", ""]),
+            vec!["json"]
+        );
+        assert_eq!(
+            names(&config, &["cli", "validate", "--strict", "--"]),
+            vec!["--global", "--format"]
         );
     }
 

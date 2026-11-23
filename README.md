@@ -132,6 +132,11 @@ Associate your YAML with https://raw.githubusercontent.com/gbenm/fire/main/schem
 - Add `$schema` to the first line: `# yaml-language-server: $schema=https://raw.githubusercontent.com/gbenm/fire/main/schemas/fire.schema.json`, followed by `---` to start the document (linters such as yamllint's `document-start` rule expect it)
 - Or map file names in `.vscode/settings.json` (`yaml.schemas`).
 
+Run `fire cli check` to validate every local fire file before execution, including includes,
+collisions, placeholders, runtimes, dependencies, and explicit environment-file paths. Use
+`--strict` in CI to promote warnings to errors, `--format json` for editor/CI integrations, or
+`--global` to include registered directories. See [troubleshooting](./docs/troubleshooting.md#validate-fire-files-in-ci-or-pre-commit).
+
 ## MCP server for agents
 Let AI agents use the commands you already configured, and launch long-running processes as
 managed sessions you can inspect, signal, and attach to:

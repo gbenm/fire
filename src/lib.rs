@@ -1,5 +1,6 @@
 use std::{env as std_env, path::Path, process};
 
+mod check;
 mod cli;
 mod completion;
 mod config;

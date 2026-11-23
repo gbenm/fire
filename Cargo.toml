@@ -36,9 +36,7 @@ rmcp = { version = "3.11.0", features = ["macros", "server", "transport-io"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "io-std"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 toml_edit = "0.25.20"
+jsonschema = { version = "0.63.0", default-features = false }
 
 [build-dependencies]
 serde_json = "1.0.154"
-
-[dev-dependencies]
-jsonschema = { version = "0.63.0", default-features = false }

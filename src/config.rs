@@ -637,6 +637,33 @@ pub(crate) fn load_config_from(cwd: &Path) -> LoadedConfig {
     loaded
 }
 
+/// Loads the same effective configuration used by command resolution, without emitting the
+/// execution-time "skipping" messages that would corrupt `fire cli check --format json`.
+pub(crate) fn load_config_for_check(cwd: &Path, include_global: bool) -> LoadedConfig {
+    let mut loaded = LoadedConfig::default();
+    let project_root = local_project_root_for_check(cwd);
+    loaded.files.extend(load_directory_file_configs(
+        &project_root,
+        SourceKind::Local,
+        DefaultNamespaceMode::DirectoryFallback,
+        false,
+    ));
+    if include_global {
+        for directory in load_installed_directories() {
+            if directory != project_root {
+                loaded.files.extend(load_directory_file_configs(
+                    &directory,
+                    SourceKind::Global,
+                    DefaultNamespaceMode::ExplicitOnly,
+                    false,
+                ));
+            }
+        }
+        loaded.merged_namespaces = load_merged_namespaces().into_iter().collect();
+    }
+    loaded
+}
+
 /// Directory whose files load as local commands: the git root when its config sets a
 /// namespace, else the current directory.
 pub(crate) fn local_project_root() -> PathBuf {
@@ -645,7 +672,11 @@ pub(crate) fn local_project_root() -> PathBuf {
 }
 
 pub(crate) fn local_project_root_from(cwd: &Path) -> PathBuf {
-    detect_git_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
+    detect_git_root(cwd, true).unwrap_or_else(|| cwd.to_path_buf())
+}
+
+pub(crate) fn local_project_root_for_check(cwd: &Path) -> PathBuf {
+    detect_git_root(cwd, false).unwrap_or_else(|| cwd.to_path_buf())
 }
 
 /// Files a registered directory contributes, scoped as when loaded globally.
@@ -808,7 +839,7 @@ impl MergedEntry<'_> {
     }
 }
 
-fn detect_git_root(cwd: &Path) -> Option<PathBuf> {
+fn detect_git_root(cwd: &Path, report_errors: bool) -> Option<PathBuf> {
     if !cwd.exists() {
         return None;
     }
@@ -834,7 +865,7 @@ fn detect_git_root(cwd: &Path) -> Option<PathBuf> {
     }
 
     // Check if any of the root config files defines a namespace.
-    let raw = parse_raw_files(&config_files);
+    let raw = parse_raw_files(&config_files, report_errors);
     let has_explicit_namespace = select_directory_explicit_namespace(&raw).is_some();
 
     if has_explicit_namespace {
@@ -845,11 +876,11 @@ fn detect_git_root(cwd: &Path) -> Option<PathBuf> {
 }
 
 fn load_local_file_configs(cwd: &Path, source: SourceKind) -> Vec<FileConfig> {
-    load_directory_file_configs(cwd, source, DefaultNamespaceMode::DirectoryFallback)
+    load_directory_file_configs(cwd, source, DefaultNamespaceMode::DirectoryFallback, true)
 }
 
 fn load_global_file_configs(directory: &Path, source: SourceKind) -> Vec<FileConfig> {
-    load_directory_file_configs(directory, source, DefaultNamespaceMode::ExplicitOnly)
+    load_directory_file_configs(directory, source, DefaultNamespaceMode::ExplicitOnly, true)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -862,9 +893,10 @@ fn load_directory_file_configs(
     base_dir: &Path,
     source: SourceKind,
     namespace_mode: DefaultNamespaceMode,
+    report_errors: bool,
 ) -> Vec<FileConfig> {
     let root_paths = discover_config_files(base_dir);
-    let root_raw = parse_raw_files(&root_paths);
+    let root_raw = parse_raw_files(&root_paths, report_errors);
     let explicit_namespace = select_directory_explicit_namespace(&root_raw);
 
     let default_namespace = match namespace_mode {
@@ -874,9 +906,9 @@ fn load_directory_file_configs(
         DefaultNamespaceMode::ExplicitOnly => select_directory_default_namespace_prefix(&root_raw),
     };
 
-    let include_dirs = resolve_include_directories(base_dir, &root_raw);
+    let include_dirs = resolve_include_directories(base_dir, &root_raw, report_errors);
     let include_paths = discover_config_files_from_dirs(&include_dirs);
-    let include_raw = parse_raw_files(&include_paths);
+    let include_raw = parse_raw_files(&include_paths, report_errors);
 
     let mut files = to_file_configs(
         &root_raw,
@@ -895,43 +927,51 @@ fn load_directory_file_configs(
     files
 }
 
-fn parse_raw_files(paths: &[PathBuf]) -> Vec<ParsedFireFile> {
+fn parse_raw_files(paths: &[PathBuf], report_errors: bool) -> Vec<ParsedFireFile> {
     let mut parsed = Vec::new();
     for path in paths {
         let Ok(text) = fs::read_to_string(path) else {
-            eprintln!("[fire] Could not read {}. Skipping.", path.display());
+            if report_errors {
+                eprintln!("[fire] Could not read {}. Skipping.", path.display());
+            }
             continue;
         };
 
         let mut value: yaml_serde::Value = match yaml_serde::from_str(&text) {
             Ok(v) => v,
             Err(err) => {
-                eprintln!(
-                    "[fire] Invalid YAML in {}: {}. Skipping.",
-                    path.display(),
-                    err
-                );
+                if report_errors {
+                    eprintln!(
+                        "[fire] Invalid YAML in {}: {}. Skipping.",
+                        path.display(),
+                        err
+                    );
+                }
                 continue;
             }
         };
 
         if let Err(e) = value.apply_merge() {
-            eprintln!(
-                "[fire] Merge failed in {}: {}. Skipping.",
-                path.display(),
-                e
-            );
+            if report_errors {
+                eprintln!(
+                    "[fire] Merge failed in {}: {}. Skipping.",
+                    path.display(),
+                    e
+                );
+            }
             continue;
         }
 
         let value: FireFileRaw = match yaml_serde::from_value(value) {
             Ok(value) => value,
             Err(err) => {
-                eprintln!(
-                    "[fire] Invalid config structure in {}: {}. Skipping.",
-                    path.display(),
-                    err
-                );
+                if report_errors {
+                    eprintln!(
+                        "[fire] Invalid config structure in {}: {}. Skipping.",
+                        path.display(),
+                        err
+                    );
+                }
                 continue;
             }
         };
@@ -1245,7 +1285,11 @@ fn discover_config_files_from_dirs(directories: &[PathBuf]) -> Vec<PathBuf> {
     files.into_iter().collect()
 }
 
-fn resolve_include_directories(base_dir: &Path, raw_files: &[ParsedFireFile]) -> Vec<PathBuf> {
+fn resolve_include_directories(
+    base_dir: &Path,
+    raw_files: &[ParsedFireFile],
+    report_errors: bool,
+) -> Vec<PathBuf> {
     let mut directories = BTreeSet::new();
 
     for parsed in raw_files {
@@ -1257,16 +1301,20 @@ fn resolve_include_directories(base_dir: &Path, raw_files: &[ParsedFireFile]) ->
             }
 
             let Some(relative) = normalize_relative_include_path(trimmed) else {
-                eprintln!("[fire] Invalid include path '{trimmed}'. Skipping.");
+                if report_errors {
+                    eprintln!("[fire] Invalid include path '{trimmed}'. Skipping.");
+                }
                 continue;
             };
 
             let path = base_dir.join(relative);
             if !path.is_dir() {
-                eprintln!(
-                    "[fire] Include directory '{}' does not exist. Skipping.",
-                    path.display()
-                );
+                if report_errors {
+                    eprintln!(
+                        "[fire] Include directory '{}' does not exist. Skipping.",
+                        path.display()
+                    );
+                }
                 continue;
             }
 

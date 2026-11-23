@@ -2,6 +2,34 @@
 
 Common issues and quick fixes.
 
+## Validate fire files in CI or pre-commit
+
+`fire cli check` validates the same merged configuration Fire resolves in the current project.
+It checks schema types and unknown keys, command/group/namespace collisions, includes, explicit
+`env_file` paths, placeholder patterns, unused compute keys, runtime prefixes, dependency graphs,
+and commands without an action. Errors exit 1; missing explicit env files and suspicious
+placeholder/compute settings are warnings unless `--strict` is set. `fire cli validate` is an
+alias.
+
+For GitHub Actions:
+
+```yaml
+- name: Validate Fire configuration
+  run: fire cli check --strict
+```
+
+For a framework-free Git pre-commit hook, save this as `.git/hooks/pre-commit` and make it
+executable:
+
+```sh
+#!/bin/sh
+exec fire cli check --strict
+```
+
+Use `fire cli check --format json` for structured diagnostics with `file`, `line`, `severity`,
+`message`, and `hint` fields. Add `--global` only when the registered directories on that machine
+should be checked too.
+
 ## Completion not working
 - Re-run `fire cli completion install` to refresh shell init.
 - Open a new shell or `source ~/.zshrc` / `~/.bashrc`.
