@@ -14,7 +14,7 @@ use rmcp::{
         router::tool::ToolRouter,
         wrapper::{Json, Parameters},
     },
-    model::{Implementation, ServerCapabilities, ServerInfo},
+    model::{Implementation, ServerCapabilities, ServerConfig},
     schemars, serve_server, tool, tool_handler, tool_router,
     transport::io::stdio,
     ServerHandler,
@@ -1138,9 +1138,9 @@ const INSTRUCTIONS: &str = "Long-running fire commands always use `start_session
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FireMcpServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         // rmcp's default reports its own crate name and version.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("fire", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
     }

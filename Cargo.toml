@@ -28,17 +28,17 @@ path = "src/main.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-dirs = "6.0.0"
-libc = "0.2"
-yaml_serde = "0.10"
-serde = { version = "1.0", features = ["derive"] }
-rmcp = { version = "3.1.0", features = ["macros", "server", "transport-io"] }
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-std"] }
-serde_json = { version = "1.0.151", features = ["preserve_order"] }
-toml_edit = "0.25"
+dirs = "7.0.0"
+libc = "0.2.191"
+yaml_serde = "0.10.7"
+serde = { version = "1.0.229", features = ["derive"] }
+rmcp = { version = "3.11.0", features = ["macros", "server", "transport-io"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "io-std"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+toml_edit = "0.25.20"
 
 [build-dependencies]
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 
 [dev-dependencies]
 jsonschema = { version = "0.63.0", default-features = false }
