@@ -56,7 +56,9 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             let target = match parse_completion_target(shell) {
                 Some(target) => target,
                 None => {
-                    eprintln!("[fire] Invalid shell `{shell}`. Use one of: bash, zsh, all.");
+                    eprintln!(
+                        "[fire] Invalid shell `{shell}`. Use one of: bash, zsh, fish, nushell, all."
+                    );
                     process::exit(1);
                 }
             };
@@ -75,7 +77,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("  fire cli check [--global] [--format json] [--strict]");
             eprintln!("  fire cli docs [topic]");
             eprintln!("  fire cli upgrade");
-            eprintln!("  fire cli completion install [bash|zsh|all]");
+            eprintln!("  fire cli completion install [bash|zsh|fish|nushell|all]");
             eprintln!("  fire cli mcp install [<host>] [--print]");
             eprintln!("  fire cli mcp uninstall <host> [--print]");
             eprintln!("  fire cli ps [-a|--all] [--exited] [--failed] [--stopped] | logs <id> [lines] | fg <id> | send <id> <text> | kill <id> [SIGNAL]");
@@ -313,7 +315,7 @@ fn print_cli_help() {
 fn print_completion_help() {
     println!("Fire CLI Completion v{}", crate::FIRE_VERSION);
     println!("Commands:");
-    println!("  install [bash|zsh|all]  Install completion scripts (default: all)");
+    println!("  install [bash|zsh|fish|nushell|all]  Install completion scripts (default: all)");
 }
 
 fn run_upgrade() {
@@ -492,6 +494,8 @@ fn optional_non_empty(value: Option<&str>) -> Option<&str> {
 enum CompletionTarget {
     Bash,
     Zsh,
+    Fish,
+    Nushell,
     All,
 }
 
@@ -499,6 +503,8 @@ fn parse_completion_target(value: &str) -> Option<CompletionTarget> {
     match value {
         "bash" => Some(CompletionTarget::Bash),
         "zsh" => Some(CompletionTarget::Zsh),
+        "fish" => Some(CompletionTarget::Fish),
+        "nushell" => Some(CompletionTarget::Nushell),
         "all" => Some(CompletionTarget::All),
         _ => None,
     }
@@ -529,6 +535,20 @@ fn run_completion_install(target: CompletionTarget) {
             });
             installed_paths.push(path);
         }
+        CompletionTarget::Fish => {
+            let path = install_fish_completion(&home_dir).unwrap_or_else(|err| {
+                eprintln!("[fire] {err}");
+                process::exit(1);
+            });
+            installed_paths.push(path);
+        }
+        CompletionTarget::Nushell => {
+            let path = install_nushell_completion(&home_dir).unwrap_or_else(|err| {
+                eprintln!("[fire] {err}");
+                process::exit(1);
+            });
+            installed_paths.push(path);
+        }
         CompletionTarget::All => {
             let zsh_path = install_zsh_completion(&home_dir).unwrap_or_else(|err| {
                 eprintln!("[fire] {err}");
@@ -541,6 +561,22 @@ fn run_completion_install(target: CompletionTarget) {
                 process::exit(1);
             });
             installed_paths.push(bash_path);
+
+            if program_in_path("fish") {
+                let fish_path = install_fish_completion(&home_dir).unwrap_or_else(|err| {
+                    eprintln!("[fire] {err}");
+                    process::exit(1);
+                });
+                installed_paths.push(fish_path);
+            }
+
+            if program_in_path("nu") {
+                let nushell_path = install_nushell_completion(&home_dir).unwrap_or_else(|err| {
+                    eprintln!("[fire] {err}");
+                    process::exit(1);
+                });
+                installed_paths.push(nushell_path);
+            }
         }
     }
 
@@ -550,6 +586,50 @@ fn run_completion_install(target: CompletionTarget) {
     }
     println!();
     println!("Open a new shell session (or source your shell rc file) to apply changes.");
+}
+
+fn install_fish_completion(home_dir: &Path) -> Result<PathBuf, String> {
+    let completion_dir = xdg_config_dir()
+        .unwrap_or_else(|| home_dir.join(".config"))
+        .join("fish")
+        .join("completions");
+    fs::create_dir_all(&completion_dir)
+        .map_err(|err| format!("Failed to create fish completion directory: {err}"))?;
+
+    let completion_path = completion_dir.join("fire.fish");
+    fs::write(&completion_path, fish_completion_script())
+        .map_err(|err| format!("Failed to write fish completion script: {err}"))?;
+    Ok(completion_path)
+}
+
+fn install_nushell_completion(home_dir: &Path) -> Result<PathBuf, String> {
+    let config_dir = xdg_config_dir()
+        .or_else(dirs::config_dir)
+        .unwrap_or_else(|| home_dir.join(".config"))
+        .join("nushell");
+    fs::create_dir_all(&config_dir)
+        .map_err(|err| format!("Failed to create Nushell config directory: {err}"))?;
+
+    let config_path = config_dir.join("config.nu");
+    upsert_managed_block_file(
+        &config_path,
+        nushell_block_start_marker(),
+        nushell_block_end_marker(),
+        nushell_completion_block(),
+    )?;
+    Ok(config_path)
+}
+
+fn xdg_config_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
+fn program_in_path(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|directory| directory.join(program).is_file())
+    })
 }
 
 fn install_zsh_completion(home_dir: &Path) -> Result<PathBuf, String> {
@@ -673,6 +753,42 @@ fi
 "#
 }
 
+fn fish_completion_script() -> &'static str {
+    r#"function __fire_complete
+  set -l words (commandline -opc)
+  set -l current (commandline -ct)
+  fire __complete -- $words "$current"
+end
+
+complete -c fire -f -k -a '(__fire_complete)'
+"#
+}
+
+fn nushell_completion_block() -> &'static str {
+    r#"# >>> fire completion (nushell) >>>
+let fire_previous_completer = $env.config.completions.external.completer
+let fire_completer = {|place|
+  if (($place.command | get -o 0) == "fire") {
+    ^fire __complete -- ...$place.command
+    | lines
+    | each {|line|
+        let parts = ($line | split row --number 2 "\t")
+        if (($parts | length) == 2) {
+          {value: $parts.0, description: $parts.1}
+        } else {
+          {value: $parts.0}
+        }
+      }
+  } else if ($fire_previous_completer != null) {
+    do $fire_previous_completer $place
+  } else {
+    null
+  }
+}
+$env.config.completions.external.completer = $fire_completer
+# <<< fire completion (nushell) <<<"#
+}
+
 fn zsh_completion_rc_block() -> String {
     format!(
         "{}\nif [ -d \"$HOME/.zsh/completions\" ]; then\n  fpath=(\"$HOME/.zsh/completions\" $fpath)\nfi\nautoload -Uz compinit\ncompinit\n{}",
@@ -703,6 +819,14 @@ fn bash_block_start_marker() -> &'static str {
 
 fn bash_block_end_marker() -> &'static str {
     "# <<< fire completion (bash) <<<"
+}
+
+fn nushell_block_start_marker() -> &'static str {
+    "# >>> fire completion (nushell) >>>"
+}
+
+fn nushell_block_end_marker() -> &'static str {
+    "# <<< fire completion (nushell) <<<"
 }
 
 #[cfg(test)]
@@ -779,8 +903,16 @@ mod tests {
             Some(CompletionTarget::Bash)
         );
         assert_eq!(parse_completion_target("zsh"), Some(CompletionTarget::Zsh));
+        assert_eq!(
+            parse_completion_target("fish"),
+            Some(CompletionTarget::Fish)
+        );
+        assert_eq!(
+            parse_completion_target("nushell"),
+            Some(CompletionTarget::Nushell)
+        );
         assert_eq!(parse_completion_target("all"), Some(CompletionTarget::All));
-        assert_eq!(parse_completion_target("fish"), None);
+        assert_eq!(parse_completion_target("powershell"), None);
     }
 
     #[test]

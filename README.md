@@ -99,7 +99,7 @@ fire hello world
 # => Hello Fire world
 ```
 
-3) Enable completion (zsh + bash):
+3) Enable completion (bash and zsh, plus detected fish and Nushell installations):
 ```bash
 fire cli completion install
 ```
@@ -125,6 +125,7 @@ Install or refresh completion anytime:
 fire cli completion install
 ```
 - zsh shows values + descriptions
+- fish and Nushell show values + descriptions
 - bash uses `complete -C` values
 
 Details: see [docs/completion.md](./docs/completion.md).

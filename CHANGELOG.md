@@ -7,6 +7,7 @@ reconstructed from the git history.
 ## [Unreleased]
 
 ### Added
+- Rich completion and idempotent installers for fish and Nushell. (#52)
 - Automatic command imports from package.json, Makefile, justfile, Compose, and Cargo during
   `fire cli init`, plus merge-only `fire cli import` and the `--empty` opt-out. (#51)
 - External CLI drivers with repository installation, cached builds, exact argument forwarding,

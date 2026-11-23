@@ -533,7 +533,7 @@ fn core_cli_session_args(
 fn core_cli_completion_children(prefix: &str) -> Vec<CompletionSuggestion> {
     let suggestions = vec![CompletionSuggestion {
         value: "install".to_string(),
-        description: Some("Install completion for bash/zsh".to_string()),
+        description: Some("Install shell completion scripts".to_string()),
     }];
 
     suggestions
@@ -577,8 +577,16 @@ fn core_cli_completion_install_children(prefix: &str) -> Vec<CompletionSuggestio
             description: Some("Install zsh completion".to_string()),
         },
         CompletionSuggestion {
+            value: "fish".to_string(),
+            description: Some("Install fish completion".to_string()),
+        },
+        CompletionSuggestion {
+            value: "nushell".to_string(),
+            description: Some("Install Nushell completion".to_string()),
+        },
+        CompletionSuggestion {
             value: "all".to_string(),
-            description: Some("Install both shells".to_string()),
+            description: Some("Install completion for detected shells".to_string()),
         },
     ];
 
@@ -1636,7 +1644,7 @@ commands:
             ],
         );
         let names: Vec<String> = values.into_iter().map(|it| it.value).collect();
-        assert_eq!(names, vec!["bash", "zsh", "all"]);
+        assert_eq!(names, vec!["bash", "zsh", "fish", "nushell", "all"]);
     }
 
     #[test]
