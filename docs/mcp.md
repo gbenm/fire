@@ -138,6 +138,8 @@ commands:
   subcommand can't opt back in under a group marked `agents: false`.
 - `run_command` and `start_session` refuse to run it, with an error telling the agent not to run
   it any other way and to ask you instead.
+- A command exposed to agents is also refused before it starts if any command in its `needs` graph
+  has `agents: false`; dependencies cannot bypass the restriction.
 - The server's instructions tell agents that these commands are off-limits, including from their
   own shell.
 - `fire` help marks them as `[no agents]`, so you can see what's restricted without opening the
@@ -174,7 +176,7 @@ uses the MCP server's directory. Relative paths resolve from the server's direct
 Each flat result puts `path` first: it is the exact canonical invocation to run, such as
 `"fire ex backend logs"`. Results also include `description`, `runnable`, `source` (`local` or
 `global`), a custom `placeholder` when configured, and `long_running: true` for commands that
-must use `start_session`.
+must use `start_session`. A `needs` array names the commands that Fire runs first.
 
 Underlying `exec` and `eval` templates are omitted by default. Pass `include_exec: true` only when
 their implementation is useful as context; run the returned `path`, never a copied template.
@@ -184,8 +186,9 @@ Runs a finite configured command to completion. Pass `path` exactly as returned 
 `search_commands` (including the leading `fire`) and optional `args` as an array; each argument is
 appended as one unchanged token. Pass the same `cwd` used for discovery so the command resolves
 and runs in that project; without it, Fire uses the MCP server's directory. The command is stopped
-after 60 seconds. For longer builds or tests, run Fire from your shell; commands intended to keep
-running must be marked `long_running: true` and started with `start_session`.
+after 60 seconds. Fire runs the command's complete `needs` graph under the same timeout. For longer
+builds or tests, run Fire from your shell; commands intended to keep running must be marked
+`long_running: true` and started with `start_session`.
 
 The structured result contains `exit_code`, separate `stdout` and `stderr`, `timed_out`, and
 `stdout_truncated` / `stderr_truncated`. Each output stream is capped at 64 KiB. `exit_code` is

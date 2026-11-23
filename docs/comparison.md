@@ -11,7 +11,7 @@ and a safe interface for agents.
 | Capability | Fire | make | just | Task | mise tasks | npm scripts |
 |---|---|---|---|---|---|---|
 | **Config format** | YAML | Makefile syntax | justfile syntax | YAML | TOML or standalone task files | JSON |
-| **Completion with descriptions** | Generated; descriptions in zsh, values in bash | Not built in | Generated completion; recipes can have doc comments | Generated completion; tasks have descriptions | Generated completion; tasks have descriptions | Script-name completion, without descriptions |
+| **Completion with descriptions** | Generated; descriptions in zsh, values in bash | Not built in | Generated completion; doc comments appear in `--list` | Generated completion with task descriptions | Generated completion; tasks have descriptions | Script-name completion, without descriptions |
 | **Namespaces / global commands** | Nested groups plus registered global namespaces | Separate makefiles and recursive make | Modules and imported justfiles | Included Taskfiles with namespaces | Included task files and global config | Workspace scripts |
 | **Detach / reattach sessions** | Built in for every command | No | No | No | No | No |
 | **Container fallback when a tool is missing** | Built-in `check` + `fallback_runner` | Write a recipe | Write a recipe | Write a task | Use mise tools or write a task | Write a script |
@@ -40,7 +40,8 @@ to add capabilities outside its core.
 - **You build files, not just run commands.** `make` rebuilds only what changed based on targets,
   prerequisites, and file timestamps. Fire does not track inputs or outputs.
 - **You need source-aware caching.** Task can use sources and generated files, and mise tasks can
-  declare sources and outputs. Fire dependencies order work but do not cache it.
+  declare sources and outputs. just also has an experimental recipe cache. Fire dependencies order
+  work but do not cache it.
 - **You need native Windows.** Fire sessions use Unix ptys, so Windows users need WSL. just, Task,
   mise, and npm all run natively on Windows.
 - **You want tool versions and tasks in one place.** mise installs and pins tool versions as well as

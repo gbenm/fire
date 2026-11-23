@@ -109,6 +109,31 @@ fn missing_include_is_an_error_and_missing_explicit_env_file_is_strict_warning()
 }
 
 #[test]
+fn repeated_env_file_diagnostics_use_each_declaration_line() {
+    let project = Project::new(
+        "check-env-lines",
+        r#"commands:
+  first:
+    env_file: first.env
+    exec: echo first
+  second:
+    env_file: second.env
+    exec: echo second
+"#,
+    );
+    let (code, stdout, _) = check(&project, &[]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(
+        stdout.contains("fire.yml:3: warning: Explicit env_file `first.env`"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("fire.yml:6: warning: Explicit env_file `second.env`"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn impossible_placeholders_and_unused_compute_keys_warn() {
     let project = Project::new(
         "check-placeholders",
@@ -122,6 +147,72 @@ fn impossible_placeholders_and_unused_compute_keys_warn() {
     );
     assert!(
         stdout.contains("compute key `{unused}` is never used"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn inherited_compute_and_n_placeholder_patterns_are_checked_as_executed() {
+    let project = Project::new(
+        "check-inherited-rendering",
+        r#"commands:
+  group:
+    placeholder: "@n"
+    compute:
+      "{used}": echo used
+      "{unused}": echo unused
+    macros:
+      UNUSED_MACRO: echo "{unused}"
+    commands:
+      run:
+        exec: echo "{used} @1"
+"#,
+    );
+    let (code, stdout, _) = check(&project, &[]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(!stdout.contains("placeholder pattern"), "{stdout}");
+    assert!(!stdout.contains("compute key `{used}`"), "{stdout}");
+    assert!(
+        stdout.contains("compute key `{unused}` is never used"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn diagnostics_locate_the_field_in_the_affected_command() {
+    let project = Project::new(
+        "check-semantic-location",
+        r#"commands:
+  first:
+    placeholder: "{{n}}"
+    exec: echo "{1}"
+  second:
+    placeholder: ARG
+    exec: echo second
+"#,
+    );
+    let (code, stdout, _) = check(&project, &[]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(
+        stdout.contains("fire.yml:6: warning:") && stdout.contains("has placeholder pattern `ARG`"),
+        "{stdout}"
+    );
+
+    let project = Project::new(
+        "check-schema-location",
+        r#"commands:
+  first:
+    description: Valid
+    exec: echo first
+  second:
+    description: 42
+    exec: echo second
+"#,
+    );
+    let (code, stdout, _) = check(&project, &[]);
+    assert_eq!(code, 1, "{stdout}");
+    assert!(
+        stdout.contains("fire.yml:6: error: Schema validation failed"),
         "{stdout}"
     );
 }
@@ -160,6 +251,30 @@ fn dependency_cycles_and_unknown_targets_are_errors() {
 }
 
 #[test]
+fn conflicting_sequential_dependency_orders_are_reported_as_a_cycle() {
+    let project = Project::new(
+        "check-needs-order-cycle",
+        r#"commands:
+  a: echo a
+  b: echo b
+  first:
+    needs: [a, b]
+    exec: echo first
+  second:
+    needs: [b, a]
+    exec: echo second
+  all:
+    needs: [first, second]
+    parallel: true
+    exec: echo all
+"#,
+    );
+    let (code, stdout, _) = check(&project, &[]);
+    assert_eq!(code, 1, "{stdout}");
+    assert!(stdout.contains("Dependency cycle: a -> b -> a"), "{stdout}");
+}
+
+#[test]
 fn commands_without_an_action_or_subcommands_are_errors() {
     let project = Project::new(
         "check-empty",
@@ -177,7 +292,7 @@ fn commands_without_an_action_or_subcommands_are_errors() {
 fn json_format_is_machine_readable() {
     let project = Project::new(
         "check-json",
-        "commands:\n  hello:\n    placeholder: never\n    exec: echo hello\n",
+        "commands:\n  hello:\n    placeholder: ARG\n    exec: echo hello\n",
     );
     let (code, stdout, stderr) = check(&project, &["--format", "json"]);
     assert_eq!(code, 0, "{stdout}{stderr}");

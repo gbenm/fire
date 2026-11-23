@@ -1566,7 +1566,11 @@ fn split_placeholder_pattern(template: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn apply_macros(value: &str, macros_map: &BTreeMap<String, String>) -> String {
+pub(crate) fn placeholder_pattern_is_valid(template: &str) -> bool {
+    split_placeholder_pattern(template).is_some()
+}
+
+pub(crate) fn apply_macros(value: &str, macros_map: &BTreeMap<String, String>) -> String {
     if macros_map.is_empty() {
         return value.to_string();
     }

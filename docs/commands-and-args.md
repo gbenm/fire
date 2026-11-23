@@ -75,10 +75,12 @@ no user arguments; arguments belong only to the command the user requested. `nee
 `before`.
 
 Fire expands the complete dependency graph before running anything. A dependency runs once even
-when several commands need it, cycles are reported with their command chain, and the first failed
-dependency stops the command. Commands marked `long_running: true` cannot appear in `needs`; use a
-`before` check or manage the service as a session instead. The complete chain runs inside the
-requested command's session, when it has one. `--dry-run` shows every step without executing it.
+when several commands need it (repeating the same entry is a no-op), cycles are reported with their
+command chain, and the first failed dependency stops the command. Without `parallel`, each listed
+dependency's complete graph finishes before the next one starts. Commands marked
+`long_running: true` cannot appear in `needs`; use a `before` check or manage the service as a
+session instead. The complete chain runs inside the requested command's session, when it has one.
+`--dry-run` shows every step without executing it.
 
 Set `parallel: true` to run that command's direct dependencies concurrently:
 

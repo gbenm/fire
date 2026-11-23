@@ -57,6 +57,86 @@ commands:
 }
 
 #[test]
+fn sequential_needs_wait_for_each_preceding_dependency_graph() {
+    let project = Project::new(
+        "needs-nested-order",
+        r#"
+commands:
+  a-setup:
+    exec: printf 'a-setup-start\n' >> events; sleep 0.1; printf 'a-setup-end\n' >> events
+  a:
+    needs: [a-setup]
+    exec: printf 'a\n' >> events
+  b-setup:
+    exec: printf 'b-setup\n' >> events
+  b:
+    needs: [b-setup]
+    exec: printf 'b\n' >> events
+  all:
+    needs: [a, b]
+    exec: printf 'all\n' >> events
+"#,
+    );
+
+    let (code, _, stderr) = run(&project, &["-j", "2", "all"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        fs::read_to_string(project.dir.join("events")).unwrap(),
+        "a-setup-start\na-setup-end\na\nb-setup\nb\nall\n"
+    );
+}
+
+#[test]
+fn a_repeated_need_is_a_no_op_instead_of_a_dependency_cycle() {
+    let project = Project::new(
+        "needs-repeated",
+        r#"
+commands:
+  prepare:
+    exec: printf 'prepare\n' >> events
+  all:
+    needs: [prepare, prepare]
+    exec: printf 'all\n' >> events
+"#,
+    );
+
+    let (mut child, _, output) = spawn_in_pty(project.fire(&["all"]));
+    assert_eq!(wait_for_exit(&mut child), 0, "{}", output.lock().unwrap());
+    assert_eq!(
+        fs::read_to_string(project.dir.join("events")).unwrap(),
+        "prepare\nall\n"
+    );
+}
+
+#[test]
+fn agent_runs_reject_restricted_dependencies_before_any_work_starts() {
+    let project = Project::new(
+        "needs-agent-restricted",
+        r#"
+commands:
+  allowed:
+    exec: touch allowed-ran
+  restricted:
+    agents: false
+    exec: touch restricted-ran
+  all:
+    needs: [allowed, restricted]
+    exec: touch all-ran
+"#,
+    );
+
+    let (code, _, stderr) = run(&project, &["--agent", "all"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("cannot need `restricted`") && stderr.contains("agents: false"),
+        "{stderr}"
+    );
+    assert!(!project.dir.join("allowed-ran").exists());
+    assert!(!project.dir.join("restricted-ran").exists());
+    assert!(!project.dir.join("all-ran").exists());
+}
+
+#[test]
 fn dependency_failure_stops_the_chain_and_names_the_failed_command() {
     let project = Project::new(
         "needs-failure",

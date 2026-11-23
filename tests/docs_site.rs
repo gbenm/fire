@@ -26,10 +26,21 @@ fn mdbook_is_configured_with_internal_link_checking() {
 fn pages_workflow_builds_checks_and_deploys_on_main_and_releases() {
     let workflow = repo_file(".github/workflows/docs.yml");
     assert!(workflow.contains("branches: [main]"), "{workflow}");
+    assert!(workflow.contains("pull_request:"), "{workflow}");
     assert!(workflow.contains("release:"), "{workflow}");
     assert!(workflow.contains("mdbook-linkcheck"), "{workflow}");
     assert!(workflow.contains("mdbook build"), "{workflow}");
     assert!(workflow.contains("actions/deploy-pages@"), "{workflow}");
+    assert!(
+        workflow.contains("if: github.event_name != 'pull_request'"),
+        "{workflow}"
+    );
+
+    let config = repo_file("book.toml");
+    assert!(
+        config.contains("authors = [\"Benyamin Galeano\"]"),
+        "{config}"
+    );
 }
 
 #[test]

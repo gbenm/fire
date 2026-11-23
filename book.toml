@@ -1,7 +1,7 @@
 [book]
 title = "Fire CLI"
 description = "A config-first task runner for projects and AI agents"
-authors = ["Benjamin Garcia"]
+authors = ["Benyamin Galeano"]
 language = "en"
 src = "docs"
 

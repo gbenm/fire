@@ -3,26 +3,18 @@ name: Docs
 on:
   push:
     branches: [main]
+  pull_request:
   release:
     types: [published]
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Build and deploy
+  build:
+    name: Build and check
     runs-on: ubuntu-22.04
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout documentation source
         uses: actions/checkout@v4
@@ -37,13 +29,29 @@ jobs:
       - name: Build and check documentation
         run: mdbook build
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
       - name: Upload site
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v4
         with:
           path: book/html
+
+  deploy:
+    name: Deploy
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
 
       - name: Deploy site
         id: deployment

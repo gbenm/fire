@@ -16,6 +16,8 @@ use crate::config::{CommandEntry, FileConfig, FileScope, LoadedConfig};
 struct PlanNode {
     label: String,
     invocation: Vec<String>,
+    /// Dependencies declared through `needs`, excluding sequencing edges added by the planner.
+    declared_dependencies: BTreeSet<String>,
     dependencies: BTreeSet<String>,
 }
 
@@ -24,6 +26,7 @@ pub(crate) struct DependencyPlan {
     root: String,
     nodes: BTreeMap<String, PlanNode>,
     prefixed_output: bool,
+    agent: bool,
 }
 
 pub(crate) fn empty_plan() -> DependencyPlan {
@@ -33,6 +36,7 @@ pub(crate) fn empty_plan() -> DependencyPlan {
 pub(crate) fn build_plan(
     config: &LoadedConfig,
     root: &CommandEntry,
+    agent: bool,
 ) -> Result<DependencyPlan, String> {
     let Some((file_index, root_path)) = locate_entry(config, root) else {
         return Err("Could not locate the command in its Fire file.".to_string());
@@ -42,12 +46,15 @@ pub(crate) fn build_plan(
         nodes: BTreeMap::new(),
         visiting: Vec::new(),
         prefixed_output: false,
+        agent,
     };
     let root = builder.visit(file_index, &root_path)?;
+    validate_acyclic(&builder.nodes)?;
     Ok(DependencyPlan {
         root,
         nodes: builder.nodes,
         prefixed_output: builder.prefixed_output,
+        agent,
     })
 }
 
@@ -56,6 +63,7 @@ struct PlanBuilder<'a> {
     nodes: BTreeMap<String, PlanNode>,
     visiting: Vec<String>,
     prefixed_output: bool,
+    agent: bool,
 }
 
 impl PlanBuilder<'_> {
@@ -82,6 +90,7 @@ impl PlanBuilder<'_> {
             PlanNode {
                 label: label.clone(),
                 invocation: invocation(file, path),
+                declared_dependencies: BTreeSet::new(),
                 dependencies: BTreeSet::new(),
             },
         );
@@ -92,6 +101,7 @@ impl PlanBuilder<'_> {
         }
 
         let mut previous: Option<String> = None;
+        let mut earlier = BTreeSet::new();
         for raw_need in entry.needs() {
             let need_path = parse_need(raw_need)?;
             let (dependency, dependency_chain) = entry_at_path(file, &need_path).ok_or_else(|| {
@@ -109,6 +119,11 @@ impl PlanBuilder<'_> {
                     "Command `{label}` cannot need `{raw_need}` because it is `long_running: true`; use `before` with a check, or a session instead."
                 ));
             }
+            if self.agent && dependency_chain.iter().any(|entry| !entry.allows_agents()) {
+                return Err(format!(
+                    "Command `{label}` cannot need `{raw_need}` because it is not available to agents (`agents: false`)."
+                ));
+            }
 
             let dependency_key = self.visit(file_index, &need_path)?;
             self.nodes
@@ -116,19 +131,30 @@ impl PlanBuilder<'_> {
                 .expect("current plan node")
                 .dependencies
                 .insert(dependency_key.clone());
+            self.nodes
+                .get_mut(&key)
+                .expect("current plan node")
+                .declared_dependencies
+                .insert(dependency_key.clone());
             if !entry.parallel_needs() {
-                if let Some(previous_key) = previous {
-                    // If the earlier listed command itself needs this command, it must already
-                    // run first; deduplication then makes the later list entry a no-op.
-                    if !depends_on(&self.nodes, &previous_key, &dependency_key) {
+                let current = declared_dependency_closure(&self.nodes, &dependency_key);
+                let new_nodes: Vec<String> = current.difference(&earlier).cloned().collect();
+                if let Some(previous_key) = &previous {
+                    // A sequential dependency starts only after the complete graph of the
+                    // preceding dependency. Shared nodes stay before both graphs, so adding the
+                    // ordering edge cannot turn a shared prerequisite into a cycle.
+                    for node_key in &new_nodes {
                         self.nodes
-                            .get_mut(&dependency_key)
+                            .get_mut(node_key)
                             .expect("dependency plan node")
                             .dependencies
-                            .insert(previous_key);
+                            .insert(previous_key.clone());
                     }
                 }
-                previous = Some(dependency_key);
+                if !new_nodes.is_empty() {
+                    previous = Some(dependency_key);
+                }
+                earlier.extend(current);
             }
         }
 
@@ -137,13 +163,55 @@ impl PlanBuilder<'_> {
     }
 }
 
-fn depends_on(nodes: &BTreeMap<String, PlanNode>, from: &str, target: &str) -> bool {
-    let Some(node) = nodes.get(from) else {
-        return false;
-    };
-    node.dependencies
-        .iter()
-        .any(|dependency| dependency == target || depends_on(nodes, dependency, target))
+fn declared_dependency_closure(nodes: &BTreeMap<String, PlanNode>, root: &str) -> BTreeSet<String> {
+    fn visit(nodes: &BTreeMap<String, PlanNode>, key: &str, found: &mut BTreeSet<String>) {
+        if !found.insert(key.to_string()) {
+            return;
+        }
+        if let Some(node) = nodes.get(key) {
+            for dependency in &node.declared_dependencies {
+                visit(nodes, dependency, found);
+            }
+        }
+    }
+
+    let mut found = BTreeSet::new();
+    visit(nodes, root, &mut found);
+    found
+}
+
+fn validate_acyclic(nodes: &BTreeMap<String, PlanNode>) -> Result<(), String> {
+    fn visit(
+        nodes: &BTreeMap<String, PlanNode>,
+        key: &str,
+        visiting: &mut Vec<String>,
+        complete: &mut BTreeSet<String>,
+    ) -> Result<(), String> {
+        if complete.contains(key) {
+            return Ok(());
+        }
+        if let Some(start) = visiting.iter().position(|item| item == key) {
+            let mut chain: Vec<String> = visiting[start..]
+                .iter()
+                .map(|item| nodes[item].label.clone())
+                .collect();
+            chain.push(nodes[key].label.clone());
+            return Err(format!("Dependency cycle: {}", chain.join(" -> ")));
+        }
+        visiting.push(key.to_string());
+        for dependency in &nodes[key].dependencies {
+            visit(nodes, dependency, visiting, complete)?;
+        }
+        visiting.pop();
+        complete.insert(key.to_string());
+        Ok(())
+    }
+
+    let mut complete = BTreeSet::new();
+    for key in nodes.keys() {
+        visit(nodes, key, &mut Vec::new(), &mut complete)?;
+    }
+    Ok(())
 }
 
 fn parse_need(raw: &str) -> Result<Vec<String>, String> {
@@ -266,10 +334,17 @@ pub(crate) fn execute(plan: &DependencyPlan) -> Result<(), i32> {
             .map(|(key, _)| key.clone())
             .take(jobs.saturating_sub(running.len()))
             .collect();
+        let made_ready = !ready.is_empty();
 
         for key in ready {
             let node = &plan.nodes[&key];
-            match spawn_dependency(&executable, node, plan.prefixed_output, output_tx.clone()) {
+            match spawn_dependency(
+                &executable,
+                node,
+                plan.prefixed_output,
+                plan.agent,
+                output_tx.clone(),
+            ) {
                 Ok(child) => {
                     running.insert(key, child);
                 }
@@ -288,6 +363,7 @@ pub(crate) fn execute(plan: &DependencyPlan) -> Result<(), i32> {
                 finished.push((key.clone(), status.code().unwrap_or(1)));
             }
         }
+        let made_progress = made_ready || !finished.is_empty();
         for (key, code) in finished {
             if let Some(finished_child) = running.remove(&key) {
                 for reader in finished_child.readers {
@@ -316,6 +392,10 @@ pub(crate) fn execute(plan: &DependencyPlan) -> Result<(), i32> {
             drain_output(&output_rx);
             return Ok(());
         }
+        if !made_progress && running.is_empty() {
+            eprintln!("[fire] Dependency plan could not make progress.");
+            return Err(1);
+        }
         // Completion can make another sequential dependency ready on the next iteration.
         thread::sleep(Duration::from_millis(10));
     }
@@ -335,9 +415,13 @@ fn spawn_dependency(
     executable: &std::path::Path,
     node: &PlanNode,
     prefixed: bool,
+    agent: bool,
     output_tx: mpsc::Sender<OutputLine>,
 ) -> std::io::Result<Running> {
     let mut command = Command::new(executable);
+    if agent {
+        command.arg("--agent");
+    }
     command
         .args(&node.invocation)
         .env("FIRE_SKIP_NEEDS", "1")

@@ -143,10 +143,12 @@ pub fn setup_cli() {
         let dependency_plan = if std::env::var_os("FIRE_SKIP_NEEDS").is_some() {
             dependencies::empty_plan()
         } else {
-            dependencies::build_plan(&config, resolved.command).unwrap_or_else(|message| {
-                eprintln!("[fire] {message}");
-                process::exit(1);
-            })
+            dependencies::build_plan(&config, resolved.command, flags.agent).unwrap_or_else(
+                |message| {
+                    eprintln!("[fire] {message}");
+                    process::exit(1);
+                },
+            )
         };
         session::run_in_session_if_enabled(command_args, &resolved, flags.new);
         execute_resolved_command(resolved, dependency_plan);

@@ -12,10 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
-    config::{
-        self, CommandAction, CommandEntry, CommandSpec, EnvFileSetting, FileConfig, FileScope,
-        ImplicitNamespaces, RunnerSetting,
-    },
+    config::{self, CommandEntry, FileConfig, FileScope, ImplicitNamespaces, RunnerSetting},
     dependencies,
     registry::load_installed_directories,
 };
@@ -328,37 +325,69 @@ fn validate_schema(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for error in validator.iter_errors(value) {
-        let mut unexpected = Vec::new();
-        collect_unexpected(&error, &mut unexpected);
-        if unexpected.is_empty() {
-            let pointer = error.instance_path().as_str();
-            let key = pointer.rsplit('/').next().unwrap_or_default();
-            diagnostics.push(Diagnostic {
-                file: document.path.clone(),
-                line: line_for_key(&document.text, key),
-                severity: Severity::Error,
-                message: format!("Schema validation failed: {error}"),
-                hint: "Use the documented type and keys from schemas/fire.schema.json.".to_string(),
-            });
-        } else {
-            for key in unexpected {
+        let mut specific = Vec::new();
+        collect_specific_errors(&error, &mut specific);
+        let deepest = specific
+            .iter()
+            .map(|error| error.instance_path().as_str().matches('/').count())
+            .max()
+            .unwrap_or(0);
+        for error in specific
+            .into_iter()
+            .filter(|error| error.instance_path().as_str().matches('/').count() == deepest)
+        {
+            let mut unexpected = Vec::new();
+            collect_unexpected(error, &mut unexpected);
+            if unexpected.is_empty() {
+                let pointer = error.instance_path().as_str();
                 diagnostics.push(Diagnostic {
                     file: document.path.clone(),
-                    line: line_for_key(&document.text, &key),
+                    line: line_for_json_pointer(&document.text, pointer, None),
                     severity: Severity::Error,
-                    message: format!("Unknown configuration key `{key}`."),
-                    hint: "Remove the key or replace it with a documented Fire key.".to_string(),
+                    message: format!("Schema validation failed: {error}"),
+                    hint: "Use the documented type and keys from schemas/fire.schema.json."
+                        .to_string(),
                 });
+            } else {
+                for (pointer, key) in unexpected {
+                    diagnostics.push(Diagnostic {
+                        file: document.path.clone(),
+                        line: line_for_json_pointer(&document.text, &pointer, Some(&key)),
+                        severity: Severity::Error,
+                        message: format!("Unknown configuration key `{key}`."),
+                        hint: "Remove the key or replace it with a documented Fire key."
+                            .to_string(),
+                    });
+                }
             }
         }
     }
 }
 
-fn collect_unexpected(error: &jsonschema::ValidationError<'_>, output: &mut Vec<String>) {
+fn collect_specific_errors<'error, 'instance>(
+    error: &'error jsonschema::ValidationError<'instance>,
+    output: &mut Vec<&'error jsonschema::ValidationError<'instance>>,
+) {
+    match error.kind() {
+        ValidationErrorKind::AnyOf { context }
+        | ValidationErrorKind::OneOfNotValid { context }
+        | ValidationErrorKind::OneOfMultipleValid { context } => {
+            for branch in context {
+                for nested in branch {
+                    collect_specific_errors(nested, output);
+                }
+            }
+        }
+        _ => output.push(error),
+    }
+}
+
+fn collect_unexpected(error: &jsonschema::ValidationError<'_>, output: &mut Vec<(String, String)>) {
     match error.kind() {
         ValidationErrorKind::AdditionalProperties { unexpected }
         | ValidationErrorKind::UnevaluatedProperties { unexpected } => {
-            output.extend(unexpected.iter().cloned());
+            let pointer = error.instance_path().as_str().to_string();
+            output.extend(unexpected.iter().cloned().map(|key| (pointer.clone(), key)));
         }
         ValidationErrorKind::AnyOf { context }
         | ValidationErrorKind::OneOfNotValid { context }
@@ -374,7 +403,12 @@ fn collect_unexpected(error: &jsonschema::ValidationError<'_>, output: &mut Vec<
 }
 
 fn check_explicit_env_files(document: &Document, value: &Value, diagnostics: &mut Vec<Diagnostic>) {
-    fn visit(document: &Document, value: &Value, diagnostics: &mut Vec<Diagnostic>) {
+    fn visit(
+        document: &Document,
+        value: &Value,
+        path: &mut Vec<String>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
         match value {
             Value::Object(object) => {
                 if let Some(setting) = object.get("env_file") {
@@ -383,33 +417,49 @@ fn check_explicit_env_files(document: &Document, value: &Value, diagnostics: &mu
                         Value::Array(paths) => paths.iter().filter_map(Value::as_str).collect(),
                         _ => Vec::new(),
                     };
-                    for path in paths {
-                        let resolved = document.path.parent().unwrap_or(Path::new(".")).join(path);
+                    for env_path in paths {
+                        let resolved = document
+                            .path
+                            .parent()
+                            .unwrap_or(Path::new("."))
+                            .join(env_path);
                         if !resolved.is_file() {
                             diagnostics.push(Diagnostic {
                                 file: document.path.clone(),
-                                line: line_for_key(&document.text, "env_file"),
+                                line: {
+                                    path.push("env_file".to_string());
+                                    let line = line_for_yaml_path(&document.text, path)
+                                        .unwrap_or_else(|| line_for_key(&document.text, "env_file"));
+                                    path.pop();
+                                    line
+                                },
                                 severity: Severity::Warning,
-                                message: format!("Explicit env_file `{path}` does not exist."),
+                                message: format!(
+                                    "Explicit env_file `{env_path}` does not exist."
+                                ),
                                 hint: "Create the file, correct the literal path, or use null to disable env loading."
                                     .to_string(),
                             });
                         }
                     }
                 }
-                for child in object.values() {
-                    visit(document, child, diagnostics);
+                for (key, child) in object {
+                    path.push(key.clone());
+                    visit(document, child, path, diagnostics);
+                    path.pop();
                 }
             }
             Value::Array(items) => {
-                for item in items {
-                    visit(document, item, diagnostics);
+                for (index, item) in items.iter().enumerate() {
+                    path.push(index.to_string());
+                    visit(document, item, path, diagnostics);
+                    path.pop();
                 }
             }
             _ => {}
         }
     }
-    visit(document, value, diagnostics);
+    visit(document, value, &mut Vec::new(), diagnostics);
 }
 
 fn validate_effective_config(
@@ -420,74 +470,172 @@ fn validate_effective_config(
     validate_collisions(config, sources, diagnostics);
     let mut dependency_errors = BTreeSet::new();
     for file in &config.files {
-        walk_commands(&file.commands, &mut Vec::new(), &mut |path, entry| {
-            let source = sources
-                .get(&file.config_path)
-                .map(String::as_str)
-                .unwrap_or("");
-            validate_command(file, path, entry, source, diagnostics);
-            if !entry.needs().is_empty() {
-                if let Err(message) = dependencies::build_plan(config, entry) {
-                    if dependency_errors.insert((file.config_path.clone(), message.clone())) {
-                        diagnostics.push(Diagnostic {
-                            file: file.config_path.clone(),
-                            line: line_for_key(source, "needs"),
-                            severity: Severity::Error,
-                            message,
-                            hint: "Use existing runnable command paths in the same file scope and remove dependency cycles."
-                                .to_string(),
-                        });
+        walk_command_chains(
+            &file.commands,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut |path, chain| {
+                let entry = chain.last().expect("command chain");
+                let source = sources
+                    .get(&file.config_path)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                validate_command(file, path, chain, source, diagnostics);
+                if !entry.needs().is_empty() {
+                    if let Err(message) = dependencies::build_plan(config, entry, false) {
+                        if dependency_errors.insert((file.config_path.clone(), message.clone())) {
+                            diagnostics.push(Diagnostic {
+                                file: file.config_path.clone(),
+                                line: line_for_command_field(source, path, "needs"),
+                                severity: Severity::Error,
+                                message,
+                                hint: "Use existing runnable command paths in the same file scope and remove dependency cycles."
+                                    .to_string(),
+                            });
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
     }
+}
+
+#[derive(Default)]
+struct EffectiveValidation {
+    placeholder: Option<(String, Vec<String>)>,
+    compute: BTreeMap<String, (String, Vec<String>)>,
+    macros: BTreeMap<String, String>,
+    before: Option<String>,
+    check: Option<String>,
+    runner: Option<RunnerSetting>,
+    fallback_runner: Option<RunnerSetting>,
 }
 
 fn validate_command(
     file: &FileConfig,
     path: &[String],
-    entry: &CommandEntry,
+    chain: &[&CommandEntry],
     source: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let label = full_command_path(file, path).join(" ");
+    let entry = chain.last().expect("command chain");
     let Some(spec) = entry.spec() else {
+        validate_effective_command(file, path, chain, source, &label, diagnostics);
         return;
     };
     if !entry.is_runnable() && spec.commands.is_empty() {
         diagnostics.push(Diagnostic {
             file: file.config_path.clone(),
-            line: line_for_key(
-                source,
-                path.last().map(String::as_str).unwrap_or("commands"),
-            ),
+            line: line_for_command(source, path),
             severity: Severity::Error,
             message: format!("Command `{label}` has neither `exec`, `eval`, nor subcommands."),
             hint: "Add an executable action or at least one nested command.".to_string(),
         });
     }
 
-    if !spec.placeholder.trim().is_empty() && !spec.placeholder.contains("{n}") {
-        diagnostics.push(Diagnostic {
-            file: file.config_path.clone(),
-            line: line_for_key(source, "placeholder"),
-            severity: Severity::Warning,
-            message: format!(
-                "Command `{label}` has placeholder pattern `{}` that cannot produce positional placeholders.",
-                spec.placeholder
-            ),
-            hint: "Include the literal `{n}` convention in the pattern, for example `@{n}` or `{{{n}}}`."
-                .to_string(),
-        });
+    validate_effective_command(file, path, chain, source, &label, diagnostics);
+}
+
+fn validate_effective_command(
+    file: &FileConfig,
+    path: &[String],
+    chain: &[&CommandEntry],
+    source: &str,
+    label: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !chain.last().is_some_and(|entry| entry.is_runnable()) {
+        return;
     }
 
-    let strings = command_strings(spec);
-    for key in spec.compute.keys() {
-        if !strings.iter().any(|value| value.contains(key)) {
+    let mut effective = EffectiveValidation::default();
+    for (index, entry) in chain.iter().enumerate() {
+        let Some(spec) = entry.spec() else {
+            continue;
+        };
+        let declaration_path = path[..=index].to_vec();
+        if !spec.placeholder.trim().is_empty() {
+            effective.placeholder = Some((spec.placeholder.clone(), declaration_path.clone()));
+        }
+        if !spec.before.trim().is_empty() {
+            effective.before = Some(spec.before.clone());
+        }
+        if !spec.check.trim().is_empty() {
+            effective.check = Some(spec.check.clone());
+        }
+        if !spec.runner.is_empty() {
+            effective.runner = Some(spec.runner.clone());
+        }
+        if !spec.fallback_runner.is_empty() {
+            effective.fallback_runner = Some(spec.fallback_runner.clone());
+        }
+        for (key, value) in &spec.compute {
+            effective
+                .compute
+                .insert(key.clone(), (value.clone(), declaration_path.clone()));
+        }
+        for (key, value) in &spec.macros {
+            effective.macros.insert(key.clone(), value.clone());
+        }
+    }
+
+    if let Some((placeholder, declaration_path)) = &effective.placeholder {
+        if !crate::execute::placeholder_pattern_is_valid(placeholder) {
             diagnostics.push(Diagnostic {
                 file: file.config_path.clone(),
-                line: line_for_key(source, "compute"),
+                line: line_for_command_field(source, declaration_path, "placeholder"),
+                severity: Severity::Warning,
+                message: format!(
+                    "Command `{label}` has placeholder pattern `{}` that cannot produce positional placeholders.",
+                    placeholder
+                ),
+                hint: "Include `n` or `{n}` in a surrounding pattern, for example `@n`, `@{n}` or `{{{n}}}`."
+                    .to_string(),
+            });
+        }
+    }
+
+    let mut strings: Vec<(Option<&str>, String)> = Vec::new();
+    if let Some(entry) = chain.last() {
+        strings.extend(
+            entry
+                .execution_commands()
+                .into_iter()
+                .flatten()
+                .map(|value| (None, value)),
+        );
+        strings.extend(
+            entry
+                .evaluation_expressions()
+                .into_iter()
+                .flatten()
+                .map(|value| (None, value)),
+        );
+    }
+    strings.extend(effective.before.iter().cloned().map(|value| (None, value)));
+    strings.extend(effective.check.iter().cloned().map(|value| (None, value)));
+    if let Some(runner) = &effective.runner {
+        runner_strings(runner, &mut strings);
+    }
+    if let Some(runner) = &effective.fallback_runner {
+        runner_strings(runner, &mut strings);
+    }
+    for (key, (expression, _)) in &effective.compute {
+        strings.push((Some(key), expression.clone()));
+    }
+    for (_, value) in &mut strings {
+        *value = crate::execute::apply_macros(value, &effective.macros);
+    }
+
+    for (key, (_, declaration_path)) in &effective.compute {
+        if !strings
+            .iter()
+            .any(|(origin, value)| *origin != Some(key.as_str()) && value.contains(key))
+        {
+            diagnostics.push(Diagnostic {
+                file: file.config_path.clone(),
+                line: line_for_command_field(source, declaration_path, "compute"),
                 severity: Severity::Warning,
                 message: format!("Command `{label}` compute key `{key}` is never used."),
                 hint: "Use the exact literal key in the command or remove the compute entry."
@@ -496,14 +644,14 @@ fn validate_command(
         }
     }
 
-    if let Some(eval) = &spec.eval {
-        for expression in action_values(eval) {
+    if let Some(entry) = chain.last() {
+        for expression in entry.evaluation_expressions().into_iter().flatten() {
             match expression.split_once(':') {
                 Some((prefix, _)) if !file.runtimes.contains_key(prefix.trim()) => {
                     let runtime = prefix.trim();
                     diagnostics.push(Diagnostic {
                         file: file.config_path.clone(),
-                        line: line_for_key(source, "eval"),
+                        line: line_for_command_field(source, path, "eval"),
                         severity: Severity::Error,
                         message: format!("Runtime `{runtime}` is not configured for command `{label}`."),
                         hint: format!("Add a `runtimes.{runtime}` definition or use a configured runtime prefix."),
@@ -511,7 +659,7 @@ fn validate_command(
                 }
                 None => diagnostics.push(Diagnostic {
                     file: file.config_path.clone(),
-                    line: line_for_key(source, "eval"),
+                    line: line_for_command_field(source, path, "eval"),
                     severity: Severity::Error,
                     message: format!("Command `{label}` eval has no runtime prefix."),
                     hint: "Use the documented `<runtime>:<code>` convention.".to_string(),
@@ -520,7 +668,7 @@ fn validate_command(
             }
         }
     }
-    for expression in spec.compute.values() {
+    for (expression, declaration_path) in effective.compute.values() {
         let trimmed = expression.trim();
         let Some((prefix, _)) = trimmed.split_once(':') else {
             continue;
@@ -533,7 +681,7 @@ fn validate_command(
         {
             diagnostics.push(Diagnostic {
                 file: file.config_path.clone(),
-                line: line_for_key(source, "compute"),
+                line: line_for_command_field(source, declaration_path, "compute"),
                 severity: Severity::Error,
                 message: format!("Runtime `{prefix}` is not configured for command `{label}`."),
                 hint: format!(
@@ -541,13 +689,6 @@ fn validate_command(
                 ),
             });
         }
-    }
-
-    if let EnvFileSetting::Paths(paths) = &spec.env_file {
-        // Raw document validation reports these once at their actual declaration. This branch
-        // intentionally has no diagnostic; it documents that inherited settings are accounted
-        // for by the effective command model without duplicating them per command.
-        let _ = paths;
     }
 }
 
@@ -557,7 +698,7 @@ fn validate_collisions(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     validate_scope_collisions(config, sources, diagnostics);
-    let mut terminal_paths: BTreeMap<Vec<String>, Vec<PathBuf>> = BTreeMap::new();
+    let mut terminal_paths: BTreeMap<Vec<String>, Vec<(PathBuf, Vec<String>)>> = BTreeMap::new();
     let implicit = ImplicitNamespaces::of(config);
     for file in &config.files {
         walk_commands(&file.commands, &mut Vec::new(), &mut |path, entry| {
@@ -565,13 +706,14 @@ fn validate_collisions(
                 terminal_paths
                     .entry(callable_command_path(file, path, &implicit))
                     .or_default()
-                    .push(file.config_path.clone());
+                    .push((file.config_path.clone(), path.to_vec()));
             }
         });
     }
-    for (path, mut files) in terminal_paths {
-        files.sort();
-        files.dedup();
+    for (path, mut entries) in terminal_paths {
+        entries.sort();
+        entries.dedup();
+        let files: BTreeSet<&PathBuf> = entries.iter().map(|(file, _)| file).collect();
         if files.len() < 2 {
             continue;
         }
@@ -580,14 +722,11 @@ fn validate_collisions(
             .map(|file| file.display().to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        for file in files {
+        for (file, local_path) in entries {
             let source = sources.get(&file).map(String::as_str).unwrap_or("");
             diagnostics.push(Diagnostic {
                 file: file.clone(),
-                line: line_for_key(
-                    source,
-                    path.last().map(String::as_str).unwrap_or("commands"),
-                ),
+                line: line_for_command(source, &local_path),
                 severity: Severity::Error,
                 message: format!(
                     "Command collision for `{}` across: {locations}.",
@@ -758,56 +897,61 @@ fn walk_commands(
     }
 }
 
-fn command_strings(spec: &CommandSpec) -> Vec<&str> {
-    let mut strings = Vec::new();
-    for action in [&spec.exec, &spec.run, &spec.eval].into_iter().flatten() {
-        strings.extend(action_values(action));
+fn walk_command_chains<'a>(
+    commands: &'a BTreeMap<String, CommandEntry>,
+    path: &mut Vec<String>,
+    chain: &mut Vec<&'a CommandEntry>,
+    visit: &mut impl FnMut(&[String], &[&'a CommandEntry]),
+) {
+    for (name, entry) in commands {
+        path.push(name.clone());
+        chain.push(entry);
+        visit(path, chain);
+        if let Some(children) = entry.subcommands() {
+            walk_command_chains(children, path, chain, visit);
+        }
+        chain.pop();
+        path.pop();
     }
-    strings.extend([
-        spec.before.as_str(),
-        spec.check.as_str(),
-        spec.shell.as_str(),
-        spec.placeholder.as_str(),
-    ]);
-    strings.extend(spec.compute.values().map(String::as_str));
-    strings.extend(spec.macros.keys().map(String::as_str));
-    strings.extend(spec.macros.values().map(String::as_str));
-    runner_strings(&spec.runner, &mut strings);
-    runner_strings(&spec.fallback_runner, &mut strings);
-    strings
 }
 
-fn runner_strings<'a>(runner: &'a RunnerSetting, output: &mut Vec<&'a str>) {
+fn runner_strings(runner: &RunnerSetting, output: &mut Vec<(Option<&str>, String)>) {
     match runner {
-        RunnerSetting::Text(value) => output.push(value),
+        RunnerSetting::Text(value) => output.push((None, value.clone())),
         RunnerSetting::Container(container) => {
-            output.push(&container.image);
+            output.push((None, container.image.clone()));
             if let Some(value) = &container.command {
-                output.push(value);
+                output.push((None, value.clone()));
             }
             if let Some(value) = &container.working_dir {
-                output.push(value);
+                output.push((None, value.clone()));
             }
             if let Some(value) = &container.user {
-                output.push(value);
+                output.push((None, value.clone()));
             }
             if let Some(value) = &container.network {
-                output.push(value);
+                output.push((None, value.clone()));
             }
             if let Some(value) = &container.network_mode {
-                output.push(value);
+                output.push((None, value.clone()));
             }
-            output.extend(container.volumes.iter().flatten().map(String::as_str));
-            output.extend(container.environment.values().map(String::as_str));
-            output.extend(container.args.iter().map(String::as_str));
+            output.extend(
+                container
+                    .volumes
+                    .iter()
+                    .flatten()
+                    .cloned()
+                    .map(|value| (None, value)),
+            );
+            output.extend(
+                container
+                    .environment
+                    .values()
+                    .cloned()
+                    .map(|value| (None, value)),
+            );
+            output.extend(container.args.iter().cloned().map(|value| (None, value)));
         }
-    }
-}
-
-fn action_values(action: &CommandAction) -> Vec<&str> {
-    match action {
-        CommandAction::Single(value) => vec![value],
-        CommandAction::Multiple(values) => values.iter().map(String::as_str).collect(),
     }
 }
 
@@ -826,4 +970,120 @@ fn line_for_key(text: &str, key: &str) -> usize {
         }
     }
     1
+}
+
+fn line_for_command(text: &str, path: &[String]) -> usize {
+    let mut yaml_path = vec!["commands".to_string()];
+    for (index, name) in path.iter().enumerate() {
+        yaml_path.push(name.clone());
+        if index + 1 < path.len() {
+            yaml_path.push("commands".to_string());
+        }
+    }
+    line_for_yaml_path(text, &yaml_path).unwrap_or_else(|| {
+        path.last()
+            .map_or(1, |name| line_for_key(text, name.as_str()))
+    })
+}
+
+fn line_for_command_field(text: &str, path: &[String], field: &str) -> usize {
+    let mut yaml_path = vec!["commands".to_string()];
+    for name in path {
+        yaml_path.push(name.clone());
+        yaml_path.push("commands".to_string());
+    }
+    yaml_path.pop();
+    yaml_path.push(field.to_string());
+    line_for_yaml_path(text, &yaml_path).unwrap_or_else(|| line_for_key(text, field))
+}
+
+fn line_for_json_pointer(text: &str, pointer: &str, extra_key: Option<&str>) -> usize {
+    let mut path: Vec<String> = pointer
+        .split('/')
+        .skip(1)
+        .map(|part| part.replace("~1", "/").replace("~0", "~"))
+        .collect();
+    if let Some(key) = extra_key {
+        path.push(key.to_string());
+    }
+    line_for_yaml_path(text, &path).unwrap_or_else(|| {
+        extra_key
+            .or_else(|| {
+                path.iter()
+                    .rev()
+                    .find(|part| !part.chars().all(|character| character.is_ascii_digit()))
+                    .map(String::as_str)
+            })
+            .map_or(1, |key| line_for_key(text, key))
+    })
+}
+
+fn line_for_yaml_path(text: &str, path: &[String]) -> Option<usize> {
+    if path.is_empty() {
+        return Some(1);
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let mut start = 0;
+    let mut end = lines.len();
+    let mut parent_indent: Option<usize> = None;
+
+    for (path_index, key) in path.iter().enumerate() {
+        let mut found: Option<(usize, usize)> = None;
+        for (index, line) in lines.iter().enumerate().take(end).skip(start) {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let indent = line.len() - trimmed.len();
+            if parent_indent.is_some_and(|parent| indent <= parent) {
+                continue;
+            }
+            if yaml_key(trimmed) == Some(key.as_str())
+                && found.is_none_or(|(_, found_indent)| indent < found_indent)
+            {
+                found = Some((index, indent));
+            }
+        }
+        let (index, indent) = found?;
+        start = index + 1;
+        end = lines
+            .iter()
+            .enumerate()
+            .take(end)
+            .skip(start)
+            .find_map(|(next, line)| {
+                let trimmed = line.trim_start();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    return None;
+                }
+                let next_indent = line.len() - trimmed.len();
+                (next_indent <= indent).then_some(next)
+            })
+            .unwrap_or(end);
+        parent_indent = Some(indent);
+
+        if path_index + 1 == path.len() {
+            return Some(index + 1);
+        }
+    }
+    None
+}
+
+fn yaml_key(line: &str) -> Option<&str> {
+    let line = line.strip_prefix("- ").unwrap_or(line);
+    if let Some(quote) = line
+        .chars()
+        .next()
+        .filter(|quote| matches!(quote, '\'' | '"'))
+    {
+        let rest = &line[quote.len_utf8()..];
+        if let Some(end) = rest.find(quote) {
+            let after = rest[end + quote.len_utf8()..].trim_start();
+            if after.starts_with(':') {
+                return Some(&rest[..end]);
+            }
+        }
+    }
+    let (candidate, _) = line.split_once(':')?;
+    Some(candidate.trim().trim_matches(['\'', '"']))
 }
