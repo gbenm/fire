@@ -27,8 +27,9 @@ The server's instructions are a short decision guide, on one line with the criti
 4. Long-running (`long_running: true`, or it doesn't exit on its own): `start_session` with a
    note, then `session_output`. Finite (build, test, lint): `run_command`.
 5. Manage sessions with `session_output`, `send_input`, `signal_session`, `stop_session` and
-   `forget_session`; never run `agents: false` commands; use `get_docs` to write configs; change
-   global directories only when the user asks.
+   `forget_session`; never run `agents: false` commands; if the project has no config, use
+   `init_project`, then use `get_docs` to edit it; change global directories only when the user
+   asks.
 
 Tool descriptions say what each tool does and when to use it. Hints meant for you stay here:
 attach to any agent's session with `fire cli fg <id>` (list them with `fire cli ps`), and start
@@ -129,6 +130,15 @@ your config or type `fire deploy prod`. To hard-block that, also add a deny rule
 own permissions (for example, in Claude Code: `"deny": ["Bash(fire deploy:*)"]`).
 
 ## Tools
+
+### `init_project`
+Creates a minimal config in the required `cwd`. Optional `file`, `namespace`, and `group` values
+use the same template and naming convention as `fire cli init` and are preserved exactly. The
+structured result includes `ok`, the absolute `path`, and an `error` on failure. It never
+overwrites: if the target exists, the result names that path. After creation, call `get_docs` for
+the format and schema, edit the file, then pass the same `cwd` to `search_commands`; changes are
+discovered immediately. Global registration is separate and should only happen when the user
+asks.
 
 ### `get_docs`
 Omit `topic` to return the complete index of embedded documentation. Pass one of the topic ids

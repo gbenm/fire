@@ -81,6 +81,10 @@ commands:
   hello: echo "Hello Fire"
 ```
 
+For scripts, `fire cli init --yes` accepts defaults without prompting. Use `--file`,
+`--namespace`, `--namespace-description`, and `--group` to set values; an existing file is only
+replaced when `--force` is explicit. When stdin is not a terminal, defaults are automatic.
+
 > **Tip:** already have `package.json` scripts, a `Makefile`, a `justfile` or a `compose.yml`?
 > Ask your coding agent to write the initial config for you, for example:
 > *"Create a fire.yaml for this project from its existing scripts. Use the schema in the

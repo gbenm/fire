@@ -1,5 +1,4 @@
-//! End-to-end tests for `fire cli init` (#48): the file it writes, its name and how it sits
-//! next to an existing config.
+//! End-to-end tests for `fire cli init`: interactive and scriptable initialization.
 
 #![cfg(unix)]
 
@@ -15,22 +14,10 @@ fn empty_project(name: &str) -> Project {
     project
 }
 
-/// Runs `fire cli init` answering its prompts (base name, namespace prefix, group) with `answers`.
-fn init(project: &Project, answers: &str) -> String {
-    let mut child = project
-        .fire(&["cli", "init"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn fire cli init");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(answers.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
+fn init(project: &Project, args: &[&str]) -> String {
+    let mut command = vec!["cli", "init"];
+    command.extend_from_slice(args);
+    let output = project.fire(&command).output().unwrap();
     assert!(output.status.success(), "{output:?}");
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -49,7 +36,7 @@ fn schema_errors(yaml: &str) -> Vec<String> {
 #[test]
 fn writes_fire_yaml_with_document_start() {
     let project = empty_project("init-default");
-    init(&project, "\n\n\n");
+    init(&project, &["--yes"]);
 
     assert!(!project.dir.join("fire.yml").exists());
     let yaml = fs::read_to_string(project.dir.join("fire.yaml")).expect("fire.yaml written");
@@ -69,7 +56,20 @@ fn writes_fire_yaml_with_document_start() {
 #[test]
 fn base_name_gets_yaml_and_namespace_validates() {
     let project = empty_project("init-base");
-    init(&project, "backend\nex\nExample\napi\n");
+    init(
+        &project,
+        &[
+            "--file",
+            "backend",
+            "--namespace",
+            "ex",
+            "--namespace-description",
+            "Example",
+            "--group",
+            "api",
+            "--yes",
+        ],
+    );
 
     let yaml = fs::read_to_string(project.dir.join("backend.fire.yaml")).expect("file written");
     assert!(yaml.contains("---\nnamespace:"), "{yaml}");
@@ -79,7 +79,7 @@ fn base_name_gets_yaml_and_namespace_validates() {
 #[test]
 fn explicit_yml_extension_is_kept() {
     let project = empty_project("init-yml");
-    init(&project, "backend.fire.yml\n\n\n");
+    init(&project, &["--file", "backend.fire.yml", "--yes"]);
 
     assert!(project.dir.join("backend.fire.yml").exists());
     assert!(!project.dir.join("backend.fire.yaml").exists());
@@ -88,7 +88,7 @@ fn explicit_yml_extension_is_kept() {
 #[test]
 fn notes_an_existing_file_with_the_other_extension() {
     let project = Project::new("init-sibling", "commands:\n  old: echo old\n");
-    let stdout = init(&project, "\n\n\n");
+    let stdout = init(&project, &["--yes"]);
 
     assert!(stdout.contains("'fire.yml' also exists here"), "{stdout}");
     // both files are loaded
@@ -96,4 +96,105 @@ fn notes_an_existing_file_with_the_other_extension() {
     assert!(output.status.success(), "{output:?}");
     let output = project.fire(&["example"]).output().unwrap();
     assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn prompts_by_default_on_a_tty() {
+    let project = empty_project("init-tty");
+    let path = project.dir.join("frontend.fire.yaml");
+    fs::write(&path, "sentinel\n").unwrap();
+    let (mut child, mut terminal, output) = spawn_in_pty(project.fire(&["cli", "init"]));
+    wait_for_output(&output, "Base file name");
+    terminal.write_all(b"frontend\n").unwrap();
+    wait_for_output(&output, "Namespace prefix");
+    terminal.write_all(b"web\n").unwrap();
+    wait_for_output(&output, "Namespace description");
+    terminal.write_all(b"Web tools\n").unwrap();
+    wait_for_output(&output, "Command group");
+    terminal.write_all(b"ui\n").unwrap();
+
+    assert_eq!(wait_for_exit(&mut child), 1);
+    let terminal_output = output.lock().unwrap();
+    assert!(!terminal_output.contains("Overwrite?"), "{terminal_output}");
+    assert!(terminal_output.contains("--force"), "{terminal_output}");
+    assert_eq!(fs::read_to_string(path).unwrap(), "sentinel\n");
+}
+
+#[test]
+fn yes_uses_defaults_without_reading_stdin() {
+    let project = empty_project("init-yes");
+    let output = project
+        .fire(&["cli", "init", "--yes"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("run non-interactive init");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(project.dir.join("fire.yaml").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Base file name"), "{stdout}");
+}
+
+#[test]
+fn non_tty_uses_defaults_without_yes() {
+    let project = empty_project("init-no-tty");
+    let output = project
+        .fire(&["cli", "init"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("run init without a tty");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(project.dir.join("fire.yaml").exists());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Base file name"));
+}
+
+#[test]
+fn flags_preserve_values_and_force_is_required_to_overwrite() {
+    let project = empty_project("init-flags");
+    let args = [
+        "cli",
+        "init",
+        "--file",
+        "backend",
+        "--namespace",
+        "team:\none",
+        "--namespace-description",
+        "  Team's tools  ",
+        "--group",
+        "api\tops",
+        "--yes",
+    ];
+    let created = project.fire(&args).output().expect("create config");
+    assert!(created.status.success(), "{created:?}");
+    let path = project.dir.join("backend.fire.yaml");
+    let yaml = fs::read_to_string(&path).expect("scripted config");
+    let parsed: serde_json::Value = yaml_serde::from_str(&yaml).unwrap();
+    assert_eq!(parsed["namespace"]["prefix"], "team:\none");
+    assert_eq!(parsed["namespace"]["description"], "  Team's tools  ");
+    assert_eq!(parsed["group"], "api\tops");
+
+    fs::write(&path, "sentinel\n").unwrap();
+    let refused = project.fire(&args).output().expect("refuse overwrite");
+    assert!(!refused.status.success(), "{refused:?}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "sentinel\n");
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("--force"));
+
+    let forced = project
+        .fire(&[
+            "cli",
+            "init",
+            "--file",
+            "backend",
+            "--group",
+            "replacement",
+            "--yes",
+            "--force",
+        ])
+        .output()
+        .expect("force overwrite");
+    assert!(forced.status.success(), "{forced:?}");
+    assert!(fs::read_to_string(path)
+        .unwrap()
+        .contains("group: \"replacement\""));
 }

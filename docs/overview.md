@@ -26,6 +26,16 @@ Fire loads YAML files from the current working directory using these patterns:
 
 `.yaml` and `.yml` are equivalent; `fire cli init` writes `.yaml` unless you type a `.yml` name.
 
+`fire cli init` prompts when run in a terminal. For scripts, pass `--yes` (or redirect stdin) to
+use defaults without prompting:
+
+```text
+fire cli init [--file <base>] [--namespace <prefix>] [--namespace-description <text>] [--group <name>] [--yes] [--force]
+```
+
+`--file backend` creates `backend.fire.yaml`; an explicit `.yml` suffix is kept. Existing files
+are refused unless `--force` is passed, including in interactive use.
+
 Merge rules:
 1) `fire.yaml` / `fire.yml` (base)  
 2) `*.fire.yaml` / `*.fire.yml` in lexicographic order  

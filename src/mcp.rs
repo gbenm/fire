@@ -251,6 +251,18 @@ struct GetDocsRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct InitProjectRequest {
+    /// Project directory in which to create the config. Relative paths use the server's directory.
+    cwd: String,
+    /// Config base name. Omit for `fire.yaml`; other names become `<base>.fire.yaml`.
+    file: Option<String>,
+    /// Optional namespace prefix, preserved exactly.
+    namespace: Option<String>,
+    /// Optional command group, preserved exactly.
+    group: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct RunCommandRequest {
     /// Exact command path returned by `search_commands`, including the leading `fire`.
     path: String,
@@ -463,6 +475,15 @@ struct RunCommandResult {
     timed_out: bool,
     stdout_truncated: bool,
     stderr_truncated: bool,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct InitProjectResult {
+    ok: bool,
+    /// Absolute path of the created config, or of the existing file that prevented creation.
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 const RUN_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
@@ -769,6 +790,42 @@ impl FireMcpServer {
                 }),
             None => crate::docs::index(),
         }
+    }
+
+    #[tool(
+        description = "Create a minimal Fire config in a project, then use `get_docs` to edit it. `cwd` is required; `file`, `namespace`, and `group` are optional and their values are preserved exactly. The file uses the same template and naming convention as `fire cli init`. Never overwrites an existing file; a refusal returns that file's path. The created config is available to `search_commands` immediately when called with the same `cwd`."
+    )]
+    fn init_project(
+        &self,
+        Parameters(InitProjectRequest {
+            cwd,
+            file,
+            namespace,
+            group,
+        }): Parameters<InitProjectRequest>,
+    ) -> Json<InitProjectResult> {
+        let cwd = requested_cwd(Some(&cwd));
+        Json(
+            match crate::cli::init_project(
+                &cwd,
+                file.as_deref(),
+                namespace.as_deref(),
+                None,
+                group.as_deref(),
+                false,
+            ) {
+                Ok(path) => InitProjectResult {
+                    ok: true,
+                    path: path.display().to_string(),
+                    error: None,
+                },
+                Err(failure) => InitProjectResult {
+                    ok: false,
+                    path: failure.path.display().to_string(),
+                    error: Some(failure.error),
+                },
+            },
+        )
     }
 
     #[tool(
@@ -1089,7 +1146,7 @@ Sessions are shared with the user and other agents: read output with `session_ou
 `send_input`, signal with `signal_session`, stop (or stop then start to restart) with `stop_session`, \
 remove an exited record with `forget_session`. \
 Never run commands the user marked `agents: false`, not even through your own shell. \
-To write or edit fire configs, use `get_docs`. Change global directories (`*_global` tools) only \
+If this project has no fire config, create one with `init_project`; to write or edit fire configs, use `get_docs`. Change global directories (`*_global` tools) only \
 when the user asks. https://github.com/gbenm/fire";
 
 #[tool_handler(router = self.tool_router)]

@@ -6,6 +6,10 @@ reconstructed from the git history.
 
 ## [Unreleased]
 
+### Added
+- Scriptable `fire cli init` flags and MCP `init_project`, with explicit `--force` required for
+  CLI overwrites and no overwrites through MCP. (#47)
+
 ## [3.0.1] - 2026-11-22
 
 ### Fixed

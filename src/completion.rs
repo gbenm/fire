@@ -207,6 +207,10 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         return Some(core_cli_ps_flags(&path[2..], prefix));
     }
 
+    if path.len() >= 2 && path[1] == "init" {
+        return Some(core_cli_init_flags(&path[2..], prefix));
+    }
+
     if path.len() >= 2 && path[1] == "global" {
         return Some(core_cli_global_children(&path[2..], prefix));
     }
@@ -360,6 +364,36 @@ fn core_cli_ps_flags(typed: &[String], prefix: &str) -> Vec<CompletionSuggestion
             description: Some(description.to_string()),
         })
         .collect()
+}
+
+fn core_cli_init_flags(typed: &[String], prefix: &str) -> Vec<CompletionSuggestion> {
+    const VALUE_FLAGS: [&str; 4] = [
+        "--file",
+        "--namespace",
+        "--namespace-description",
+        "--group",
+    ];
+    if typed
+        .last()
+        .is_some_and(|value| VALUE_FLAGS.contains(&value.as_str()))
+    {
+        return Vec::new();
+    }
+    [
+        ("--file", "Config base name"),
+        ("--namespace", "Namespace prefix"),
+        ("--namespace-description", "Namespace description"),
+        ("--group", "Command group"),
+        ("--yes", "Use defaults without prompting"),
+        ("--force", "Overwrite the target file if it exists"),
+    ]
+    .into_iter()
+    .filter(|(flag, _)| flag.starts_with(prefix) && !typed.iter().any(|arg| arg == flag))
+    .map(|(flag, description)| CompletionSuggestion {
+        value: flag.to_string(),
+        description: Some(description.to_string()),
+    })
+    .collect()
 }
 
 /// Arguments of `fire cli fg/send/kill/logs`: session ids (running ones only where an ended
@@ -1325,6 +1359,27 @@ commands:
             vec!["add", "remove", "list", "prune", "edit", "merge", "unmerge"]
         );
         assert!(values.iter().all(|it| it.description.is_some()));
+    }
+
+    #[test]
+    fn core_cli_init_completes_unset_flags_and_not_their_values() {
+        let config = config_with_scopes();
+        assert_eq!(
+            names(&config, &["cli", "init", "-"]),
+            vec![
+                "--file",
+                "--namespace",
+                "--namespace-description",
+                "--group",
+                "--yes",
+                "--force"
+            ]
+        );
+        assert!(names(&config, &["cli", "init", "--file", ""]).is_empty());
+        assert_eq!(
+            names(&config, &["cli", "init", "--yes", "--f"]),
+            vec!["--file", "--force"]
+        );
     }
 
     #[test]

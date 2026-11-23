@@ -277,6 +277,61 @@ commands:
     );
 }
 
+#[test]
+fn init_project_creates_a_discoverable_config_and_never_overwrites() {
+    let project = Project::new("mcp-init", "");
+    fs::remove_file(project.dir.join("fire.yml")).unwrap();
+    let server_dir = project.dir.join("home");
+    let target = project.dir.join("new-project");
+    fs::create_dir(&target).unwrap();
+    let mut mcp = McpClient::start_in(&project, &server_dir);
+
+    let initialized = mcp.call(
+        "init_project",
+        json!({
+            "cwd": target.display().to_string(),
+            "file": "backend.yml",
+            "namespace": "exact:namespace",
+            "group": "api ops"
+        }),
+    );
+    let structured = &initialized["structuredContent"];
+    assert_eq!(structured["ok"], true, "{initialized}");
+    let expected = target
+        .canonicalize()
+        .expect("canonical target")
+        .join("backend.fire.yml");
+    assert_eq!(structured["path"], expected.display().to_string());
+    let yaml = fs::read_to_string(&expected).expect("initialized config");
+    assert!(yaml.contains("prefix: \"exact:namespace\""), "{yaml}");
+    assert!(yaml.contains("group: \"api ops\""), "{yaml}");
+
+    let found = text_json(&mcp.call(
+        "search_commands",
+        json!({ "cwd": target.display().to_string() }),
+    ));
+    assert_eq!(found[0]["path"], "fire exact:namespace api ops example");
+
+    fs::write(&expected, "sentinel\n").unwrap();
+    let refused = mcp.call(
+        "init_project",
+        json!({
+            "cwd": target.display().to_string(),
+            "file": "backend.yml"
+        }),
+    );
+    assert_eq!(refused["structuredContent"]["ok"], false, "{refused}");
+    assert_eq!(
+        refused["structuredContent"]["path"],
+        expected.display().to_string()
+    );
+    assert!(refused["structuredContent"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("already exists"));
+    assert_eq!(fs::read_to_string(expected).unwrap(), "sentinel\n");
+}
+
 impl Drop for McpClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -322,6 +377,18 @@ commands:
         .expect("topic enum");
     assert!(topics.iter().any(|topic| topic == "overview"));
     assert!(topics.iter().any(|topic| topic == "schema"));
+    let init_project = tools
+        .iter()
+        .find(|tool| tool["name"] == "init_project")
+        .expect("init_project tool");
+    assert!(init_project["inputSchema"]["required"]
+        .as_array()
+        .expect("required fields")
+        .iter()
+        .any(|field| field == "cwd"));
+    assert!(init_project["outputSchema"]["properties"]
+        .get("path")
+        .is_some());
     let start = tools
         .iter()
         .find(|tool| tool["name"] == "start_session")

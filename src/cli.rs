@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
     process,
     process::Command,
@@ -14,7 +14,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
         [cli, global, rest @ ..] if cli == "cli" && global == "global" => {
             crate::global::handle(rest)
         }
-        [cli, init] if cli == "cli" && init == "init" => run_init(),
+        [cli, init, rest @ ..] if cli == "cli" && init == "init" => run_init(rest),
         [cli, docs] if cli == "cli" && docs == "docs" => crate::docs::handle_cli(None),
         [cli, docs, topic] if cli == "cli" && docs == "docs" => {
             crate::docs::handle_cli(Some(topic))
@@ -81,65 +81,189 @@ fn run_mcp() {
     }
 }
 
-fn run_init() {
+#[derive(Default)]
+struct InitArgs {
+    file: Option<String>,
+    namespace: Option<String>,
+    namespace_description: Option<String>,
+    group: Option<String>,
+    yes: bool,
+    force: bool,
+}
+
+fn run_init(args: &[String]) {
+    let mut args = parse_init_args(args).unwrap_or_else(|err| {
+        eprintln!("[fire] {err}");
+        eprintln!("Usage: {}", init_usage());
+        process::exit(1);
+    });
+    let interactive = !args.yes && io::stdin().is_terminal();
+
     println!("Fire CLI Init");
     println!("----------------------------------------");
     println!("Create a minimal fire config file for this directory.");
     println!();
 
-    let base_name = prompt_base_file_name();
-    let file_name = file_name_from_base(&base_name);
-
-    println!();
-    println!("Namespace");
-    println!("A namespace can separate companies or a full product/service.");
-    let namespace_prefix = prompt_line("Namespace prefix (optional):");
-
-    let namespace_description = if namespace_prefix.is_empty() {
-        String::new()
-    } else {
-        prompt_non_empty_line("Namespace description:")
-    };
-
-    println!();
-    println!("Group");
-    println!("A group can separate areas like backend, frontend, or data.");
-    let group = prompt_line("Command group (optional):");
-
-    let output_path = PathBuf::from(&file_name);
-    if output_path.exists() && !confirm_overwrite(&file_name) {
-        println!("Init cancelled. File not modified.");
-        return;
+    if interactive && args.file.is_none() {
+        args.file = Some(prompt_base_file_name());
     }
 
-    let content = build_init_yaml(
-        non_empty(&namespace_prefix),
-        non_empty(&namespace_description),
-        non_empty(&group),
-    );
+    if interactive && args.namespace.is_none() {
+        println!();
+        println!("Namespace");
+        println!("A namespace can separate companies or a full product/service.");
+        args.namespace = Some(prompt_line("Namespace prefix (optional):"));
+    }
 
-    if let Some(sibling) = sibling_with_other_extension(&file_name) {
+    if interactive
+        && args
+            .namespace
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+        && args.namespace_description.is_none()
+    {
+        args.namespace_description = Some(prompt_non_empty_line("Namespace description:"));
+    }
+
+    if interactive && args.group.is_none() {
+        println!();
+        println!("Group");
+        println!("A group can separate areas like backend, frontend, or data.");
+        args.group = Some(prompt_line("Command group (optional):"));
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let output_path = match init_project(
+        &cwd,
+        args.file.as_deref(),
+        args.namespace.as_deref(),
+        args.namespace_description.as_deref(),
+        args.group.as_deref(),
+        args.force,
+    ) {
+        Ok(path) => path,
+        Err(failure) => {
+            eprintln!(
+                "[fire] {}{}",
+                failure.error,
+                if failure.already_exists {
+                    "; pass --force to overwrite it"
+                } else {
+                    ""
+                }
+            );
+            process::exit(1);
+        }
+    };
+
+    let file_name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if let Some(sibling) = sibling_with_other_extension(&cwd, file_name) {
         println!(
             "Note: '{sibling}' also exists here. Fire loads both files, and a command defined in both is reported as a duplicate."
         );
     }
 
-    if let Err(err) = fs::write(&output_path, content) {
-        eprintln!("[fire] Failed to write {}: {err}", output_path.display());
-        process::exit(1);
-    }
-
     println!();
-    println!("Created {}", output_path.display());
+    println!("Created {file_name}");
     println!("Try it with:");
     println!("  fire example");
+}
+
+fn init_usage() -> &'static str {
+    "fire cli init [--file <base>] [--namespace <prefix>] [--namespace-description <text>] [--group <name>] [--yes] [--force]"
+}
+
+fn parse_init_args(values: &[String]) -> Result<InitArgs, String> {
+    let mut args = InitArgs::default();
+    let mut index = 0;
+    while index < values.len() {
+        let flag = values[index].as_str();
+        match flag {
+            "--yes" => args.yes = true,
+            "--force" => args.force = true,
+            "--file" | "--namespace" | "--namespace-description" | "--group" => {
+                index += 1;
+                let value = values
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| format!("{flag} requires a value"))?;
+                let slot = match flag {
+                    "--file" => &mut args.file,
+                    "--namespace" => &mut args.namespace,
+                    "--namespace-description" => &mut args.namespace_description,
+                    _ => &mut args.group,
+                };
+                if slot.replace(value).is_some() {
+                    return Err(format!("{flag} may only be passed once"));
+                }
+            }
+            _ => return Err(format!("Unknown init option `{flag}`")),
+        }
+        index += 1;
+    }
+    if args.namespace.as_deref().is_none_or(str::is_empty)
+        && args
+            .namespace_description
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+    {
+        return Err("--namespace-description requires --namespace".to_string());
+    }
+    Ok(args)
+}
+
+pub(crate) struct InitFailure {
+    pub(crate) path: PathBuf,
+    pub(crate) error: String,
+    pub(crate) already_exists: bool,
+}
+
+pub(crate) fn init_project(
+    cwd: &Path,
+    file: Option<&str>,
+    namespace: Option<&str>,
+    namespace_description: Option<&str>,
+    group: Option<&str>,
+    force: bool,
+) -> Result<PathBuf, InitFailure> {
+    let base = file.unwrap_or_default();
+    let normalized = strip_known_yaml_suffixes(base);
+    if !base.is_empty() && !is_valid_file_base(normalized) {
+        return Err(InitFailure {
+            path: cwd.join(base),
+            error: format!("Invalid file base `{base}`. Use letters, numbers, '-' or '_' only."),
+            already_exists: false,
+        });
+    }
+    let output_path = cwd.join(file_name_from_base(base));
+    if output_path.exists() && !force {
+        return Err(InitFailure {
+            error: format!("{} already exists", output_path.display()),
+            path: output_path,
+            already_exists: true,
+        });
+    }
+    let content = build_init_yaml(
+        optional_non_empty(namespace),
+        optional_non_empty(namespace_description),
+        optional_non_empty(group),
+    );
+    fs::write(&output_path, content).map_err(|err| InitFailure {
+        error: format!("Failed to write {}: {err}", output_path.display()),
+        path: output_path.clone(),
+        already_exists: false,
+    })?;
+    Ok(output_path)
 }
 
 fn print_cli_help() {
     println!("Fire CLI Management v{}", crate::FIRE_VERSION);
     println!("Commands:");
     println!("  global   Register directories so their commands load from anywhere (add, remove, list, prune, edit)");
-    println!("  init     Create a minimal fire config file with guided prompts");
+    println!("  init     Create a minimal fire config file (flags: --yes, --force; see docs)");
     println!("  docs     List or read the documentation embedded in this fire version");
     println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");
     println!("  completion  Manage shell completion scripts");
@@ -233,13 +357,6 @@ fn prompt_line(label: &str) -> String {
     value.trim().to_string()
 }
 
-fn confirm_overwrite(file_name: &str) -> bool {
-    let answer = prompt_line(&format!(
-        "File '{file_name}' already exists. Overwrite? [y/N]:"
-    ));
-    matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes")
-}
-
 fn strip_known_yaml_suffixes(value: &str) -> &str {
     value
         .strip_suffix(".fire.yml")
@@ -275,13 +392,13 @@ fn file_name_from_base(base: &str) -> String {
 }
 
 /// The same config file with the other YAML extension, if it exists.
-fn sibling_with_other_extension(file_name: &str) -> Option<String> {
+fn sibling_with_other_extension(cwd: &Path, file_name: &str) -> Option<String> {
     let other = if let Some(stem) = file_name.strip_suffix(".yaml") {
         format!("{stem}.yml")
     } else {
         format!("{}.yaml", file_name.strip_suffix(".yml")?)
     };
-    Path::new(&other).exists().then_some(other)
+    cwd.join(&other).exists().then_some(other)
 }
 
 fn build_init_yaml(
@@ -323,17 +440,11 @@ fn build_init_yaml(
 }
 
 fn yaml_quote(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
+    serde_json::to_string(value).expect("strings always serialize as JSON/YAML scalars")
 }
 
-fn non_empty(value: &str) -> Option<&str> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
+fn optional_non_empty(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.is_empty())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
