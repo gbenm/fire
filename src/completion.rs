@@ -1195,7 +1195,9 @@ commands:
                 "--note",
                 "--fg",
                 "--dry-run",
-                "--no-log"
+                "--no-log",
+                "-j",
+                "--jobs"
             ]
         );
         assert!(values.iter().all(|it| it.description.is_some()));
@@ -1222,9 +1224,10 @@ commands:
         let config = config_with_scopes();
         assert!(names(&config, &["--bg", "-m", ""]).is_empty());
         assert!(names(&config, &["--note", "d"]).is_empty());
+        assert!(names(&config, &["--jobs", ""]).is_empty());
         assert_eq!(
             names(&config, &["--bg", "--"]),
-            vec!["--new", "--note", "--dry-run", "--no-log"]
+            vec!["--new", "--note", "--dry-run", "--no-log", "--jobs"]
         );
         assert_eq!(names(&config, &["--fg", "--n"]), vec!["--no-log"]);
     }

@@ -352,7 +352,10 @@ fn discovery_and_session_lifecycle_match_the_mcp_contract() {
         "mcp-contract",
         r#"
 commands:
+  prepare:
+    exec: echo prepare
   build:
+    needs: [prepare]
     placeholder: "@{n}"
     exec: echo build @1
   server:
@@ -422,7 +425,7 @@ commands:
     );
 
     let found = text_json(&mcp.call("search_commands", json!({})));
-    assert_eq!(found.as_array().expect("command matches").len(), 2);
+    assert_eq!(found.as_array().expect("command matches").len(), 3);
     let build = found
         .as_array()
         .unwrap()
@@ -435,6 +438,7 @@ commands:
         .unwrap_or_else(|| panic!("build command in {found}"));
     assert_eq!(build["source"], "local");
     assert_eq!(build["placeholder"], "@{n}");
+    assert_eq!(build["needs"], json!(["prepare"]));
     assert!(build.get("exec").is_none());
     assert!(build.get("eval").is_none());
 

@@ -14,10 +14,17 @@ use serde::Deserialize;
 
 use crate::config::{DirSetting, EnvFileSetting, RunnerSetting, RuntimeConfig};
 use crate::container;
+use crate::dependencies::DependencyPlan;
 use crate::env;
 use crate::resolve::ResolvedCommand;
 
-pub(crate) fn execute_resolved_command(resolved: ResolvedCommand<'_>) -> ! {
+pub(crate) fn execute_resolved_command(
+    resolved: ResolvedCommand<'_>,
+    dependency_plan: DependencyPlan,
+) -> ! {
+    if let Err(code) = crate::dependencies::execute(&dependency_plan) {
+        process::exit(code);
+    }
     let context = build_execution_context(&resolved);
     ensure_working_directory(&context.dir);
 

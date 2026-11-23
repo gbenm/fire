@@ -28,6 +28,18 @@ fn namespace_accepts_prefix_string() {
 }
 
 #[test]
+fn command_dependencies_and_parallel_validate() {
+    let errs = errors(
+        "commands:\n  lint: cargo clippy\n  test:\n    needs: [lint]\n    parallel: true\n    exec: cargo test\n",
+    );
+    assert!(errs.is_empty(), "{errs:?}");
+    assert!(!errors(
+        "commands:\n  test:\n    needs: lint\n    parallel: yes\n    exec: cargo test\n"
+    )
+    .is_empty());
+}
+
+#[test]
 fn namespace_prefix_is_required() {
     let errs = errors("namespace:\n  description: Tools\ncommands:\n  hi: echo hi\n");
     assert!(!errs.is_empty());

@@ -39,6 +39,8 @@ pub(crate) struct CommandNode {
     pub(crate) exec: Option<Vec<String>>,
     pub(crate) eval: Option<Vec<String>>,
     pub(crate) placeholder: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) needs: Vec<String>,
     /// Server, watcher or worker: run it with `start_session`, not in your own shell.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) long_running: bool,
@@ -57,6 +59,8 @@ pub(crate) struct CommandMatch {
     pub(crate) source: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) placeholder: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) needs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) exec: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -161,6 +165,7 @@ fn build_node(
         exec: entry.execution_commands(),
         eval: entry.evaluation_expressions(),
         placeholder: entry.spec().and_then(|spec| non_empty(&spec.placeholder)),
+        needs: entry.needs().to_vec(),
         long_running: long_running == Some(true),
         subcommands,
         command: path_tokens.to_vec(),
@@ -198,6 +203,7 @@ fn collect_matches(
             runnable: node.runnable,
             source: node.source,
             placeholder: node.placeholder.clone(),
+            needs: node.needs.clone(),
             exec: include_exec.then(|| node.exec.clone()).flatten(),
             eval: include_exec.then(|| node.eval.clone()).flatten(),
             long_running: node.long_running,

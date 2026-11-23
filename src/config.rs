@@ -68,6 +68,12 @@ pub(crate) struct CommandSpec {
     pub(crate) description: String,
     #[serde(default)]
     pub(crate) before: String,
+    /// Fire command paths that must complete before this command.
+    #[serde(default)]
+    pub(crate) needs: Vec<String>,
+    /// Run this command's `needs` concurrently.
+    #[serde(default)]
+    pub(crate) parallel: bool,
     #[serde(default)]
     pub(crate) placeholder: String,
     #[serde(default)]
@@ -542,6 +548,17 @@ impl CommandEntry {
                 .or(spec.run.as_ref())
                 .map(CommandAction::as_vec),
         }
+    }
+
+    pub(crate) fn needs(&self) -> &[String] {
+        match self {
+            CommandEntry::Shorthand(_) => &[],
+            CommandEntry::Spec(spec) => &spec.needs,
+        }
+    }
+
+    pub(crate) fn parallel_needs(&self) -> bool {
+        matches!(self, CommandEntry::Spec(spec) if spec.parallel)
     }
 
     pub(crate) fn is_runnable(&self) -> bool {

@@ -297,6 +297,16 @@
           "type": "string",
           "description": "Command executed before the main action."
         },
+        "needs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Whitespace-separated Fire command paths in this file's scope that must complete first. Each dependency runs once per invocation, receives no user arguments, and runs before `before`. Long-running commands are not allowed."
+        },
+        "parallel": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run this command's `needs` concurrently, bounded by -j/--jobs or FIRE_JOBS. Output is prefixed by command path and the first failure cancels the rest."
+        },
         "description": {
           "type": "string",
           "description": "Short user-facing description shown in listings and completion."

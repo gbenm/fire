@@ -7,6 +7,8 @@ reconstructed from the git history.
 ## [Unreleased]
 
 ### Added
+- Command dependencies with scoped `needs`, deduplication, cycle and long-running checks,
+  fail-fast execution, parallel output prefixes, and `-j`/`FIRE_JOBS` concurrency limits. (#55)
 - `fire cli mcp install [<host>]` and `fire cli mcp uninstall <host>` register and remove the MCP
   server for Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI, and Windsurf. (#53)
 - Scriptable `fire cli init` flags and MCP `init_project`, with explicit `--force` required for

@@ -35,6 +35,8 @@ A command spec supports:
   - Return handling: `void` = no output, `string` = printed, `string[]` = each string executed as a shell command.
 - `commands`: nested subcommands. Resolution is greedy—the deepest valid path wins.
 - `before`: shell command that runs before execution unless `fallback_runner` is selected.
+- `needs`: list of other Fire command paths from the same file scope that must finish first (see [Dependencies](#dependencies)).
+- `parallel`: run this command's `needs` concurrently (default: `false`).
 - `dir`: working directory for this command (overrides file-level `dir`).
 - `shell`: interpreter for every shell snippet of the command (default: `sh`). See [Shell](#shell).
 - `runner`: command that runs the `exec` commands inside another environment (a container, ssh, …). See [Hooks and runners](#hooks-and-runners).
@@ -49,6 +51,47 @@ A command spec supports:
 - `long_running`: set to `true` for servers, watchers and workers. Without a terminal (agents, scripts) the command then starts as a detached [session](./sessions.md#long-running-commands-without-a-terminal) and returns its id instead of blocking (default: `false`).
 
 String shorthand (`commands.foo: "npm test"`) is equivalent to a spec with `exec: "npm test"`.
+
+## Dependencies
+
+Use `needs` when a command requires other Fire commands to finish first:
+
+```yaml
+commands:
+  build: cargo build
+  lint: cargo clippy
+  test:
+    needs: [build, lint]
+    exec: cargo test
+  release:
+    needs: [test, "docs build"]
+    exec: ./scripts/release
+```
+
+Each entry is a whitespace-separated command path, not a shell string. Fire resolves it from the
+same file, group and namespace as the command that declares it. For example, `"docs build"` in a
+grouped file runs that file's `docs build` command inside the group. Dependency commands receive
+no user arguments; arguments belong only to the command the user requested. `needs` runs before
+`before`.
+
+Fire expands the complete dependency graph before running anything. A dependency runs once even
+when several commands need it, cycles are reported with their command chain, and the first failed
+dependency stops the command. Commands marked `long_running: true` cannot appear in `needs`; use a
+`before` check or manage the service as a session instead. The complete chain runs inside the
+requested command's session, when it has one. `--dry-run` shows every step without executing it.
+
+Set `parallel: true` to run that command's direct dependencies concurrently:
+
+```yaml
+commands:
+  check:
+    needs: [lint, test, typecheck]
+    parallel: true
+```
+
+Parallel output is prefixed with the dependency path. Concurrency defaults to the machine's
+available CPU count and is bounded with `-j <count>`, `--jobs <count>` or `FIRE_JOBS`. The first
+failure cancels the remaining running dependencies.
 
 ## Environment
 
@@ -261,13 +304,14 @@ word belongs to the command, so `fire api dev --bg` passes `--bg` to `api dev`.
 | `--fg` | Run attached in this process, without a session | `FIRE_SESSIONS=off` |
 | `--dry-run` | Print what would run without running it | `FIRE_DRY_RUN=true` |
 | `--no-log` | Don't log the commands Fire runs | `FIRE_LOG_COMMANDS=false` |
+| `-j`, `--jobs <count>` | Maximum concurrent dependencies | `FIRE_JOBS` |
 
 ```bash
 fire --bg -m "auth tests" --no-log api dev   # same as: fire --no-log --bg --note "auth tests" api dev
 fire --dry-run api deploy
 ```
 
-- Flags combine in any order. A repeated flag is fine; a repeated `-m` keeps the last note.
+- Flags combine in any order. A repeated flag is fine; repeated `-m` and `-j` keep the last value.
 - `--bg` and `--fg` can't go together. `-m` and `--new` apply to sessions (with `--bg`, or to the
   session a command starts on its own in a terminal), so they fail with `--fg`.
 - An unknown flag (`fire --foo api dev`) is an error that lists the valid ones; it is never looked

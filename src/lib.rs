@@ -4,6 +4,7 @@ mod cli;
 mod completion;
 mod config;
 mod container;
+mod dependencies;
 mod docs;
 mod env;
 mod execute;
@@ -138,8 +139,16 @@ pub fn setup_cli() {
             return;
         }
         global::offer_registration(&config);
+        let dependency_plan = if std::env::var_os("FIRE_SKIP_NEEDS").is_some() {
+            dependencies::empty_plan()
+        } else {
+            dependencies::build_plan(&config, resolved.command).unwrap_or_else(|message| {
+                eprintln!("[fire] {message}");
+                process::exit(1);
+            })
+        };
         session::run_in_session_if_enabled(command_args, &resolved, flags.new);
-        execute_resolved_command(resolved);
+        execute_resolved_command(resolved, dependency_plan);
     }
 
     if print_scope_help(&config, command_args) {
