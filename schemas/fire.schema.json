@@ -305,7 +305,7 @@
         "parallel": {
           "type": "boolean",
           "default": false,
-          "description": "Run this command's `needs` concurrently, bounded by -j/--jobs or FIRE_JOBS. Output is prefixed by command path and the first failure cancels the rest."
+          "description": "Run this command's `needs` concurrently. Output is prefixed by command path and the first failure cancels the rest."
         },
         "description": {
           "type": "string",

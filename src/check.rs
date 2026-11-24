@@ -332,6 +332,8 @@ fn validate_schema(
             .map(|error| error.instance_path().as_str().matches('/').count())
             .max()
             .unwrap_or(0);
+        // One diagnostic per location: `oneOf` branches each report the same value.
+        let mut plain: Vec<(String, Vec<String>)> = Vec::new();
         for error in specific
             .into_iter()
             .filter(|error| error.instance_path().as_str().matches('/').count() == deepest)
@@ -339,15 +341,13 @@ fn validate_schema(
             let mut unexpected = Vec::new();
             collect_unexpected(error, &mut unexpected);
             if unexpected.is_empty() {
-                let pointer = error.instance_path().as_str();
-                diagnostics.push(Diagnostic {
-                    file: document.path.clone(),
-                    line: line_for_json_pointer(&document.text, pointer, None),
-                    severity: Severity::Error,
-                    message: format!("Schema validation failed: {error}"),
-                    hint: "Use the documented type and keys from schemas/fire.schema.json."
-                        .to_string(),
-                });
+                let pointer = error.instance_path().as_str().to_string();
+                let message = error.to_string();
+                match plain.iter_mut().find(|(seen, _)| *seen == pointer) {
+                    Some((_, messages)) if !messages.contains(&message) => messages.push(message),
+                    Some(_) => {}
+                    None => plain.push((pointer, vec![message])),
+                }
             } else {
                 for (pointer, key) in unexpected {
                     diagnostics.push(Diagnostic {
@@ -360,6 +360,15 @@ fn validate_schema(
                     });
                 }
             }
+        }
+        for (pointer, messages) in plain {
+            diagnostics.push(Diagnostic {
+                file: document.path.clone(),
+                line: line_for_json_pointer(&document.text, &pointer, None),
+                severity: Severity::Error,
+                message: format!("Schema validation failed: {}", messages.join("; or ")),
+                hint: "Use the documented type and keys from schemas/fire.schema.json.".to_string(),
+            });
         }
     }
 }
@@ -483,7 +492,9 @@ fn validate_effective_config(
                 validate_command(file, path, chain, source, diagnostics);
                 if !entry.needs().is_empty() {
                     if let Err(message) = dependencies::build_plan(config, entry, false) {
-                        if dependency_errors.insert((file.config_path.clone(), message.clone())) {
+                        if dependency_errors
+                            .insert((file.config_path.clone(), dependency_error_key(&message)))
+                        {
                             diagnostics.push(Diagnostic {
                                 file: file.config_path.clone(),
                                 line: line_for_command_field(source, path, "needs"),
@@ -997,6 +1008,18 @@ fn line_for_command_field(text: &str, path: &[String], field: &str) -> usize {
     line_for_yaml_path(text, &yaml_path).unwrap_or_else(|| line_for_key(text, field))
 }
 
+/// A cycle is reported once, whichever member it was reached from: `x -> y -> x` and
+/// `y -> x -> y` share the key `{x, y}`.
+fn dependency_error_key(message: &str) -> String {
+    match message.strip_prefix("Dependency cycle: ") {
+        Some(cycle) => {
+            let members: BTreeSet<&str> = cycle.split(" -> ").collect();
+            format!("cycle:{members:?}")
+        }
+        None => message.to_string(),
+    }
+}
+
 fn line_for_json_pointer(text: &str, pointer: &str, extra_key: Option<&str>) -> usize {
     let mut path: Vec<String> = pointer
         .split('/')
@@ -1006,16 +1029,11 @@ fn line_for_json_pointer(text: &str, pointer: &str, extra_key: Option<&str>) -> 
     if let Some(key) = extra_key {
         path.push(key.to_string());
     }
-    line_for_yaml_path(text, &path).unwrap_or_else(|| {
-        extra_key
-            .or_else(|| {
-                path.iter()
-                    .rev()
-                    .find(|part| !part.chars().all(|character| character.is_ascii_digit()))
-                    .map(String::as_str)
-            })
-            .map_or(1, |key| line_for_key(text, key))
-    })
+    // Flow mappings (`w: {exec: 1}`) hide inner keys: point at the deepest key that exists.
+    (1..=path.len())
+        .rev()
+        .find_map(|len| line_for_yaml_path(text, &path[..len]))
+        .unwrap_or(1)
 }
 
 fn line_for_yaml_path(text: &str, path: &[String]) -> Option<usize> {

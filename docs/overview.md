@@ -39,6 +39,8 @@ starter config and skips imports; in a terminal, answering no to the import prom
 
 ### Automatic imports
 
+> **Experimental.** Import detection and the generated files may still change in a minor release.
+
 Initialization detects these files and writes one separate, grouped Fire file for each source so
 names from different tools do not collide:
 

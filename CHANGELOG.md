@@ -8,15 +8,15 @@ reconstructed from the git history.
 
 ### Added
 - Rich completion and idempotent installers for fish and Nushell. (#52)
-- Automatic command imports from package.json, Makefile, justfile, Compose, and Cargo during
+- Experimental: automatic command imports from package.json, Makefile, justfile, Compose, and Cargo during
   `fire cli init`, plus merge-only `fire cli import` and the `--empty` opt-out. (#51)
-- External CLI drivers with repository installation, cached builds, exact argument forwarding,
+- Experimental: external CLI drivers with repository installation, cached builds, exact argument forwarding,
   and delegated rich completion through `driver.yaml`. (#24)
 - A link-checked mdBook documentation site, deployed to GitHub Pages with a task-runner comparison. (#57)
-- `fire cli check` (alias `validate`) validates fire files for CI and pre-commit hooks, with
+- `fire cli check` validates fire files for CI and pre-commit hooks, with
   file/line diagnostics, `--format json`, `--strict`, and optional registered-directory checks. (#56)
 - Command dependencies with scoped `needs`, deduplication, cycle and long-running checks,
-  fail-fast execution, parallel output prefixes, and `-j`/`FIRE_JOBS` concurrency limits. (#55)
+  fail-fast execution, and parallel output prefixes. (#55)
 - `fire cli mcp install [<host>]` and `fire cli mcp uninstall <host>` register and remove the MCP
   server for Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI, and Windsurf. (#53)
 - Scriptable `fire cli init` flags and MCP `init_project`, with explicit `--force` required for

@@ -8,8 +8,7 @@ Common issues and quick fixes.
 It checks schema types and unknown keys, command/group/namespace collisions, includes, explicit
 `env_file` paths, placeholder patterns, unused compute keys, runtime prefixes, dependency graphs,
 and commands without an action. Errors exit 1; missing explicit env files and suspicious
-placeholder/compute settings are warnings unless `--strict` is set. `fire cli validate` is an
-alias.
+placeholder/compute settings are warnings unless `--strict` is set.
 
 For GitHub Actions:
 

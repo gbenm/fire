@@ -14,7 +14,8 @@ permissions:
 jobs:
   build:
     name: Build and check
-    runs-on: ubuntu-22.04
+    # mdbook-linkcheck2's prebuilt binary needs glibc 2.39.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout documentation source
         uses: actions/checkout@v4

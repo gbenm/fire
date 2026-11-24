@@ -309,10 +309,6 @@ pub(crate) fn execute(plan: &DependencyPlan) -> Result<(), i32> {
     if plan.nodes.len() <= 1 {
         return Ok(());
     }
-    let jobs = jobs().map_err(|message| {
-        eprintln!("[fire] {message}");
-        1
-    })?;
     let executable = std::env::current_exe().map_err(|error| {
         eprintln!("[fire] Cannot locate the fire executable: {error}");
         1
@@ -332,7 +328,6 @@ pub(crate) fn execute(plan: &DependencyPlan) -> Result<(), i32> {
                     && node.dependencies.iter().all(|dep| completed.contains(dep))
             })
             .map(|(key, _)| key.clone())
-            .take(jobs.saturating_sub(running.len()))
             .collect();
         let made_ready = !ready.is_empty();
 
@@ -509,16 +504,5 @@ fn cancel_all(running: &mut BTreeMap<String, Running>) {
         for reader in child.readers {
             let _ = reader.join();
         }
-    }
-}
-
-fn jobs() -> Result<usize, String> {
-    match std::env::var("FIRE_JOBS") {
-        Ok(raw) => raw
-            .parse::<usize>()
-            .ok()
-            .filter(|value| *value > 0)
-            .ok_or_else(|| format!("FIRE_JOBS must be a positive integer, got `{raw}`.")),
-        Err(_) => Ok(thread::available_parallelism().map_or(1, usize::from)),
     }
 }

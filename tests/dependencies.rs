@@ -78,7 +78,7 @@ commands:
 "#,
     );
 
-    let (code, _, stderr) = run(&project, &["-j", "2", "all"]);
+    let (code, _, stderr) = run(&project, &["all"]);
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(
         fs::read_to_string(project.dir.join("events")).unwrap(),
@@ -214,7 +214,7 @@ commands:
     );
 
     let start = Instant::now();
-    let (code, stdout, stderr) = run(&project, &["-j", "2", "check"]);
+    let (code, stdout, stderr) = run(&project, &["check"]);
     assert_eq!(code, 9, "stdout={stdout}\nstderr={stderr}");
     assert!(
         start.elapsed().as_secs_f32() < 3.0,
@@ -226,9 +226,9 @@ commands:
 }
 
 #[test]
-fn jobs_one_bounds_parallel_needs_and_dry_run_shows_the_entire_plan() {
+fn parallel_needs_start_together_and_dry_run_shows_the_entire_plan() {
     let project = Project::new(
-        "needs-jobs-dry",
+        "needs-parallel-dry",
         r#"
 commands:
   one:
@@ -242,12 +242,15 @@ commands:
 "#,
     );
 
-    let (code, stdout, stderr) = run(&project, &["--jobs=1", "all"]);
+    let (code, stdout, stderr) = run(&project, &["all"]);
     assert_eq!(code, 0, "stdout={stdout}\nstderr={stderr}");
-    assert_eq!(
-        fs::read_to_string(project.dir.join("events")).unwrap(),
-        "one-start\none-end\ntwo\nall\n"
+    let events = fs::read_to_string(project.dir.join("events")).unwrap();
+    // No concurrency limit: `two` runs while `one` is still sleeping.
+    assert!(
+        events.find("two").unwrap() < events.find("one-end").unwrap(),
+        "{events}"
     );
+    assert!(events.ends_with("all\n"), "{events}");
 
     fs::remove_file(project.dir.join("events")).unwrap();
     let (code, stdout, stderr) = run(&project, &["--dry-run", "all"]);

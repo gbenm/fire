@@ -221,13 +221,13 @@ fn root_help_and_completion_list_the_flags() {
     let (_, help, _) = fire(&project, &[]);
     assert!(help.contains("Flags (before the command):"), "{help}");
     assert!(help.contains("--dry-run"), "{help}");
-    assert!(help.contains("--jobs <count>"), "{help}");
+    assert!(!help.contains("--jobs"), "{help}");
     assert!(!help.contains("--agent"), "{help}");
 
     let (_, flags, _) = fire(&project, &["__complete", "fire", "--"]);
     assert!(flags.contains("--bg\t"), "{flags}");
     assert!(flags.contains("--no-log\t"), "{flags}");
-    assert!(flags.contains("--jobs\t"), "{flags}");
+    assert!(!flags.contains("--jobs"), "{flags}");
     let (_, after, _) = fire(&project, &["__complete", "fire", "--bg", "-m", "why", ""]);
     let (_, root, _) = fire(&project, &["__complete", "fire", ""]);
     let root: Vec<&str> = root

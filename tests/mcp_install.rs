@@ -147,7 +147,8 @@ fn codex_toml_recognizes_quoted_keys_and_semantic_noops() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(fs::read_to_string(&path).unwrap(), fixture);
     assert!(!PathBuf::from(format!("{}.bak", path.display())).exists());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("already installed"));
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("Fire's MCP server is already installed for Codex"));
 }
 
 #[test]
@@ -292,13 +293,17 @@ fn installed_host_clis_are_preferred_and_receive_exact_arguments() {
 }
 
 #[test]
-fn config_uses_literal_fire_only_when_it_is_on_path() {
+fn config_uses_the_unresolved_absolute_fire_on_path() {
     let project = project("mcp-install-fire-path");
     let bin = project.dir.join("bin");
     fs::create_dir_all(&bin).unwrap();
-    let fire = bin.join("fire");
-    fs::write(&fire, "#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(&fire, fs::Permissions::from_mode(0o755)).unwrap();
+    // Like Homebrew: PATH has a symlink into a versioned directory; keep the symlink.
+    let cellar = project.dir.join("Cellar/fire/1.0/bin");
+    fs::create_dir_all(&cellar).unwrap();
+    let real = cellar.join("fire");
+    fs::write(&real, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&real, fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&real, bin.join("fire")).unwrap();
 
     let output = project
         .fire(&["cli", "mcp", "install", "cursor"])
@@ -308,7 +313,7 @@ fn config_uses_literal_fire_only_when_it_is_on_path() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         json(&host_path(&project, "cursor"))["mcpServers"]["fire"]["command"],
-        "fire"
+        bin.join("fire").to_str().unwrap()
     );
 }
 

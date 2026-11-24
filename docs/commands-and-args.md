@@ -94,9 +94,8 @@ commands:
     parallel: true
 ```
 
-Parallel output is prefixed with the dependency path. Concurrency defaults to the machine's
-available CPU count and is bounded with `-j <count>`, `--jobs <count>` or `FIRE_JOBS`. The first
-failure cancels the remaining running dependencies.
+Parallel output is prefixed with the dependency path, and every ready dependency starts at once.
+The first failure cancels the remaining running dependencies.
 
 ## Environment
 
@@ -309,7 +308,6 @@ word belongs to the command, so `fire api dev --bg` passes `--bg` to `api dev`.
 | `--fg` | Run attached in this process, without a session | `FIRE_SESSIONS=off` |
 | `--dry-run` | Print what would run without running it | `FIRE_DRY_RUN=true` |
 | `--no-log` | Don't log the commands Fire runs | `FIRE_LOG_COMMANDS=false` |
-| `-j`, `--jobs <count>` | Maximum concurrent dependencies | `FIRE_JOBS` |
 
 ```bash
 fire --bg -m "auth tests" --no-log api dev   # same as: fire --no-log --bg --note "auth tests" api dev

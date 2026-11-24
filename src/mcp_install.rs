@@ -245,10 +245,9 @@ fn apply(action: Action, host: Host, fire: &Path, print_only: bool) -> Result<()
         }
     } else {
         println!(
-            "{} is already {} for {}",
-            host.description(),
+            "Fire's MCP server is already {} for {}",
             desired_state(action),
-            host.name()
+            host.description()
         );
     }
     Ok(())
@@ -619,9 +618,12 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
+/// Desktop apps start with a minimal PATH, so hosts always get an absolute path: the `fire` on
+/// PATH as written (symlinks are kept, so `/opt/homebrew/bin/fire` survives upgrades), else the
+/// running binary.
 fn fire_command() -> Result<PathBuf, String> {
-    if executable_on_path("fire").is_some() {
-        return Ok(PathBuf::from("fire"));
+    if let Some(fire) = executable_on_path("fire").filter(|path| path.is_absolute()) {
+        return Ok(fire);
     }
     env::current_exe().map_err(|err| format!("Could not determine the running fire binary: {err}"))
 }

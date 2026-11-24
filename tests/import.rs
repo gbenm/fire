@@ -236,3 +236,47 @@ fn interactive_init_can_decline_detected_imports() {
     assert!(project.dir.join("fire.yaml").exists());
     assert!(!project.dir.join("package.fire.yaml").exists());
 }
+
+#[test]
+fn init_drops_the_example_once_commands_were_imported_and_counts_are_singular() {
+    let project = empty_project("import-no-example");
+    fs::write(project.dir.join("Makefile"), "lint:\n\techo lint\n").unwrap();
+    let output = project.fire(&["cli", "init", "--yes"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Imported Makefile: 1 command\n"),
+        "{stdout}"
+    );
+    let fire = fs::read_to_string(project.dir.join("fire.yaml")).unwrap();
+    assert!(!fire.contains("example"), "{fire}");
+    assert!(fire.contains("commands: {}"), "{fire}");
+    let list = project.fire(&[]).output().unwrap();
+    assert!(list.status.success(), "{list:?}");
+}
+
+#[test]
+fn drivers_and_imports_are_marked_experimental_in_help_and_completion() {
+    let project = empty_project("experimental-marks");
+    let (code, help, stderr) = project.cli(&[]);
+    assert_eq!(code, 0, "{stderr}");
+    for name in ["driver", "import"] {
+        let line = help
+            .lines()
+            .find(|line| line.trim_start().starts_with(name))
+            .unwrap_or_else(|| panic!("{name} in help: {help}"));
+        assert!(line.ends_with("(experimental)"), "{line}");
+    }
+    let output = project
+        .fire(&["__complete", "fire", "cli", ""])
+        .output()
+        .unwrap();
+    let completion = String::from_utf8_lossy(&output.stdout);
+    for name in ["driver\t", "import\t"] {
+        let line = completion
+            .lines()
+            .find(|line| line.starts_with(name))
+            .unwrap_or_else(|| panic!("{name} in completion: {completion}"));
+        assert!(line.ends_with("(experimental)"), "{line}");
+    }
+}

@@ -1,4 +1,4 @@
-//! End-to-end fixtures for `fire cli check` / `validate` (#56).
+//! End-to-end fixtures for `fire cli check` (#56).
 
 mod common;
 
@@ -11,13 +11,10 @@ fn check(project: &Project, args: &[&str]) -> (i32, String, String) {
 }
 
 #[test]
-fn clean_config_is_silent_and_validate_is_an_alias() {
+fn clean_config_is_silent_and_validate_is_not_a_command() {
     let project = Project::new("check-clean", "commands:\n  hello: echo hello\n");
     assert_eq!(check(&project, &[]), (0, String::new(), String::new()));
-    assert_eq!(
-        project.cli(&["validate"]),
-        (0, String::new(), String::new())
-    );
+    assert_ne!(project.cli(&["validate"]).0, 0);
 }
 
 #[test]
@@ -321,5 +318,38 @@ fn global_configs_are_checked_only_with_global_flag() {
     assert!(
         stdout.contains("global/fire.yml") && stdout.contains("Runtime `py`"),
         "{stdout}"
+    );
+}
+
+#[test]
+fn a_cycle_is_reported_once_whichever_member_reaches_it() {
+    let project = Project::new(
+        "check-cycle-once",
+        "commands:\n  x:\n    needs: [y]\n    exec: echo x\n  y:\n    needs: [x]\n    exec: echo y\n",
+    );
+    let (code, stdout, stderr) = check(&project, &[]);
+    assert_eq!(code, 1, "{stderr}");
+    let output = format!("{stdout}{stderr}");
+    assert_eq!(output.matches("Dependency cycle").count(), 1, "{output}");
+}
+
+#[test]
+fn one_of_type_errors_merge_and_point_at_the_flow_mapping_line() {
+    let project = Project::new(
+        "check-flow-mapping",
+        "commands:\n  z:\n    exec: echo z\n  w: {exec: 1}\n",
+    );
+    let (code, stdout, stderr) = check(&project, &[]);
+    assert_eq!(code, 1, "{stderr}");
+    let output = format!("{stdout}{stderr}");
+    let errors: Vec<&str> = output
+        .lines()
+        .filter(|line| line.contains("error:"))
+        .collect();
+    assert_eq!(errors.len(), 1, "{output}");
+    assert!(errors[0].contains("fire.yml:4:"), "{output}");
+    assert!(
+        errors[0].contains("\"string\"") && errors[0].contains("\"array\""),
+        "{output}"
     );
 }

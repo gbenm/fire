@@ -54,9 +54,7 @@ impl Project {
             .env_remove("FIRE_SESSION")
             .env_remove("FIRE_SESSIONS")
             .env_remove("FIRE_SESSION_NOTE");
-        command
-            .env_remove("FIRE_JOBS")
-            .env_remove("FIRE_SKIP_NEEDS");
+        command.env_remove("FIRE_SKIP_NEEDS");
         command
     }
 

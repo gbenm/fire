@@ -3,7 +3,7 @@
 
 /// Flags shown in help and completion, with their descriptions. `--agent` is internal (MCP) and
 /// stays out of this list.
-pub(crate) const GLOBAL_FLAGS: [(&str, &str); 9] = [
+pub(crate) const GLOBAL_FLAGS: [(&str, &str); 7] = [
     ("--bg", "Run the command detached, in a session"),
     (
         "--new",
@@ -14,8 +14,6 @@ pub(crate) const GLOBAL_FLAGS: [(&str, &str); 9] = [
     ("--fg", "Run attached in this process, without a session"),
     ("--dry-run", "Print what would run without running it"),
     ("--no-log", "Don't log the commands fire runs"),
-    ("-j", "Maximum concurrent dependencies"),
-    ("--jobs", "Maximum concurrent dependencies"),
 ];
 
 /// The flags accepted by the deprecated `fire cli bg`.
@@ -29,7 +27,6 @@ pub(crate) struct GlobalFlags {
     pub(crate) note: Option<String>,
     pub(crate) dry_run: bool,
     pub(crate) no_log: bool,
-    pub(crate) jobs: Option<String>,
     /// Started by an agent (MCP): commands with `agents: false` are refused.
     pub(crate) agent: bool,
 }
@@ -59,16 +56,6 @@ impl GlobalFlags {
         if self.fg && self.new {
             return Err("--new needs a session; --fg runs without one".to_string());
         }
-        if let Some(value) = &self.jobs {
-            if value
-                .parse::<usize>()
-                .ok()
-                .filter(|jobs| *jobs > 0)
-                .is_none()
-            {
-                return Err(format!("-j/--jobs needs a positive integer, got `{value}`"));
-            }
-        }
         Ok(())
     }
 
@@ -88,9 +75,6 @@ impl GlobalFlags {
         if let Some(note) = &self.note {
             std::env::set_var("FIRE_SESSION_NOTE", note);
         }
-        if let Some(jobs) = &self.jobs {
-            std::env::set_var("FIRE_JOBS", jobs);
-        }
     }
 }
 
@@ -104,10 +88,6 @@ fn is_switch(flag: &str) -> bool {
 
 fn is_note(flag: &str) -> bool {
     flag == "-m" || flag == "--note"
-}
-
-fn is_jobs(flag: &str) -> bool {
-    flag == "-j" || flag == "--jobs"
 }
 
 /// Reads the flags at the start of `args`, stopping at the first word that doesn't start with
@@ -131,15 +111,6 @@ pub(crate) fn parse(args: &[String]) -> Result<(GlobalFlags, usize), String> {
         } else if let Some(value) = word.strip_prefix("--note=") {
             flags.note = Some(value.to_string());
             index += 1;
-        } else if is_jobs(word) {
-            let value = args
-                .get(index + 1)
-                .ok_or_else(|| format!("{word} needs a count: {word} <count>"))?;
-            flags.jobs = Some(value.clone());
-            index += 2;
-        } else if let Some(value) = word.strip_prefix("--jobs=") {
-            flags.jobs = Some(value.to_string());
-            index += 1;
         } else {
             return Err(format!("Unknown flag `{word}`. {}", valid_flags_line()));
         }
@@ -151,12 +122,10 @@ pub(crate) fn valid_flags_line() -> String {
     let names: Vec<&str> = GLOBAL_FLAGS
         .iter()
         .map(|(name, _)| *name)
-        .filter(|name| *name != "--note" && *name != "--jobs")
+        .filter(|name| *name != "--note")
         .map(|name| {
             if name == "-m" {
                 "-m/--note <text>"
-            } else if name == "-j" {
-                "-j/--jobs <count>"
             } else {
                 name
             }
@@ -165,7 +134,8 @@ pub(crate) fn valid_flags_line() -> String {
     format!("Valid flags: {}", names.join(", "))
 }
 
-pub(crate) const USAGE: &str = "Usage: fire [--bg|--fg] [--new] [-m \"note\"] [-j <count>] [--dry-run] [--no-log] <command> [args...]";
+pub(crate) const USAGE: &str =
+    "Usage: fire [--bg|--fg] [--new] [-m \"note\"] [--dry-run] [--no-log] <command> [args...]";
 
 /// Where completion is within the leading flags.
 #[derive(Debug, PartialEq, Eq)]
@@ -197,15 +167,6 @@ pub(crate) fn completion_position(
             }
             flags.note = Some(String::new());
             index += 2;
-        } else if is_jobs(word) {
-            if index + 1 == typed.len() {
-                return CompletionPosition::NoteValue;
-            }
-            flags.jobs = Some(String::new());
-            index += 2;
-        } else if word.starts_with("--jobs=") {
-            flags.jobs = Some(String::new());
-            index += 1;
         } else if word.starts_with("--note=") {
             flags.note = Some(String::new());
             index += 1;
@@ -236,7 +197,6 @@ fn already_set(flags: &GlobalFlags, flag: &str) -> bool {
         "--dry-run" => flags.dry_run,
         "--no-log" => flags.no_log,
         "-m" | "--note" => flags.note.is_some(),
-        "-j" | "--jobs" => flags.jobs.is_some(),
         _ => false,
     }
 }
@@ -314,25 +274,6 @@ mod tests {
         let (flags, _) = parse(&words(&["-m", "one", "--note=two", "--bg", "--bg", "x"])).unwrap();
         assert_eq!(flags.note.as_deref(), Some("two"));
         assert!(flags.bg);
-    }
-
-    #[test]
-    fn jobs_preserves_its_value_and_requires_a_positive_integer() {
-        let (flags, consumed) =
-            parse(&words(&["-j", "2", "--jobs=4", "build"])).expect("jobs flags");
-        assert_eq!(flags.jobs.as_deref(), Some("4"));
-        assert_eq!(consumed, 3);
-        assert!(flags.validate().is_ok());
-        assert!(parse(&words(&["-j", "build"]))
-            .unwrap()
-            .0
-            .validate()
-            .is_err());
-        assert!(parse(&words(&["--jobs=0", "build"]))
-            .unwrap()
-            .0
-            .validate()
-            .is_err());
     }
 
     #[test]

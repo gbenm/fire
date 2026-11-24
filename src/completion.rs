@@ -221,7 +221,7 @@ fn core_children_for_path(path: &[String], prefix: &str) -> Option<Vec<Completio
         return Some(core_cli_import_sources(&path[2..], prefix));
     }
 
-    if path.len() >= 2 && matches!(path[1].as_str(), "check" | "validate") {
+    if path.len() >= 2 && path[1] == "check" {
         return Some(core_cli_check_flags(&path[2..], prefix));
     }
 
@@ -309,7 +309,7 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
         },
         CompletionSuggestion {
             value: "driver".to_string(),
-            description: Some("Install external CLI completion drivers".to_string()),
+            description: Some("Install external CLI completion drivers (experimental)".to_string()),
         },
         CompletionSuggestion {
             value: "init".to_string(),
@@ -317,15 +317,13 @@ fn core_cli_children(prefix: &str) -> Vec<CompletionSuggestion> {
         },
         CompletionSuggestion {
             value: "import".to_string(),
-            description: Some("Import commands from existing project tools".to_string()),
+            description: Some(
+                "Import commands from existing project tools (experimental)".to_string(),
+            ),
         },
         CompletionSuggestion {
             value: "check".to_string(),
             description: Some("Validate fire configuration files".to_string()),
-        },
-        CompletionSuggestion {
-            value: "validate".to_string(),
-            description: Some("Alias for `fire cli check`".to_string()),
         },
         CompletionSuggestion {
             value: "docs".to_string(),
@@ -1289,9 +1287,7 @@ commands:
                 "--note",
                 "--fg",
                 "--dry-run",
-                "--no-log",
-                "-j",
-                "--jobs"
+                "--no-log"
             ]
         );
         assert!(values.iter().all(|it| it.description.is_some()));
@@ -1318,10 +1314,9 @@ commands:
         let config = config_with_scopes();
         assert!(names(&config, &["--bg", "-m", ""]).is_empty());
         assert!(names(&config, &["--note", "d"]).is_empty());
-        assert!(names(&config, &["--jobs", ""]).is_empty());
         assert_eq!(
             names(&config, &["--bg", "--"]),
-            vec!["--new", "--note", "--dry-run", "--no-log", "--jobs"]
+            vec!["--new", "--note", "--dry-run", "--no-log"]
         );
         assert_eq!(names(&config, &["--fg", "--n"]), vec!["--no-log"]);
     }
@@ -1540,7 +1535,6 @@ commands:
                 "init",
                 "import",
                 "check",
-                "validate",
                 "docs",
                 "completion",
                 "upgrade",
@@ -1567,7 +1561,7 @@ commands:
             vec!["json"]
         );
         assert_eq!(
-            names(&config, &["cli", "validate", "--strict", "--"]),
+            names(&config, &["cli", "check", "--strict", "--"]),
             vec!["--global", "--format"]
         );
     }

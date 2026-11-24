@@ -4,6 +4,8 @@ Drivers let a Fire command forward to an external CLI while a separately install
 provides project-aware completion. Fire does not parse, quote, expand, or otherwise rewrite the
 remaining arguments: each input argument is passed to the executable as one OS argument.
 
+> **Experimental.** Drivers may still change in a minor release, including `driver.yaml`.
+
 ## Configure a driver command
 
 The `driver` value is the exact executable name Fire launches:

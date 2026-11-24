@@ -21,11 +21,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
         [cli, import, rest @ ..] if cli == "cli" && import == "import" => {
             crate::importer::handle(rest)
         }
-        [cli, check, rest @ ..]
-            if cli == "cli" && matches!(check.as_str(), "check" | "validate") =>
-        {
-            crate::check::handle(rest)
-        }
+        [cli, check, rest @ ..] if cli == "cli" && check == "check" => crate::check::handle(rest),
         [cli, docs] if cli == "cli" && docs == "docs" => crate::docs::handle_cli(None),
         [cli, docs, topic] if cli == "cli" && docs == "docs" => {
             crate::docs::handle_cli(Some(topic))
@@ -112,6 +108,20 @@ struct InitArgs {
     empty: bool,
 }
 
+/// The placeholder only helps an empty project: once commands were imported, the file fire just
+/// created keeps `commands: {}` instead.
+fn drop_example_command(path: &Path) {
+    if let Ok(content) = fs::read_to_string(path) {
+        let trimmed = content.replace(
+            "commands:\n  example: echo \"hello world\"\n",
+            "commands: {}\n",
+        );
+        if trimmed != content {
+            let _ = fs::write(path, trimmed);
+        }
+    }
+}
+
 fn run_init(args: &[String]) {
     let mut args = parse_init_args(args).unwrap_or_else(|err| {
         eprintln!("[fire] {err}");
@@ -196,8 +206,8 @@ fn run_init(args: &[String]) {
 
     println!();
     println!("Created {file_name}");
-    if !args.empty {
-        crate::importer::import(&cwd, &[]);
+    if !args.empty && crate::importer::import(&cwd, &[]) {
+        drop_example_command(&output_path);
     }
     println!("Try `fire` to list the available commands.");
 }
@@ -294,9 +304,9 @@ fn print_cli_help() {
     println!("Fire CLI Management v{}", crate::FIRE_VERSION);
     println!("Commands:");
     println!("  global   Register directories so their commands load from anywhere (add, remove, list, prune, edit)");
-    println!("  driver   Install external CLI completion drivers from GitHub repositories");
+    println!("  driver   Install external CLI completion drivers from GitHub repositories (experimental)");
     println!("  init     Create a fire config and import detected project commands");
-    println!("  import   Add commands from package.json, Makefile, justfile, Compose, or Cargo");
+    println!("  import   Add commands from package.json, Makefile, justfile, Compose, or Cargo (experimental)");
     println!("  check    Validate fire files (--global, --format json, --strict; alias: validate)");
     println!("  docs     List or read the documentation embedded in this fire version");
     println!("  upgrade  Upgrade fire with Homebrew (brew installs only)");

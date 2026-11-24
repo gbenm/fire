@@ -40,7 +40,8 @@ pub(crate) fn handle(args: &[String]) {
     import(&cwd, args);
 }
 
-pub(crate) fn import(cwd: &Path, requested: &[String]) {
+/// Returns whether any command was added.
+pub(crate) fn import(cwd: &Path, requested: &[String]) -> bool {
     let sources = if requested.is_empty() {
         auto_sources(cwd)
     } else {
@@ -49,7 +50,7 @@ pub(crate) fn import(cwd: &Path, requested: &[String]) {
 
     if sources.is_empty() && requested.is_empty() {
         println!("No package.json, Makefile, justfile, Compose file, or Cargo.toml found.");
-        return;
+        return false;
     }
 
     let mut imported_any = false;
@@ -73,7 +74,8 @@ pub(crate) fn import(cwd: &Path, requested: &[String]) {
             Ok(MergeResult { added, skipped }) => {
                 if added > 0 {
                     imported_any = true;
-                    println!("Imported {}: {added} commands", source.display);
+                    let noun = if added == 1 { "command" } else { "commands" };
+                    println!("Imported {}: {added} {noun}", source.display);
                 }
                 if !skipped.is_empty() {
                     println!("Skipped {}: {}", source.display, skipped.join(", "));
@@ -86,6 +88,7 @@ pub(crate) fn import(cwd: &Path, requested: &[String]) {
     if !imported_any && !requested.is_empty() {
         println!("No commands were added.");
     }
+    imported_any
 }
 
 fn auto_sources(cwd: &Path) -> Vec<Source> {
