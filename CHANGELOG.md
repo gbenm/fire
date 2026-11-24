@@ -6,6 +6,8 @@ reconstructed from the git history.
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-11-24
+
 ### Changed
 - The MCP `session_output` tool is now `read_session_output`, matching the verb-first names of the
   other tools.
@@ -285,7 +287,8 @@ Version bump only.
 - First release: commands from YAML, namespaces and groups, global install, `include`, `init`,
   `runner` / `fallback_runner` / `check`, `before`, placeholders and macros, completion.
 
-[Unreleased]: https://github.com/gbenm/fire/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/gbenm/fire/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/gbenm/fire/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/gbenm/fire/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/gbenm/fire/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/gbenm/fire/compare/v2.10.1...v3.0.0
