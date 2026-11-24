@@ -2,9 +2,11 @@
 
 [![Release](https://img.shields.io/github/v/release/gbenm/fire?sort=semver)](https://github.com/gbenm/fire/releases/latest)
 [![crates.io](https://img.shields.io/crates/v/fire-cli)](https://crates.io/crates/fire-cli)
+[![Downloads](https://img.shields.io/crates/d/fire-cli)](https://crates.io/crates/fire-cli)
 [![CI](https://github.com/gbenm/fire/actions/workflows/ci.yml/badge.svg)](https://github.com/gbenm/fire/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-GitHub_Pages-blue)](https://gbenm.github.io/fire/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![gbenm/fire MCP server](https://glama.ai/mcp/servers/gbenm/fire/badges/score.svg)](https://glama.ai/mcp/servers/gbenm/fire)
 
 **A config-first task runner for your projects, and for the AI agents working in them.**
 
