@@ -94,6 +94,12 @@ pub(crate) fn print_command_help(command_path: &[String], command: &CommandEntry
         println!("Agents: not available (agents: false)");
     }
     if let Some(spec) = command.spec() {
+        if !spec.needs.is_empty() {
+            println!("Needs: {}", spec.needs.join(", "));
+            if spec.parallel {
+                println!("Dependencies: parallel");
+            }
+        }
         if spec.long_running == Some(true) {
             println!(
                 "Long-running: starts detached when run without a terminal (long_running: true)"

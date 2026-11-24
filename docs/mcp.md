@@ -57,8 +57,10 @@ Fire uses the host's CLI for Claude Code, VS Code, and Codex when it is on `PATH
 and VS Code or Codex without their CLI, use the host's user configuration. Fire preserves unrelated
 entries and writes the previous file to a neighboring `.bak` file; repeating a file-based
 installation makes no change. If the Claude Code CLI is missing, Fire prints the command to run
-after installing it. When `fire` isn't on `PATH`, generated configuration uses the absolute path of
-the running binary.
+after installing it. Every host gets an absolute path, because desktop apps start with a minimal
+`PATH`: the `fire` on your `PATH` as written, without resolving symlinks (so
+`/opt/homebrew/bin/fire` keeps working after an upgrade), or the running binary when `fire` isn't
+on `PATH`.
 
 The manual commands and file formats below are fallbacks for hosts that you do not want Fire to
 configure.
@@ -111,8 +113,8 @@ shape:
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 
 Tips:
-- GUI apps on macOS may not inherit your shell's `PATH`. If the host can't find `fire`, use the
-  absolute path from `which fire` as `command`.
+- GUI apps on macOS may not inherit your shell's `PATH`. `fire cli mcp install` already writes an
+  absolute path; for a manual setup, use the path from `which fire` as `command`.
 - Hosts that aren't tied to a project directory (Claude Desktop, for example) only see the
   commands from your [registered global directories](./overview.md#file-discovery-and-merge-order).
 - Check it works by asking the agent "what fire commands are available here?".
