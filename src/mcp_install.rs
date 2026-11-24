@@ -670,7 +670,7 @@ mod tests {
         let home = Path::new("/home/example");
         assert_eq!(
             config_path(Host::ClaudeDesktop, home, Platform::Linux),
-            Path::new("/home/example/.config/Claude/claude_desktop_config.json")
+            xdg_config_home(home).join("Claude/claude_desktop_config.json")
         );
         assert_eq!(
             config_path(Host::ClaudeDesktop, home, Platform::MacOs),
@@ -680,7 +680,7 @@ mod tests {
         );
         assert_eq!(
             config_path(Host::VsCode, home, Platform::Linux),
-            Path::new("/home/example/.config/Code/User/mcp.json")
+            xdg_config_home(home).join("Code/User/mcp.json")
         );
         assert_eq!(
             config_path(Host::VsCode, home, Platform::MacOs),
