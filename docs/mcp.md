@@ -25,8 +25,8 @@ The server's instructions are a short decision guide, on one line with the criti
 2. Find the command with `search_commands` before writing one.
 3. Check `list_sessions` and reuse what is already running.
 4. Long-running (`long_running: true`, or it doesn't exit on its own): `start_session` with a
-   note, then `session_output`. Finite (build, test, lint): `run_command`.
-5. Manage sessions with `session_output`, `send_input`, `signal_session`, `stop_session` and
+   note, then `read_session_output`. Finite (build, test, lint): `run_command`.
+5. Manage sessions with `read_session_output`, `send_input`, `signal_session`, `stop_session` and
    `forget_session`; never run `agents: false` commands; if the project has no config, use
    `init_project`, then use `get_docs` to edit it; change global directories only when the user
    asks.
@@ -207,7 +207,7 @@ agent or by you. Each result contains `id`, `command`, `note` (the short reason 
 `cwd`, `status` (`running`, `exited`, `stopped` when someone stopped it on purpose, `lost`),
 `pid`, `exit_code`, and timestamps.
 
-### `session_output`
+### `read_session_output`
 Takes an `id` and optional `lines` (default 100). Returns the session plus the last lines of its
 terminal `output` as plain text: stdout and stderr merged (sessions run on a pty), escape
 sequences removed and `\r` progress redraws collapsed.
@@ -242,11 +242,14 @@ Takes `id` and `text`, and types the text followed by Enter into the session's t
 (`fire cli send --raw`).
 
 ### `stop_session`
-Takes `id` and stops that running session gracefully (`TERM`, then `KILL` after 5s if needed).
+Takes `id` and stops that running session gracefully (`TERM`, then `KILL` after 5s if needed). Its
+status becomes `stopped`, not a failure, and its record and output stay readable. It fails if the
+session is unknown or not running. A restart is `stop_session` followed by `start_session`.
 
 ### `signal_session`
 Takes `id` and a required `signal` (name like `INT`, `HUP`, `USR1`, or a number), which is sent to
-the running session's foreground process group, as a keyboard signal would be.
+the running session's foreground process group, as a keyboard signal would be. `INT`, `TERM`,
+`QUIT` and `KILL` mark the session `stopped`, so its exit is not reported as a failure.
 
 ### `forget_session`
 Takes `id` and removes the saved record of an exited, stopped, or lost session. It refuses to
@@ -263,16 +266,16 @@ The MCP counterpart of [`fire cli global`](./overview.md#global-directories), wi
   absolute paths of the config `files` that define it, so an agent can open the right file to edit
   a command, and whether it is `merged`. The top-level `merged` lists merged namespaces.
 - `add_global` (`path`): register a directory.
-- `remove_global` (`namespace` or `path`, exactly one): unregister it. Files are never touched.
-- `prune_global`: unregister directories that no longer exist.
-- `merge_global` / `unmerge_global` (`namespace`): call a namespace's commands without (or again
-  with) the namespace word.
+- `remove_global` (exactly one of `namespace`, `path`, or `missing: true`): unregister a directory,
+  or with `missing: true` every directory that no longer exists. Files are never touched.
+- `set_global_merge` (`namespace`, `merged`): with `merged: true`, call a namespace's commands
+  without the namespace word; with `merged: false`, require it again.
 
 Paths must be absolute (a leading `~` means the home directory): a relative path would resolve
 against the server's directory, so it is rejected instead of guessed. These tools change the
 user's global setup; their descriptions tell agents to use them only when the user asks. They
 return structured results: `ok`, `error`, the affected `path`, and per tool `registered` /
-`already_registered` / `has_config`, `removed`, `pruned`, `merged` / `already_merged`. The CLI's
+`already_registered` / `has_config`, `removed` / `pruned`, `merged` / `already_merged`. The CLI's
 first-use registration prompt never appears through MCP.
 
 ## Testing manually

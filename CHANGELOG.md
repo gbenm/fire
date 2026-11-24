@@ -6,6 +6,15 @@ reconstructed from the git history.
 
 ## [Unreleased]
 
+### Changed
+- The MCP `session_output` tool is now `read_session_output`, matching the verb-first names of the
+  other tools.
+- The MCP server has 14 tools instead of 16: `prune_global` is now `remove_global` with
+  `missing: true`, and `merge_global` / `unmerge_global` are now `set_global_merge` with a required
+  `merged` boolean.
+- Clearer MCP descriptions for `stop_session` and `signal_session`: results, failure cases, and
+  which signals count as a deliberate stop.
+
 ## [3.1.0] - 2026-11-24
 
 ### Added

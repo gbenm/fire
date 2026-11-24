@@ -528,7 +528,7 @@ pub(crate) fn run_in_session_if_enabled(
 
 fn print_detached_hints(id: &str) {
     eprintln!(
-        "[fire] output: fire cli logs {id} (MCP: session_output) | attach: fire cli fg {id} | stop: fire cli kill {id}"
+        "[fire] output: fire cli logs {id} (MCP: read_session_output) | attach: fire cli fg {id} | stop: fire cli kill {id}"
     );
     eprintln!("[fire] to block until it exits instead, run it with: fire --fg <command>");
 }

@@ -659,13 +659,13 @@ fn global_tools_manage_the_registry_like_the_cli() {
     let mut mcp = McpClient::start(&project);
     let tools = mcp.request("tools/list", json!({}));
     let tools = tools["tools"].as_array().expect("tools array");
-    for name in [
-        "add_global",
-        "remove_global",
-        "prune_global",
-        "merge_global",
-        "unmerge_global",
-    ] {
+    for name in ["prune_global", "merge_global", "unmerge_global"] {
+        assert!(
+            tools.iter().all(|tool| tool["name"] != name),
+            "{name} was folded into another tool"
+        );
+    }
+    for name in ["add_global", "remove_global", "set_global_merge"] {
         let tool = tools
             .iter()
             .find(|tool| tool["name"] == name)
@@ -698,12 +698,21 @@ fn global_tools_manage_the_registry_like_the_cli() {
     let empty = mcp.call("add_global", json!({ "path": old_str }));
     assert_eq!(empty["structuredContent"]["has_config"], false);
 
-    let merged = mcp.call("merge_global", json!({ "namespace": "api" }));
+    let merged = mcp.call(
+        "set_global_merge",
+        json!({ "namespace": "api", "merged": true }),
+    );
     assert_eq!(merged["structuredContent"]["merged"], true);
     assert_eq!(merged["structuredContent"]["already_merged"], false);
-    let merged_again = mcp.call("merge_global", json!({ "namespace": "api" }));
+    let merged_again = mcp.call(
+        "set_global_merge",
+        json!({ "namespace": "api", "merged": true }),
+    );
     assert_eq!(merged_again["structuredContent"]["already_merged"], true);
-    let unknown = mcp.call("merge_global", json!({ "namespace": "nope" }));
+    let unknown = mcp.call(
+        "set_global_merge",
+        json!({ "namespace": "nope", "merged": true }),
+    );
     assert_eq!(unknown["structuredContent"]["ok"], false);
 
     let listing = mcp.call("list_global", json!({}));
@@ -724,9 +733,15 @@ fn global_tools_manage_the_registry_like_the_cli() {
     assert_eq!(code, 0, "{stderr}");
     assert!(cli_list.contains("api (merged)"), "{cli_list}");
 
-    let unmerged = mcp.call("unmerge_global", json!({ "namespace": "api" }));
+    let unmerged = mcp.call(
+        "set_global_merge",
+        json!({ "namespace": "api", "merged": false }),
+    );
     assert_eq!(unmerged["structuredContent"]["merged"], false);
-    let not_merged = mcp.call("unmerge_global", json!({ "namespace": "api" }));
+    let not_merged = mcp.call(
+        "set_global_merge",
+        json!({ "namespace": "api", "merged": false }),
+    );
     assert_eq!(not_merged["structuredContent"]["ok"], false);
 
     let both = mcp.call(
@@ -740,7 +755,14 @@ fn global_tools_manage_the_registry_like_the_cli() {
     assert!(api.join("fire.yaml").exists(), "files are never deleted");
 
     fs::remove_dir_all(&old).unwrap();
-    let pruned = mcp.call("prune_global", json!({}));
+    let mixed = mcp.call(
+        "remove_global",
+        json!({ "namespace": "old", "missing": true }),
+    );
+    assert_eq!(mixed["structuredContent"]["ok"], false);
+    let nothing = mcp.call("remove_global", json!({ "missing": false }));
+    assert_eq!(nothing["structuredContent"]["ok"], false);
+    let pruned = mcp.call("remove_global", json!({ "missing": true }));
     assert_eq!(pruned["structuredContent"]["pruned"], json!([old_str]));
     let listing = mcp.call("list_global", json!({}));
     assert_eq!(listing["structuredContent"]["directories"], json!([]));

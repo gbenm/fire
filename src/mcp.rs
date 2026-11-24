@@ -341,14 +341,20 @@ struct GlobalPathRequest {
 struct RemoveGlobalRequest {
     /// Namespace of the registered directory to remove (as shown by `list_global`).
     namespace: Option<String>,
-    /// Absolute path of the registered directory to remove. Pass exactly one of `namespace`/`path`.
+    /// Absolute path of the registered directory to remove.
     path: Option<String>,
+    /// `true` removes every registered directory that no longer exists. Pass exactly one of
+    /// `namespace`, `path` or `missing: true`.
+    missing: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct NamespaceRequest {
+struct GlobalMergeRequest {
     /// Namespace of a registered directory (as shown by `list_global`).
     namespace: String,
+    /// `true` merges the namespace (its commands run without the namespace word); `false`
+    /// unmerges it (the namespace word is required again).
+    merged: bool,
 }
 
 #[derive(Debug, Default, Serialize, schemars::JsonSchema)]
@@ -368,7 +374,7 @@ struct GlobalResult {
     has_config: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     removed: Option<bool>,
-    /// Directories `prune_global` unregistered.
+    /// Directories `remove_global` unregistered with `missing: true`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pruned: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -910,7 +916,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "List detached `fire` sessions for the current project by default, including other directories that resolve to it and sessions started by the user or another agent: id, command, note (why it was started), cwd, status (`running`, `exited`, `stopped` = stopped on purpose, `lost`), pid and exit code. Pass `cwd` to select another project directory, or `all: true` to list every project (`cwd` is then ignored). Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `session_output` first: it usually shows why it failed (e.g. port in use)."
+        description = "List detached `fire` sessions for the current project by default, including other directories that resolve to it and sessions started by the user or another agent: id, command, note (why it was started), cwd, status (`running`, `exited`, `stopped` = stopped on purpose, `lost`), pid and exit code. Pass `cwd` to select another project directory, or `all: true` to list every project (`cwd` is then ignored). Check this before starting or restarting servers to avoid duplicates. If a previous session for the same command exited, read its `read_session_output` first: it usually shows why it failed (e.g. port in use)."
     )]
     fn list_sessions(
         &self,
@@ -939,7 +945,7 @@ impl FireMcpServer {
     #[tool(
         description = "Read the last lines of a session's terminal output (stdout and stderr merged, colors and progress redraws cleaned up), plus its status."
     )]
-    fn session_output(
+    fn read_session_output(
         &self,
         Parameters(SessionOutputRequest { id, lines }): Parameters<SessionOutputRequest>,
     ) -> String {
@@ -953,7 +959,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, or stop it. `command` must be a configured fire command (find it with `search_commands`). One command in one cwd is one session: if it is already running, this returns its id and replaces its note instead of starting a duplicate; if it ended (crashed or stopped), it starts again under the same id with the new note. So to restart a server, stop it with `stop_session` and call this again. Returns the session id as `session_id`; then confirm it came up with `session_output`. Fails for commands the user reserved for humans (`agents: false`)."
+        description = "Start a configured `fire` command detached, in a managed session. ALWAYS use this for long-running processes (dev servers, watchers, workers, tunnels, log tails) instead of backgrounding them in your own shell: the process survives your shell, and you, other agents and the user can list it, read its output, send input/signals, or stop it. `command` must be a configured fire command (find it with `search_commands`). One command in one cwd is one session: if it is already running, this returns its id and replaces its note instead of starting a duplicate; if it ended (crashed or stopped), it starts again under the same id with the new note. So to restart a server, stop it with `stop_session` and call this again. Returns the session id as `session_id`; then confirm it came up with `read_session_output`. Fails for commands the user reserved for humans (`agents: false`)."
     )]
     fn start_session(
         &self,
@@ -982,7 +988,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Stop a running session gracefully with TERM, then KILL after 5 seconds if needed."
+        description = "Stop a running session on purpose: TERM to its process group, then KILL after 5 seconds if it has not exited. Its status becomes `stopped` (not a failure) and its record and output stay readable. Returns `{ ok, stdout, stderr }`; `stdout` says whether it stopped or had to be killed. Fails if the id is unknown or the session is not running. To restart it, call `start_session` again with the same command and `cwd`."
     )]
     fn stop_session(
         &self,
@@ -992,7 +998,7 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Send a specific signal to a running session's process group (e.g. INT, HUP, USR1)."
+        description = "Send a specific signal (a name such as INT, HUP, USR1, or a number) to a running session's foreground process group, as a keyboard signal would be, e.g. HUP to make a server reload. INT, TERM, QUIT and KILL mark the session `stopped` on purpose, so its exit is not reported as a failure. For a graceful shutdown with escalation use `stop_session`; to type keys use `send_input`. Returns `{ ok, stdout, stderr }`; fails for an unknown signal or id, or a session that is not running."
     )]
     fn signal_session(
         &self,
@@ -1033,16 +1039,22 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Unregister a global directory by `namespace` or absolute `path` (same as `fire cli global remove`); its files are never touched. Changes the user's global setup: use only when the user asks for it, never on your own initiative."
+        description = "Unregister global directories (same as `fire cli global remove` and `fire cli global prune`); their files are never touched. Pass exactly one of: `namespace`, an absolute `path`, or `missing: true` to unregister every directory that no longer exists (returned in `pruned`). Changes the user's global setup: use only when the user asks for it, never on your own initiative."
     )]
     fn remove_global(
         &self,
-        Parameters(RemoveGlobalRequest { namespace, path }): Parameters<RemoveGlobalRequest>,
+        Parameters(RemoveGlobalRequest {
+            namespace,
+            path,
+            missing,
+        }): Parameters<RemoveGlobalRequest>,
     ) -> Json<GlobalResult> {
-        let target = match (namespace, path) {
-            (Some(namespace), None) => Ok(crate::global::Target::Namespace(namespace)),
-            (None, Some(path)) => absolute_path(&path).map(crate::global::Target::Path),
-            _ => Err("pass exactly one of `namespace` or `path`".to_string()),
+        const EXACTLY_ONE: &str = "pass exactly one of `namespace`, `path` or `missing: true`";
+        let target = match (namespace, path, missing == Some(true)) {
+            (None, None, true) => return Json(prune_missing_globals()),
+            (Some(namespace), None, false) => Ok(crate::global::Target::Namespace(namespace)),
+            (None, Some(path), false) => absolute_path(&path).map(crate::global::Target::Path),
+            _ => Err(EXACTLY_ONE.to_string()),
         };
         Json(match target.and_then(crate::global::remove_directory) {
             Ok(dir) => GlobalResult {
@@ -1056,57 +1068,27 @@ impl FireMcpServer {
     }
 
     #[tool(
-        description = "Unregister global directories that no longer exist (same as `fire cli global prune`). Changes the user's global setup: use only when the user asks for it, never on your own initiative."
+        description = "Set whether a registered namespace is merged (same as `fire cli global merge` / `unmerge`). `merged: true` lets its commands be called without the namespace word, while explicit paths of other commands still win; `merged: false` requires the namespace word again. Changes the user's global setup: use only when the user asks for it, never on your own initiative."
     )]
-    fn prune_global(&self) -> Json<GlobalResult> {
-        Json(match crate::global::prune_directories() {
-            Ok(pruned) => GlobalResult {
-                ok: true,
-                pruned: Some(
-                    pruned
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect(),
-                ),
-                ..GlobalResult::default()
-            },
-            Err(err) => GlobalResult::err(err),
-        })
-    }
-
-    #[tool(
-        description = "Merge a registered namespace so its commands can be called without the namespace word (same as `fire cli global merge`); explicit paths of other commands still win. Changes the user's global setup: use only when the user asks for it, never on your own initiative."
-    )]
-    fn merge_global(
+    fn set_global_merge(
         &self,
-        Parameters(NamespaceRequest { namespace }): Parameters<NamespaceRequest>,
+        Parameters(GlobalMergeRequest { namespace, merged }): Parameters<GlobalMergeRequest>,
     ) -> Json<GlobalResult> {
-        Json(match crate::global::merge_namespace(&namespace) {
-            Ok(newly) => GlobalResult {
+        let result = if merged {
+            crate::global::merge_namespace(&namespace).map(|newly| GlobalResult {
                 ok: true,
                 merged: Some(true),
                 already_merged: Some(!newly),
                 ..GlobalResult::default()
-            },
-            Err(err) => GlobalResult::err(err),
-        })
-    }
-
-    #[tool(
-        description = "Unmerge a namespace so its commands need the namespace word again (same as `fire cli global unmerge`). Changes the user's global setup: use only when the user asks for it, never on your own initiative."
-    )]
-    fn unmerge_global(
-        &self,
-        Parameters(NamespaceRequest { namespace }): Parameters<NamespaceRequest>,
-    ) -> Json<GlobalResult> {
-        Json(match crate::global::unmerge_namespace(&namespace) {
-            Ok(()) => GlobalResult {
+            })
+        } else {
+            crate::global::unmerge_namespace(&namespace).map(|()| GlobalResult {
                 ok: true,
                 merged: Some(false),
                 ..GlobalResult::default()
-            },
-            Err(err) => GlobalResult::err(err),
-        })
+            })
+        };
+        Json(result.unwrap_or_else(GlobalResult::err))
     }
 
     #[tool(description = "Remove the saved record of an exited, stopped, or lost session.")]
@@ -1115,6 +1097,22 @@ impl FireMcpServer {
         Parameters(SessionIdRequest { id }): Parameters<SessionIdRequest>,
     ) -> Json<CliResult> {
         Json(session_action_result(crate::session::forget_session(&id)))
+    }
+}
+
+fn prune_missing_globals() -> GlobalResult {
+    match crate::global::prune_directories() {
+        Ok(pruned) => GlobalResult {
+            ok: true,
+            pruned: Some(
+                pruned
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
+            ),
+            ..GlobalResult::default()
+        },
+        Err(err) => GlobalResult::err(err),
     }
 }
 
@@ -1140,7 +1138,7 @@ fn to_json<T: Serialize>(value: &T) -> String {
 
 /// Single line on purpose: some MCP clients only show the first line, or a truncated prefix,
 /// of a server's instructions. The critical rule therefore comes first.
-const INSTRUCTIONS: &str = "Long-running fire commands always use `start_session`, never your own shell. Decide in order: 1) find the command with `search_commands` and pass your working directory as `cwd`; 2) check `list_sessions` and reuse a matching session; 3) if it is `long_running: true` or will not exit on its own, call `start_session` with a short `note`, then `session_output`; otherwise call `run_command`. Use `session_output`, `send_input`, `signal_session`, `stop_session`, and `forget_session` to manage sessions. Never run `agents: false` commands. If there is no fire config, use `init_project`; use `get_docs` to edit configs. Change global setup only when the user asks.";
+const INSTRUCTIONS: &str = "Long-running fire commands always use `start_session`, never your own shell. Decide in order: 1) find the command with `search_commands` and pass your working directory as `cwd`; 2) check `list_sessions` and reuse a matching session; 3) if it is `long_running: true` or will not exit on its own, call `start_session` with a short `note`, then `read_session_output`; otherwise call `run_command`. Use `read_session_output`, `send_input`, `signal_session`, `stop_session`, and `forget_session` to manage sessions. Never run `agents: false` commands. If there is no fire config, use `init_project`; use `get_docs` to edit configs. Change global setup only when the user asks.";
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FireMcpServer {
@@ -1260,9 +1258,15 @@ mod tests {
     #[test]
     fn session_lifecycle_tools_have_single_purpose_contracts() {
         let router = FireMcpServer::tool_router();
-        for name in ["stop_session", "signal_session", "forget_session"] {
+        for name in [
+            "read_session_output",
+            "stop_session",
+            "signal_session",
+            "forget_session",
+        ] {
             assert!(router.has_route(name), "missing `{name}` tool");
         }
+        assert!(!router.has_route("session_output"));
 
         let signal = router.get("signal_session").expect("signal tool");
         let required = signal

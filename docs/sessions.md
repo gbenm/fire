@@ -121,8 +121,8 @@ A session started by an agent is the same as one you started: attach to it, type
 
 ## Output and lifecycle
 - On a pty, stdout and stderr are one stream, as a terminal shows them. The raw bytes are kept for
-  replay on attach; `fire cli logs` and the MCP `session_output` tool return clean text: colors and
-  other escape sequences removed, and `\r` progress redraws collapsed to their final state.
+  replay on attach; `fire cli logs` and the MCP `read_session_output` tool return clean text: colors
+  and other escape sequences removed, and `\r` progress redraws collapsed to their final state.
 - `fire cli ps` shows only `running` sessions, and says how many ended ones are hidden. Show those
   with flags, which combine: `-a`/`--all` (everything), `--exited` (every ended session),
   `--failed` (ended with a non-zero code on its own, or `lost`: the supervisor itself was killed)
@@ -140,7 +140,7 @@ attaching to them isn't supported.
 Sessions are Unix-only (macOS and Linux).
 
 ## Agents
-The [MCP server](./mcp.md) exposes all of this: `list_sessions`, `session_output`,
+The [MCP server](./mcp.md) exposes all of this: `list_sessions`, `read_session_output`,
 `start_session`, `send_input`, `stop_session`, `signal_session` and `forget_session`. Its instructions
 tell agents to launch long-running processes this way and check existing sessions first. Without
 MCP, agents can use the same `fire cli` commands from a shell, and commands marked `long_running`
