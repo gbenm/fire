@@ -39,7 +39,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -101,7 +101,7 @@ jobs:
           shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.archive_suffix }}
           path: |
@@ -115,7 +115,7 @@ jobs:
 
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           path: dist
@@ -126,7 +126,7 @@ jobs:
           cat dist/*.sha256 | sort -k2 > dist/checksums.txt
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
           path: src
@@ -136,7 +136,7 @@ jobs:
           src/.github/scripts/changelog-section.sh "${RELEASE_TAG#v}" src/CHANGELOG.md > release-notes.md
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: Fire ${{ env.RELEASE_TAG }}
@@ -157,7 +157,7 @@ jobs:
     steps:
       - name: Checkout
         if: env.CARGO_REGISTRY_TOKEN != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -187,11 +187,11 @@ jobs:
     steps:
       - name: Checkout
         if: env.TAP_TOKEN != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Checkout tap
         if: env.TAP_TOKEN != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: gbenm/homebrew-labs
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -228,7 +228,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
 
