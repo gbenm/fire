@@ -17,6 +17,7 @@
 
 mod attach;
 mod clean;
+mod follow;
 mod proto;
 mod pty;
 mod supervisor;
@@ -150,16 +151,27 @@ pub(crate) fn handle(args: &[String]) {
     match rest.first().map(String::as_str) {
         Some("bg") => start(&rest[1..]),
         Some("ps") => print_sessions(&rest[1..]),
-        Some("logs") => match &rest[1..] {
-            [id] => print_logs(id, 50),
-            [id, lines] => print_logs(
-                id,
-                lines
-                    .parse()
-                    .unwrap_or_else(|_| fail("lines must be a number")),
-            ),
-            _ => fail("Usage: fire cli logs <id> [lines]"),
-        },
+        Some("logs") => {
+            let follow = rest[1..].iter().any(|arg| arg == "-f" || arg == "--follow");
+            let args: Vec<&String> = rest[1..]
+                .iter()
+                .filter(|arg| *arg != "-f" && *arg != "--follow")
+                .collect();
+            let (id, lines) = match args[..] {
+                [id] => (id, 50),
+                [id, lines] => (
+                    id,
+                    lines
+                        .parse()
+                        .unwrap_or_else(|_| fail("lines must be a number")),
+                ),
+                _ => fail("Usage: fire cli logs [-f|--follow] <id> [lines]"),
+            };
+            if follow {
+                follow::follow(id, follow::Start::Tail(lines), true);
+            }
+            print_logs(id, lines)
+        }
         Some("fg") => match &rest[1..] {
             [id] => attach_existing(id),
             _ => fail("Usage: fire cli fg <id>"),
@@ -252,7 +264,7 @@ fn start(args: &[String]) {
     if command.is_empty() {
         fail("Usage: fire --bg [-m \"short context\"] [--new] <command> [args...]");
     }
-    start_detached(command, note, force_new, from_agent);
+    start_detached(command, note, force_new, from_agent, false);
 }
 
 /// Refuses commands the user reserved for humans (`agents: false` on it or an ancestor).
@@ -270,12 +282,14 @@ pub(crate) fn refuse_if_not_for_agents(command: &[String], resolved: &ResolvedCo
 }
 
 /// `fire --bg <command>`: starts `command` in a detached session, or reports the one already
-/// running for it in this directory (unless `force_new`). Prints the session id.
+/// running for it in this directory (unless `force_new`). Prints the session id, or with
+/// `follow` (`fire --bg -f`) follows its output instead, until it exits or Ctrl+C.
 pub(crate) fn start_detached(
     command: &[String],
     note: Option<String>,
     force_new: bool,
     from_agent: bool,
+    follow: bool,
 ) {
     let config = crate::config::load_config();
     match crate::resolve::resolve_command(&config, command) {
@@ -291,14 +305,19 @@ pub(crate) fn start_detached(
             if let Some(existing) = existing.as_ref().filter(|session| session.is_running()) {
                 let id = existing.id.clone();
                 let updated = update_note(existing.clone(), note);
-                println!("{id}");
+                if !follow {
+                    println!("{id}");
+                }
                 eprintln!(
                     "[fire] `fire {}` is already running here as session {id}{}",
                     command.join(" "),
                     if updated { "; note updated" } else { "" }
                 );
+                if follow {
+                    follow::follow(&id, follow::Start::Tail(50), false);
+                }
                 eprintln!(
-                    "[fire] logs: fire cli logs {id} | attach: fire cli fg {id} | stop: fire cli kill {id}"
+                    "[fire] logs: fire cli logs {id} (-f follows) | attach: fire cli fg {id} | stop: fire cli kill {id}"
                 );
                 return;
             }
@@ -307,6 +326,14 @@ pub(crate) fn start_detached(
                 .is_some_and(|session| session.is_restartable());
             let id = spawn_session(command, resolved.consumed, note, false, existing)
                 .unwrap_or_else(|err| fail(&err));
+            if follow {
+                eprintln!(
+                    "[fire] {} `fire {}` as session {id}",
+                    if restarted { "restarted" } else { "started" },
+                    command.join(" ")
+                );
+                follow::follow(&id, follow::Start::Beginning, false);
+            }
             print_started(&id, command, restarted);
         }
         _ => fail(&format!(
@@ -324,7 +351,7 @@ fn print_started(id: &str, command: &[String], restarted: bool) {
         command.join(" ")
     );
     eprintln!(
-        "[fire] logs: fire cli logs {id} | attach: fire cli fg {id} | stop: fire cli kill {id}"
+        "[fire] logs: fire cli logs {id} (-f follows) | attach: fire cli fg {id} | stop: fire cli kill {id}"
     );
 }
 
@@ -921,14 +948,19 @@ fn print_logs(id: &str, lines: usize) {
 }
 
 fn tail(path: &Path, lines: usize) -> String {
+    tail_until(path, u64::MAX, lines)
+}
+
+/// Like [`tail`], over the first `end` bytes of the file only.
+fn tail_until(path: &Path, end: u64, lines: usize) -> String {
     const MAX_BYTES: u64 = 256 * 1024;
     let Ok(mut file) = File::open(path) else {
         return String::new();
     };
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0).min(end);
     let _ = file.seek(SeekFrom::Start(len.saturating_sub(MAX_BYTES)));
     let mut buffer = Vec::new();
-    let _ = file.read_to_end(&mut buffer);
+    let _ = file.take(MAX_BYTES.min(len)).read_to_end(&mut buffer);
     let text = clean::clean(&String::from_utf8_lossy(&buffer));
     let all: Vec<&str> = text.lines().collect();
     let mut out = all[all.len().saturating_sub(lines)..].join("\n");
@@ -1292,6 +1324,7 @@ mod tests {
         fs::write(&path, "a\r\n\x1b[31mb\x1b[0m\r\n10%\r100%\r\n").unwrap();
         assert_eq!(tail(&path, 2), "b\n100%\n");
         assert_eq!(tail(&dir.join("missing"), 2), "");
+        assert_eq!(tail_until(&path, 3, 5), "a\n");
         fs::remove_dir_all(dir).unwrap();
     }
 

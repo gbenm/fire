@@ -138,7 +138,10 @@ pub fn setup_cli() {
         // A dry run starts nothing, so `--bg --dry-run` just prints what would run.
         let dry_run = flags::env_bool("FIRE_DRY_RUN") == Some(true);
         if flags.bg && !dry_run {
-            session::start_detached(command_args, flags.note, flags.new, flags.agent);
+            // Agents (MCP) never block on a session's output, whatever the environment says.
+            let follow =
+                !flags.agent && (flags.follow || flags::env_bool("FIRE_FOLLOW") == Some(true));
+            session::start_detached(command_args, flags.note, flags.new, flags.agent, follow);
             return;
         }
         global::offer_registration(&config);

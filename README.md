@@ -164,6 +164,7 @@ them:
 ```bash
 fire --bg -m "api for auth tests" api dev     # start one detached
 fire cli ps                                   # running ones; -a/--failed/--stopped/--exited for the rest
+fire cli logs -f <id>                         # follow its output; Ctrl+C stops following, not it
 fire cli fg <id>
 ```
 Mark servers and watchers with `long_running: true` so they detach on their own when an agent or a

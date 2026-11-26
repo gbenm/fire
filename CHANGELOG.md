@@ -7,6 +7,11 @@ reconstructed from the git history.
 ## [Unreleased]
 
 ### Added
+- Follow a session's output: `fire cli logs -f <id> [lines]` (or `--follow`) prints the last lines,
+  then streams new output until the program exits (ending with its exit code) or Ctrl+C, which only
+  closes the viewer: the program keeps running. `fire --bg -f <command>` starts or reuses the
+  session detached and follows it right away; the flag sets `FIRE_FOLLOW=true` for nested calls.
+  Sessions started by older fire versions are followed by tailing their log files. (#60)
 - Sessions record the session format version and the fire version that started them, so newer
   fire versions keep listing, reading, signalling, stopping and reusing sessions started by older
   ones (and attach when that version allows it). `fire cli upgrade` never stops running sessions

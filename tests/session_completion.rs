@@ -69,6 +69,10 @@ fn session_commands_complete_ids_with_descriptions() {
     );
 
     let logs = complete(&project, &["logs", ""]);
+    assert!(logs[0].starts_with("-f\t"), "{logs:?}");
+    assert!(logs[1].starts_with("--follow\t"), "{logs:?}");
+    let logs = logs[2..].to_vec();
+    assert_eq!(complete(&project, &["logs", "-f", ""]), logs);
     assert_eq!(logs.len(), 2, "{logs:?}");
     assert!(
         logs[0].starts_with(&format!("{server}\t")),

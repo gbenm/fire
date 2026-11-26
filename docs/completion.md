@@ -29,14 +29,16 @@ shell configuration file that it cannot read as UTF-8.
 - Bash uses the `complete -C` protocol, which only consumes the values.
 - A command with `driver` delegates its argument candidates to the installed driver's completion
   handler; see [External CLI Drivers](./drivers.md#completion-protocol).
-- `fire -<TAB>` lists the [global flags](commands-and-args.md#global-flags) not typed yet. After
+- `fire -<TAB>` lists the [global flags](commands-and-args.md#global-flags) not typed yet
+  (`-f`/`--follow` once `--bg` is typed). After
   them, completion is the same as for `fire <TAB>` (without `cli`); the note after `-m` is free text,
   so nothing is offered there.
 - Session commands complete their arguments, each with a description
   (`running · fire api dev · "auth tests" · 12m`):
   - `fire cli fg <TAB>` and `fire cli send <TAB>`: running sessions (`send` also offers `--raw`).
   - `fire cli kill <TAB>` and `fire cli logs <TAB>`: every session, running ones first, then
-    ended ones by most recent. Sessions started in the current directory lead each part.
+    ended ones by most recent. Sessions started in the current directory lead each part. `logs`
+    also offers `-f`/`--follow`.
   - `fire cli kill <id> <TAB>`: signal names (`INT`, `TERM`, `HUP`, `KILL`...), only when the
     session is running.
 - zsh and fish keep fire's order instead of sorting. Bash always sorts the values. Nushell applies

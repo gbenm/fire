@@ -50,6 +50,7 @@ impl Project {
             // tests/global.rs removes it to exercise the prompt.
             .env("CI", "1")
             .env_remove("FIRE_DRY_RUN")
+            .env_remove("FIRE_FOLLOW")
             .env_remove("FIRE_LOG_COMMANDS")
             .env_remove("FIRE_SESSION")
             .env_remove("FIRE_SESSIONS")

@@ -303,6 +303,7 @@ word belongs to the command, so `fire api dev --bg` passes `--bg` to `api dev`.
 | Flag | Effect | Environment variable |
 |---|---|---|
 | `--bg` | Run detached, in a [session](sessions.md#managing-sessions); prints its id | |
+| `-f`, `--follow` | With `--bg`: [follow its output](sessions.md#following-the-output) until it exits; Ctrl+C stops following, it keeps running | `FIRE_FOLLOW=true` |
 | `--new` | Start a new session even if this command already has one here | |
 | `-m`, `--note <text>` | Short note on why the session is running | `FIRE_SESSION_NOTE` |
 | `--fg` | Run attached in this process, without a session | `FIRE_SESSIONS=off` |
@@ -315,7 +316,8 @@ fire --dry-run api deploy
 ```
 
 - Flags combine in any order. A repeated flag is fine; repeated `-m` and `-j` keep the last value.
-- `--bg` and `--fg` can't go together. `-m` and `--new` apply to sessions (with `--bg`, or to the
+- `--bg` and `--fg` can't go together. `-f`/`--follow` needs `--bg` (`FIRE_FOLLOW` only applies to
+  `--bg` too; agents never follow). `-m` and `--new` apply to sessions (with `--bg`, or to the
   session a command starts on its own in a terminal), so they fail with `--fg`.
 - An unknown flag (`fire --foo api dev`) is an error that lists the valid ones; it is never looked
   up as a command. Flags need a command, and they don't apply to `fire cli ...`.

@@ -485,7 +485,8 @@ fn core_cli_check_flags(typed: &[String], prefix: &str) -> Vec<CompletionSuggest
 }
 
 /// Arguments of `fire cli fg/send/kill/logs`: session ids (running ones only where an ended
-/// session would fail), `--raw` for `send`, signal names after `kill <id>`. `sessions` and
+/// session would fail), `--raw` for `send`, `-f`/`--follow` for `logs`, signal names after
+/// `kill <id>`. `sessions` and
 /// `running` read the session records; they are parameters so tests don't touch the disk.
 fn core_cli_session_args(
     command: &str,
@@ -516,7 +517,25 @@ fn core_cli_session_args(
             suggestions
         }
         ("send", [flag]) if flag == "--raw" => described(sessions(true)),
-        ("kill" | "logs", []) => described(sessions(false)),
+        ("kill", []) => described(sessions(false)),
+        ("logs", typed) => {
+            let follow = typed.iter().any(|word| word == "-f" || word == "--follow");
+            if typed.len() > usize::from(follow) {
+                return Vec::new();
+            }
+            let mut suggestions = Vec::new();
+            if !follow {
+                suggestions.extend(["-f", "--follow"].map(|flag| CompletionSuggestion {
+                    value: flag.to_string(),
+                    description: Some(
+                        "Stream new output until the program exits (Ctrl+C stops following, it keeps running)"
+                            .to_string(),
+                    ),
+                }));
+            }
+            suggestions.extend(described(sessions(false)));
+            suggestions
+        }
         ("kill", [id]) if running(id) => crate::session::SIGNALS
             .iter()
             .map(|(name, description)| CompletionSuggestion {
@@ -1316,7 +1335,12 @@ commands:
         assert!(names(&config, &["--note", "d"]).is_empty());
         assert_eq!(
             names(&config, &["--bg", "--"]),
-            vec!["--new", "--note", "--dry-run", "--no-log"]
+            vec!["--follow", "--new", "--note", "--dry-run", "--no-log"]
+        );
+        assert_eq!(names(&config, &["--bg", "-f", "--f"]), Vec::<String>::new());
+        assert_eq!(
+            names(&config, &["--bg", "-f", ""]),
+            names(&config, &["--bg", ""])
         );
         assert_eq!(names(&config, &["--fg", "--n"]), vec!["--no-log"]);
     }
@@ -1606,7 +1630,10 @@ commands:
         assert_eq!(values("send", &[]), ["--raw", "api-1"]);
         assert_eq!(values("send", &["--raw"]), ["api-1"]);
         assert!(values("send", &["api-1"]).is_empty());
-        assert_eq!(values("logs", &[]), ["api-1", "old-2"]);
+        assert_eq!(values("logs", &[]), ["-f", "--follow", "api-1", "old-2"]);
+        assert_eq!(values("logs", &["-f"]), ["api-1", "old-2"]);
+        assert_eq!(values("logs", &["--follow"]), ["api-1", "old-2"]);
+        assert!(values("logs", &["-f", "api-1"]).is_empty());
         assert_eq!(values("kill", &[]), ["api-1", "old-2"]);
         assert!(values("kill", &["api-1"]).contains(&"TERM".to_string()));
         assert!(values("kill", &["old-2"]).is_empty());

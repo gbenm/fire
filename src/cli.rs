@@ -76,7 +76,7 @@ pub(crate) fn handle_cli_command(command_args: &[String]) {
             eprintln!("  fire cli completion install [bash|zsh|fish|nushell|all]");
             eprintln!("  fire cli mcp install [<host>] [--print]");
             eprintln!("  fire cli mcp uninstall <host> [--print]");
-            eprintln!("  fire cli ps [-a|--all] [--exited] [--failed] [--stopped] | logs <id> [lines] | fg <id> | send <id> <text> | kill <id> [SIGNAL]");
+            eprintln!("  fire cli ps [-a|--all] [--exited] [--failed] [--stopped] | logs [-f] <id> [lines] | fg <id> | send <id> <text> | kill <id> [SIGNAL]");
             process::exit(1);
         }
     }
@@ -314,7 +314,7 @@ fn print_cli_help() {
     println!("  mcp      Start or configure the MCP server for supported agent hosts");
     println!("  bg       Deprecated: use fire --bg [-m \"note\"] [--new] <command>");
     println!("  ps [-a|--all] [--exited] [--failed] [--stopped]  List running sessions (all projects); flags show ended ones");
-    println!("  logs <id> [lines]  Show the last lines of a session's output");
+    println!("  logs [-f|--follow] <id> [lines]  Show the last lines of a session's output; -f keeps streaming it until the program exits (Ctrl+C stops following, it keeps running)");
     println!("  fg <id>  Attach to a session (Ctrl+Z detaches, shell `fg` reattaches)");
     println!(
         "  send [--raw] <id> <text>  Type a line into a session (--raw: exact keys, e.g. '\\x03')"

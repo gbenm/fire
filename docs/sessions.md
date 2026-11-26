@@ -83,6 +83,8 @@ fire --bg -m "api for auth e2e tests" api dev     # start detached, prints the s
 fire cli ps                                        # list running sessions (all projects)
 fire cli ps --failed --stopped                     # ...or ended ones (-a/--all, --exited, --failed, --stopped)
 fire cli logs api-dev-3f2a [lines]                 # last lines of output as text (default 50)
+fire cli logs -f api-dev-3f2a [lines]              # ...then follow new output (Ctrl+C stops following)
+fire --bg -f api dev                               # start (or reuse) detached and follow it right away
 fire cli fg api-dev-3f2a                           # attach in your terminal
 fire cli send api-dev-3f2a rs                      # type a line (followed by Enter)
 fire cli send --raw api-dev-3f2a 'q'               # type exact keys, no Enter
@@ -94,7 +96,7 @@ fire cli kill api-dev-3f2a                         # stop it: TERM, then KILL af
 - `-m` / `--note` is a **very short context** about why the command was started. It shows up in
   `fire cli ps` and in the MCP `list_sessions` tool, so other agents know what is going on. Agents
   should always pass it.
-- `--bg`, `-m` and `--new` are [global flags](commands-and-args.md#global-flags): they go before
+- `--bg`, `-f`, `-m` and `--new` are [global flags](commands-and-args.md#global-flags): they go before
   the command (`fire api dev --bg` passes `--bg` to the command) and combine with `--dry-run` and
   `--no-log`. `--bg --dry-run` prints what would run and starts nothing.
 - Everything after the flags is a normal fire command path plus its arguments, resolved from the
@@ -117,6 +119,23 @@ fire cli kill api-dev-3f2a                         # stop it: TERM, then KILL af
   react to them; it waits for the command and mirrors its exit code.
 - Inside a session the environment variable `FIRE_SESSION` holds the session id, and `TERM`
   defaults to `xterm-256color` when the starting environment had none.
+
+### Following the output
+`fire cli logs -f <id> [lines]` (or `--follow`) prints the last lines, like `fire cli logs`, then
+streams new output as the program writes it, like `docker logs -f`. It is read-only: no keys,
+resizes or signals reach the program, so **Ctrl+C only closes the viewer** and the program keeps
+running (the viewer exits 130). When the program exits, the follow ends by itself, prints
+`[fire] <id> exited with code <code>` and exits with that code. Several viewers can follow the
+same session, alongside attached ones.
+
+`fire --bg -f <command>` (or `--follow`) starts the session detached, or reuses the one already
+running that command in this directory, and follows it right away: a new session from its first
+line, a running one from its last lines. Ctrl+C leaves it running. Agents (MCP) never follow.
+
+Following reads the session's log file, not the control socket, so it works with sessions of every
+fire version: sessions in the old pipe layout are followed from `stdout.log` (to stdout) and
+`stderr.log` (to stderr). New output is streamed as the program wrote it (colors included); the
+first lines are clean text, as `fire cli logs` prints them.
 
 ### Attaching (`fg`)
 `fire cli fg <id>` replays the recent output and then follows it live, in raw mode: every key goes
@@ -141,8 +160,8 @@ A session started by an agent is the same as one you started: attach to it, type
 Session data lives in your local data directory (`~/Library/Application Support/fire/sessions` on
 macOS, `~/.local/share/fire/sessions` on Linux): `session.json`, `output.log` and, while the
 program runs, the supervisor's control socket `ctl.sock`. Sessions started by older fire versions
-(`stdout.log`, `stderr.log` and a `stdin` FIFO) can still be listed, read, written to and stopped;
-attaching to them isn't supported.
+(`stdout.log`, `stderr.log` and a `stdin` FIFO) can still be listed, read, followed, written to and
+stopped; attaching to them isn't supported.
 
 Sessions are Unix-only (macOS and Linux).
 

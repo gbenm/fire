@@ -3,8 +3,16 @@
 
 /// Flags shown in help and completion, with their descriptions. `--agent` is internal (MCP) and
 /// stays out of this list.
-pub(crate) const GLOBAL_FLAGS: [(&str, &str); 7] = [
+pub(crate) const GLOBAL_FLAGS: [(&str, &str); 9] = [
     ("--bg", "Run the command detached, in a session"),
+    (
+        "-f",
+        "With --bg: follow its output (Ctrl+C stops following, it keeps running)",
+    ),
+    (
+        "--follow",
+        "With --bg: follow its output (Ctrl+C stops following, it keeps running)",
+    ),
     (
         "--new",
         "Start a new session even if this command already has one here",
@@ -23,6 +31,8 @@ pub(crate) const BG_FLAGS: [&str; 3] = ["--new", "-m", "--note"];
 pub(crate) struct GlobalFlags {
     pub(crate) bg: bool,
     pub(crate) fg: bool,
+    /// With `--bg`: follow the session's output right away.
+    pub(crate) follow: bool,
     pub(crate) new: bool,
     pub(crate) note: Option<String>,
     pub(crate) dry_run: bool,
@@ -36,6 +46,7 @@ impl GlobalFlags {
         match flag {
             "--bg" => self.bg = true,
             "--fg" => self.fg = true,
+            "-f" | "--follow" => self.follow = true,
             "--new" => self.new = true,
             "--dry-run" => self.dry_run = true,
             "--no-log" => self.no_log = true,
@@ -49,6 +60,12 @@ impl GlobalFlags {
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.bg && self.fg {
             return Err("--bg and --fg can't be used together".to_string());
+        }
+        if self.follow && !self.bg {
+            return Err(
+                "-f/--follow follows a detached session; use it with --bg: fire --bg -f <command>"
+                    .to_string(),
+            );
         }
         if self.fg && self.note.is_some() {
             return Err("-m/--note needs a session; --fg runs without one".to_string());
@@ -72,6 +89,9 @@ impl GlobalFlags {
         if self.fg {
             std::env::set_var("FIRE_SESSIONS", "off");
         }
+        if self.follow {
+            std::env::set_var("FIRE_FOLLOW", "true");
+        }
         if let Some(note) = &self.note {
             std::env::set_var("FIRE_SESSION_NOTE", note);
         }
@@ -82,7 +102,7 @@ impl GlobalFlags {
 fn is_switch(flag: &str) -> bool {
     matches!(
         flag,
-        "--bg" | "--fg" | "--new" | "--dry-run" | "--no-log" | "--agent"
+        "--bg" | "--fg" | "-f" | "--follow" | "--new" | "--dry-run" | "--no-log" | "--agent"
     )
 }
 
@@ -122,20 +142,18 @@ pub(crate) fn valid_flags_line() -> String {
     let names: Vec<&str> = GLOBAL_FLAGS
         .iter()
         .map(|(name, _)| *name)
-        .filter(|name| *name != "--note")
-        .map(|name| {
-            if name == "-m" {
-                "-m/--note <text>"
-            } else {
-                name
-            }
+        .filter(|name| *name != "--note" && *name != "--follow")
+        .map(|name| match name {
+            "-m" => "-m/--note <text>",
+            "-f" => "-f/--follow",
+            other => other,
         })
         .collect();
     format!("Valid flags: {}", names.join(", "))
 }
 
 pub(crate) const USAGE: &str =
-    "Usage: fire [--bg|--fg] [--new] [-m \"note\"] [--dry-run] [--no-log] <command> [args...]";
+    "Usage: fire [--bg [-f]|--fg] [--new] [-m \"note\"] [--dry-run] [--no-log] <command> [args...]";
 
 /// Where completion is within the leading flags.
 #[derive(Debug, PartialEq, Eq)]
@@ -193,6 +211,7 @@ fn already_set(flags: &GlobalFlags, flag: &str) -> bool {
     match flag {
         "--bg" => flags.bg,
         "--fg" => flags.fg,
+        "-f" | "--follow" => flags.follow,
         "--new" => flags.new,
         "--dry-run" => flags.dry_run,
         "--no-log" => flags.no_log,
@@ -204,8 +223,10 @@ fn already_set(flags: &GlobalFlags, flag: &str) -> bool {
 fn conflicts(flags: &GlobalFlags, flag: &str) -> bool {
     match flag {
         "--bg" => flags.fg,
-        "--fg" => flags.bg || flags.new || flags.note.is_some(),
+        "--fg" => flags.bg || flags.follow || flags.new || flags.note.is_some(),
         "--new" | "-m" | "--note" => flags.fg,
+        // Follows the session `--bg` starts: offered once `--bg` is typed.
+        "-f" | "--follow" => flags.fg || !flags.bg,
         _ => false,
     }
 }
@@ -300,6 +321,10 @@ mod tests {
         assert!(check(&["--bg", "--fg"]).is_err());
         assert!(check(&["--fg", "-m", "x"]).is_err());
         assert!(check(&["--fg", "--new"]).is_err());
+        assert!(check(&["-f", "x"]).is_err());
+        assert!(check(&["--fg", "--follow"]).is_err());
+        assert!(check(&["--follow", "--bg", "x"]).is_ok());
+        assert!(check(&["--bg", "-f", "-m", "x"]).is_ok());
         assert!(check(&["--bg", "--new", "-m", "x", "--dry-run", "--no-log"]).is_ok());
         assert!(check(&["--fg", "--dry-run", "--no-log"]).is_ok());
     }

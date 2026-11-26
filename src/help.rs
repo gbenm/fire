@@ -31,10 +31,11 @@ pub(crate) fn print_root_help(config: &LoadedConfig) {
 fn global_flags() -> Vec<(String, Option<String>)> {
     crate::flags::GLOBAL_FLAGS
         .iter()
-        .filter(|(name, _)| *name != "--note")
+        .filter(|(name, _)| *name != "--note" && *name != "--follow")
         .map(|(name, description)| {
             let name = match *name {
                 "-m" => "-m, --note <text>",
+                "-f" => "-f, --follow",
                 other => other,
             };
             (name.to_string(), Some(description.to_string()))
