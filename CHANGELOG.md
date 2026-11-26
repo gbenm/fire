@@ -6,6 +6,8 @@ reconstructed from the git history.
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-11-26
+
 ### Added
 - Follow a session's output: `fire cli logs -f <id> [lines]` (or `--follow`) prints the last lines,
   then streams new output until the program exits (ending with its exit code) or Ctrl+C, which only
@@ -305,7 +307,8 @@ Version bump only.
 - First release: commands from YAML, namespaces and groups, global install, `include`, `init`,
   `runner` / `fallback_runner` / `check`, `before`, placeholders and macros, completion.
 
-[Unreleased]: https://github.com/gbenm/fire/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/gbenm/fire/compare/v3.3.0...HEAD
+[3.3.0]: https://github.com/gbenm/fire/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/gbenm/fire/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/gbenm/fire/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/gbenm/fire/compare/v3.0.0...v3.0.1
