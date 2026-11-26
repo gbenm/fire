@@ -186,3 +186,93 @@ pub fn eventually(mut check: impl FnMut() -> bool, describe: impl Fn() -> String
         thread::sleep(Duration::from_millis(50));
     }
 }
+
+/// Where `fire` keeps the sessions of `project` (its HOME is inside the project).
+pub fn sessions_root(project: &Project) -> PathBuf {
+    let home = project.dir.join("home");
+    let data = if cfg!(target_os = "macos") {
+        home.join("Library/Application Support")
+    } else {
+        home.join(".local/share")
+    };
+    data.join("fire").join("sessions")
+}
+
+/// A running session as fire versions before session versioning left it: the pipe layout
+/// (`stdout.log`, `stderr.log`, a `stdin` FIFO), no `ctl.sock`, no `protocol` or `fire_version`
+/// in `session.json`. Its program is a `sleep` in a process group of its own (never the test
+/// runner's) and not a child of the test, so it doesn't linger as a zombie once killed. Killed
+/// on drop.
+pub struct LegacySession {
+    pub id: String,
+    pub dir: PathBuf,
+    /// The `sleep`, standing in for the old supervisor (its liveness is the session's).
+    pub pid: u32,
+    /// Its process group, which `fire cli kill` signals.
+    pub group: u32,
+}
+
+impl LegacySession {
+    pub fn start(project: &Project, id: &str, command: &[&str], stdout: &str) -> Self {
+        // `sh` leads a new process group, leaves `sleep` running in it and exits.
+        let output = Command::new("sh")
+            .args(["-c", "sleep 30 >/dev/null 2>&1 & echo $$ $!"])
+            .process_group(0)
+            .stdin(Stdio::null())
+            .output()
+            .expect("spawn sleep");
+        let pids: Vec<u32> = String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .map(|pid| pid.parse().expect("pid"))
+            .collect();
+        let [group, pid] = pids[..] else {
+            panic!("unexpected output: {output:?}")
+        };
+
+        let dir = sessions_root(project).join(id);
+        fs::create_dir_all(&dir).unwrap();
+        let cwd = fs::canonicalize(&project.dir).unwrap();
+        let record = serde_json::json!({
+            "id": id,
+            "command": command,
+            "note": null,
+            "cwd": cwd.display().to_string(),
+            "started_at": 1,
+            "supervisor_pid": pid,
+            "pid": group,
+            "exit_code": null,
+            "ended_at": null,
+        });
+        fs::write(dir.join("session.json"), record.to_string()).unwrap();
+        fs::write(dir.join("stdout.log"), stdout).unwrap();
+        fs::write(dir.join("stderr.log"), "").unwrap();
+        let fifo = Command::new("mkfifo")
+            .arg(dir.join("stdin"))
+            .status()
+            .expect("mkfifo");
+        assert!(fifo.success());
+        LegacySession {
+            id: id.to_string(),
+            dir,
+            pid,
+            group,
+        }
+    }
+
+    pub fn alive(&self) -> bool {
+        Command::new("kill")
+            .args(["-0", &self.pid.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+}
+
+impl Drop for LegacySession {
+    fn drop(&mut self) {
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", self.group)])
+            .stderr(Stdio::null())
+            .status();
+    }
+}

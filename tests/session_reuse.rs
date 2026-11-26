@@ -6,11 +6,10 @@ mod common;
 use std::{
     fs,
     os::unix::process::CommandExt,
-    path::PathBuf,
     process::{Child, Command, Stdio},
 };
 
-use common::{eventually, spawn_in_pty, wait_for_exit, wait_for_output, Project};
+use common::{eventually, sessions_root, spawn_in_pty, wait_for_exit, wait_for_output, Project};
 
 const CONFIG: &str = r#"
 commands:
@@ -77,16 +76,6 @@ fn terminal_run_attaches_to_the_running_session() {
     project.cli(&["kill", &id, "KILL"]);
     wait_for_exit(&mut child);
     assert_eq!(session_ids(&project), vec![id], "no second session");
-}
-
-fn sessions_root(project: &Project) -> PathBuf {
-    let home = project.dir.join("home");
-    let data = if cfg!(target_os = "macos") {
-        home.join("Library/Application Support")
-    } else {
-        home.join(".local/share")
-    };
-    data.join("fire").join("sessions")
 }
 
 #[test]

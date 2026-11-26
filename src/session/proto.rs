@@ -1,11 +1,26 @@
 //! Framing for the control socket (`ctl.sock`) between session clients and the supervisor.
 //!
 //! Each frame is `[kind: u8][len: u32 big-endian][payload]`.
+//!
+//! Sessions outlive the fire that started them (an upgrade replaces the binary, not the running
+//! supervisors), so newer clients talk to older supervisors and the other way around. Changes
+//! stay backwards compatible: add new frame kinds (ignored by peers that don't know them) and
+//! bump [`VERSION`]; never change or reuse the payload of an existing kind.
 
 use std::{
     io::{self, Read, Write},
     os::unix::net::UnixStream,
 };
+
+/// Session format and protocol version, recorded as `protocol` in `session.json` by the fire that
+/// started the session:
+/// - 0: pipes (`stdout.log`, `stderr.log`, a `stdin` FIFO), no control socket. Records from that
+///   time have no `protocol` field.
+/// - 1: a pty (`output.log`) and this control socket with the frames below. Records written
+///   before the field existed have no `protocol` field either, but do have `output.log`.
+pub(crate) const VERSION: u32 = 1;
+/// The first version whose supervisor accepts [`ATTACH`].
+pub(crate) const ATTACH_SINCE: u32 = 1;
 
 /// Client -> supervisor: raw bytes written to the pty.
 pub(crate) const INPUT: u8 = 1;

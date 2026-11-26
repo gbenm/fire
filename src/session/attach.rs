@@ -10,7 +10,9 @@ use std::{
     sync::atomic::{AtomicI32, Ordering},
 };
 
-use super::{connect, load, proto, pty, read_output, remove_session, session_dir, OUTPUT_LOG};
+use super::{
+    connect, load, proto, pty, read_output, remove_session, session_dir, Session, OUTPUT_LOG,
+};
 
 static SIGNAL_PIPE: AtomicI32 = AtomicI32::new(-1);
 
@@ -55,6 +57,17 @@ impl Drop for RawGuard {
 }
 
 pub(crate) fn attach(id: &str, options: Options) -> ! {
+    if let Some(session) = load(id).filter(|session| session.is_running() && !session.can_attach())
+    {
+        report_unattachable(
+            &session,
+            &format!(
+                "it was started by an older fire (session format {}, attach needs {})",
+                session.protocol(),
+                proto::ATTACH_SINCE
+            ),
+        );
+    }
     let signals = signal_pipe();
     let interactive = io::stdin().is_terminal();
     let mut offset = proto::TAIL;
@@ -276,24 +289,7 @@ fn finish_without_socket(id: &str, options: &Options, offset: u64) -> ! {
             process::exit(code);
         }
         Some(session) if session.status() == "running" => {
-            // Started by an older fire (pipes instead of a pty, no control socket): it can't be
-            // attached, so show what it printed and how to stop it.
-            eprintln!(
-                "[fire] `fire {}` is running as session {id}, but it can't be attached (no control socket; started by an older fire?)",
-                session.command.join(" ")
-            );
-            if let Some((_, output)) = read_output(id, 20) {
-                if !output.is_empty() {
-                    eprintln!("[fire] recent output:");
-                    let mut stdout = io::stdout();
-                    let _ = stdout.write_all(output.as_bytes());
-                    let _ = stdout.flush();
-                }
-            }
-            eprintln!(
-                "[fire] logs: fire cli logs {id} | stop: fire cli kill {id} (then run it again)"
-            );
-            process::exit(1);
+            report_unattachable(&session, "its control socket is gone")
         }
         Some(_) => {
             eprintln!("[fire] lost track of {id}: its supervisor died");
@@ -301,6 +297,26 @@ fn finish_without_socket(id: &str, options: &Options, offset: u64) -> ! {
         }
         None => process::exit(1),
     }
+}
+
+/// A running session this fire can't attach to: show what it printed and how to stop it, so it
+/// can be started again (never a duplicate next to it).
+fn report_unattachable(session: &Session, reason: &str) -> ! {
+    let id = &session.id;
+    eprintln!(
+        "[fire] `fire {}` is running as session {id}, but it can't be attached: {reason}",
+        session.command.join(" ")
+    );
+    if let Some((_, output)) = read_output(id, 20) {
+        if !output.is_empty() {
+            eprintln!("[fire] recent output:");
+            let mut stdout = io::stdout();
+            let _ = stdout.write_all(output.as_bytes());
+            let _ = stdout.flush();
+        }
+    }
+    eprintln!("[fire] logs: fire cli logs {id} | stop: fire cli kill {id} (then run it again)");
+    process::exit(1);
 }
 
 fn signal_pipe() -> i32 {

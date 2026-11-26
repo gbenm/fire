@@ -8,7 +8,12 @@
 //! - `ctl.sock` — control socket of the supervisor while the program runs
 //!
 //! Sessions from older fire versions used pipes instead: `stdout.log`, `stderr.log` and a `stdin` FIFO.
-//! Those are still readable and can be signalled until they are cleaned up.
+//! Those are still listed, readable and can be signalled until they are cleaned up, and count as
+//! already running, but can't be attached.
+//!
+//! Sessions outlive upgrades (the supervisor keeps the binary that started it), so every fire
+//! must keep managing the sessions of older ones: `session.json` records the session format and
+//! protocol version (`protocol`, see [`proto::VERSION`]) and the fire version that started it.
 
 mod attach;
 mod clean;
@@ -58,6 +63,14 @@ pub(crate) struct Session {
     /// Stopped on purpose (`fire cli kill`, MCP `stop_session`) rather than ending on its own.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) stopped: bool,
+    /// Session format and protocol version of the fire that started it ([`proto::VERSION`]).
+    /// Missing in records from before it was recorded: see [`Session::protocol`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) protocol: Option<u32>,
+    /// Version of the fire that started it (and still runs its supervisor). Missing in records
+    /// from before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) fire_version: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,6 +99,23 @@ impl Session {
 
     fn is_running(&self) -> bool {
         self.status() == "running"
+    }
+
+    /// The session format and protocol version ([`proto::VERSION`]). Records without one predate
+    /// versioning: version 1 if the session has a pty log (`output.log`), else the pipe layout, 0.
+    pub(crate) fn protocol(&self) -> u32 {
+        self.protocol.unwrap_or_else(|| {
+            if session_dir(&self.id).join(OUTPUT_LOG).exists() {
+                1
+            } else {
+                0
+            }
+        })
+    }
+
+    /// Whether a viewer can attach to it (its supervisor speaks the control protocol).
+    pub(crate) fn can_attach(&self) -> bool {
+        self.protocol() >= proto::ATTACH_SINCE
     }
 
     /// Ended with an error on its own (not stopped by someone), or its supervisor died.
@@ -383,6 +413,8 @@ fn spawn_session(
         ended_at: None,
         auto,
         stopped: false,
+        protocol: Some(proto::VERSION),
+        fire_version: Some(crate::FIRE_VERSION.to_string()),
     };
     save(&session);
 
@@ -570,6 +602,64 @@ pub(crate) fn list_sessions() -> Vec<Session> {
         .collect();
     sessions.sort_by_key(|session| std::cmp::Reverse(session.started_at));
     sessions
+}
+
+// ---------------------------------------------------------------- upgrades
+
+/// After `fire cli upgrade`: running sessions are never stopped, and each keeps running on the
+/// fire that started it until it is restarted. Prints those not started by the `installed`
+/// version (all running ones when it is unknown).
+pub(crate) fn report_sessions_on_old_version(installed: Option<&str>) {
+    for line in old_version_notice(&list_sessions(), installed) {
+        eprintln!("{line}");
+    }
+}
+
+fn old_version_notice(sessions: &[Session], installed: Option<&str>) -> Vec<String> {
+    let old: Vec<&Session> = sessions
+        .iter()
+        .filter(|session| session.is_running())
+        .filter(|session| installed.is_none() || session.fire_version.as_deref() != installed)
+        .collect();
+    if old.is_empty() {
+        return Vec::new();
+    }
+    let rows: Vec<[String; 3]> = old
+        .iter()
+        .map(|session| {
+            [
+                session.id.clone(),
+                match &session.fire_version {
+                    Some(version) => format!("fire {version}"),
+                    None => "an older fire".to_string(),
+                },
+                format!("fire {}", session.command.join(" ")),
+            ]
+        })
+        .collect();
+    let widths = [0, 1].map(|column| {
+        rows.iter()
+            .map(|row| row[column].chars().count())
+            .max()
+            .unwrap_or(0)
+    });
+    let mut lines = vec![
+        "[fire] sessions are not stopped by an upgrade; these keep running on the old version until restarted:".to_string(),
+    ];
+    lines.extend(rows.iter().map(|[id, version, command]| {
+        format!(
+            "  {id:<id_width$}  {version:<version_width$}  {command}",
+            id_width = widths[0],
+            version_width = widths[1]
+        )
+    }));
+    lines.push(format!(
+        "[fire] to move one to {}: fire cli kill <id>, then start it again",
+        installed.map_or("the new version".to_string(), |version| format!(
+            "fire {version}"
+        ))
+    ));
+    lines
 }
 
 // ---------------------------------------------------------------- completion
@@ -1341,6 +1431,8 @@ mod tests {
             ended_at: Some(1),
             auto: false,
             stopped: false,
+            protocol: None,
+            fire_version: None,
         };
         assert_eq!(session.status(), "exited");
         assert!(!session.is_failed());
@@ -1360,6 +1452,8 @@ mod tests {
             ended_at: Some(1),
             auto: false,
             stopped,
+            protocol: None,
+            fire_version: None,
         }
     }
 
@@ -1369,6 +1463,36 @@ mod tests {
             ended_at: None,
             ..ended(0, false)
         }
+    }
+
+    #[test]
+    fn upgrade_lists_running_sessions_not_started_by_the_installed_version() {
+        let session = |id: &str, version: Option<&str>| Session {
+            id: id.into(),
+            command: vec!["api".into(), "dev".into()],
+            fire_version: version.map(str::to_string),
+            ..running_session()
+        };
+        let sessions = vec![
+            session("api-old", Some("3.2.0")),
+            session("api-legacy", None),
+            session("api-new", Some("3.3.0")),
+            Session {
+                id: "api-ended".into(),
+                ..ended(0, false)
+            },
+        ];
+        assert_eq!(
+            old_version_notice(&sessions, Some("3.3.0")),
+            [
+                "[fire] sessions are not stopped by an upgrade; these keep running on the old version until restarted:",
+                "  api-old     fire 3.2.0     fire api dev",
+                "  api-legacy  an older fire  fire api dev",
+                "[fire] to move one to fire 3.3.0: fire cli kill <id>, then start it again",
+            ]
+        );
+        assert_eq!(old_version_notice(&sessions, None).len(), 5);
+        assert!(old_version_notice(&sessions[2..], Some("3.3.0")).is_empty());
     }
 
     #[test]

@@ -28,8 +28,9 @@ When the command finishes while you're attached, its session is removed right aw
 
 If the same command (same arguments) is already running from the same directory, `fire <command>`
 attaches to that session instead of starting a second copy (pass `--new` to start another). A
-session started by an older fire (no control socket) can't be attached: fire prints its id, its
-recent output and how to stop it (`fire cli kill <id>`), and exits 1 without starting anything.
+session started by an older fire that can't be attached (see [Upgrading fire](#upgrading-fire)):
+fire prints its id, its recent output and how to stop it (`fire cli kill <id>`), and exits 1
+without starting anything.
 
 Trade-off: the program itself can't receive Ctrl+Z from the keyboard anymore (e.g. to suspend vim
 inside a session). Send it explicitly with `fire cli kill <id> TSTP` and resume with `CONT`.
@@ -144,6 +145,27 @@ program runs, the supervisor's control socket `ctl.sock`. Sessions started by ol
 attaching to them isn't supported.
 
 Sessions are Unix-only (macOS and Linux).
+
+## Upgrading fire
+Upgrading (`fire cli upgrade`, `brew upgrade`, `cargo install`, `install.sh`) never stops running
+sessions: each one keeps running on the fire that started it, whose supervisor stays in memory,
+until it ends or is restarted. The new fire keeps managing them: they are listed, their output is
+readable, they can be signalled and stopped, and running the same command again in the same
+directory picks up the running session instead of starting a duplicate.
+
+`session.json` records the session format and protocol version (`protocol`) and the fire version
+(`fire_version`) that started it. A record without `protocol` predates versioning: with
+`output.log` it is version 1 (pty and control socket, attachable), without it the pipe layout,
+version 0, which can't be attached. Newer protocol versions only add messages, so any fire can
+attach to a session whose version supports attaching.
+
+After upgrading, `fire cli upgrade` lists the running sessions still on the old version. To move one
+to the new version, stop it and start it again:
+
+```bash
+fire cli kill <id>
+fire <command>     # or: fire --bg <command>
+```
 
 ## Agents
 The [MCP server](./mcp.md) exposes all of this: `list_sessions`, `read_session_output`,

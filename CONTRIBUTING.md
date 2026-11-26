@@ -18,6 +18,18 @@ cargo test
 - If you change config options or user-facing behavior, update `docs/` and
   `schemas/fire.schema.json` to match.
 
+## Sessions across versions
+Running sessions outlive upgrades: a session's supervisor keeps running the fire that started it,
+while newer (and older) fire versions read its directory and talk to its control socket. Keep
+every change backwards compatible:
+- The `ctl.sock` protocol (`src/session/proto.rs`) only grows: add new frame kinds and bump
+  `proto::VERSION`; never change, reuse or remove an existing kind or its payload. Peers ignore
+  kinds they don't know.
+- `session.json` only gains optional fields (`#[serde(default)]`); never rename or repurpose one.
+- A newer fire must keep listing, reading, signalling, stopping and recognizing as already running
+  every older session (including the pipe layout without `protocol`), and attach only when its
+  `protocol` allows it. `tests/session_versions.rs` covers this with a legacy session fixture.
+
 ## Changelog
 `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Every user-facing
 change adds a line under `## [Unreleased]`, in the same commit or PR, grouped as **Breaking**,

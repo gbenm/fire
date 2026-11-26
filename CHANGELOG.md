@@ -6,6 +6,13 @@ reconstructed from the git history.
 
 ## [Unreleased]
 
+### Added
+- Sessions record the session format version and the fire version that started them, so newer
+  fire versions keep listing, reading, signalling, stopping and reusing sessions started by older
+  ones (and attach when that version allows it). `fire cli upgrade` never stops running sessions
+  and, after upgrading, lists the ones still on the old version: they keep running on it until
+  restarted with `fire cli kill <id>` and a new run. (#59)
+
 ### Fixed
 - `fire <command>` in a terminal attaches to the session already running that command in the
   same directory instead of starting a duplicate; `--new` still starts another. A running session

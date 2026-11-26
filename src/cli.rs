@@ -338,6 +338,23 @@ fn run_upgrade() {
 
     run_checked("brew", &["update"]);
     run_checked("brew", &["upgrade", "fire"]);
+    // Running sessions are never stopped: each supervisor keeps the binary that started it.
+    crate::session::report_sessions_on_old_version(brew_installed_version("fire").as_deref());
+}
+
+/// The installed version of a Homebrew formula: the last one `brew list --versions` prints
+/// (`fire 3.3.0`).
+fn brew_installed_version(formula: &str) -> Option<String> {
+    let output = Command::new("brew")
+        .args(["list", "--versions", formula])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .skip(1)
+        .last()
+        .map(str::to_string)
 }
 
 fn run_checked(cmd: &str, args: &[&str]) {
