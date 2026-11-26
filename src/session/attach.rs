@@ -10,7 +10,7 @@ use std::{
     sync::atomic::{AtomicI32, Ordering},
 };
 
-use super::{connect, load, proto, pty, remove_session, session_dir, OUTPUT_LOG};
+use super::{connect, load, proto, pty, read_output, remove_session, session_dir, OUTPUT_LOG};
 
 static SIGNAL_PIPE: AtomicI32 = AtomicI32::new(-1);
 
@@ -276,8 +276,22 @@ fn finish_without_socket(id: &str, options: &Options, offset: u64) -> ! {
             process::exit(code);
         }
         Some(session) if session.status() == "running" => {
+            // Started by an older fire (pipes instead of a pty, no control socket): it can't be
+            // attached, so show what it printed and how to stop it.
             eprintln!(
-                "[fire] {id} has no control socket (started by an older fire?). Read it with: fire cli logs {id}"
+                "[fire] `fire {}` is running as session {id}, but it can't be attached (no control socket; started by an older fire?)",
+                session.command.join(" ")
+            );
+            if let Some((_, output)) = read_output(id, 20) {
+                if !output.is_empty() {
+                    eprintln!("[fire] recent output:");
+                    let mut stdout = io::stdout();
+                    let _ = stdout.write_all(output.as_bytes());
+                    let _ = stdout.flush();
+                }
+            }
+            eprintln!(
+                "[fire] logs: fire cli logs {id} | stop: fire cli kill {id} (then run it again)"
             );
             process::exit(1);
         }

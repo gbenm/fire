@@ -485,6 +485,22 @@ pub(crate) fn run_in_session_if_enabled(
                     .map(|line| line.trim().to_string())
             });
             let previous = (!force_new).then(|| same_session(command_args)).flatten();
+            // One command in one directory is one session: attach to the running one instead
+            // of starting a duplicate (a session that can't be attached is reported instead).
+            if let Some(existing) = previous.as_ref().filter(|session| session.is_running()) {
+                eprintln!(
+                    "[fire] `fire {}` is already running here as session {}; attaching (--new starts another)",
+                    command_args.join(" "),
+                    existing.id
+                );
+                attach::attach(
+                    &existing.id,
+                    attach::Options {
+                        quiet: true,
+                        remove_on_exit: existing.auto,
+                    },
+                );
+            }
             // If the supervisor can't start, fall back to running directly.
             if let Ok(id) = spawn_session(command_args, resolved.consumed, note, true, previous) {
                 attach::attach(

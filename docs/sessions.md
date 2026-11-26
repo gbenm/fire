@@ -26,6 +26,11 @@ detaches it instead of freezing it:
 When the command finishes while you're attached, its session is removed right away, so
 `fire cli ps` only shows what is still running or what finished while detached.
 
+If the same command (same arguments) is already running from the same directory, `fire <command>`
+attaches to that session instead of starting a second copy (pass `--new` to start another). A
+session started by an older fire (no control socket) can't be attached: fire prints its id, its
+recent output and how to stop it (`fire cli kill <id>`), and exits 1 without starting anything.
+
 Trade-off: the program itself can't receive Ctrl+Z from the keyboard anymore (e.g. to suspend vim
 inside a session). Send it explicitly with `fire cli kill <id> TSTP` and resume with `CONT`.
 
@@ -97,8 +102,9 @@ fire cli kill api-dev-3f2a                         # stop it: TERM, then KILL af
   running from that directory, `--bg` prints its id and replaces its note instead of starting a
   duplicate. If it ended (crashed, finished or was stopped), it starts again under the **same id**,
   with the new note, and the previous run's output moves to `output.prev.log`. Restarting a server
-  is `fire cli kill <id>` and the same `fire --bg` again. Running it in a terminal or detached by
-  `long_running` reuses an ended session the same way. Pass `--new` to force a separate session.
+  is `fire cli kill <id>` and the same `fire --bg` again. Running it in a terminal attaches to the
+  running session, and running it in a terminal or detached by `long_running` reuses an ended
+  session the same way. Pass `--new` to force a separate session.
 - `fire --bg` starts the pty with your terminal's size, or 120x40 without one. Whoever attaches
   or resizes last sets the size.
 - `fire cli bg [-m "note"] [--new] <command>` still works as a deprecated alias of `fire --bg` and

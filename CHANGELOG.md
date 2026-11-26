@@ -6,6 +6,12 @@ reconstructed from the git history.
 
 ## [Unreleased]
 
+### Fixed
+- `fire <command>` in a terminal attaches to the session already running that command in the
+  same directory instead of starting a duplicate; `--new` still starts another. A running session
+  from an older fire, which can't be attached, is reported with its recent output and how to stop
+  it, never duplicated. (#58)
+
 ## [3.2.0] - 2026-11-24
 
 ### Changed
